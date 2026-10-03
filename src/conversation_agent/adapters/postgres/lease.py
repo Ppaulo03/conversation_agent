@@ -8,18 +8,22 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.models.runtime import ConversationKey, Lease
 from conversation_agent.ports.clock import Clock
 
 
 class PostgresLeaseStore:
-    def __init__(self, db: PostgresDatabase, clock: Clock) -> None:
+    def __init__(
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+    ) -> None:
+        self._time = coordination or CoordinationTime(db, clock)
         self._db = db
         self._clock = clock
 
     async def acquire(self, key: ConversationKey, owner: str, ttl: timedelta) -> Lease | None:
-        now = self._clock.now()
+        now = await self._time.now()
         expires = now + ttl
         row = await self._db.pool.fetchrow(
             """
@@ -41,7 +45,7 @@ class PostgresLeaseStore:
         return Lease(key=key, owner=owner, epoch=row["conversation_epoch"], expires_at=expires)
 
     async def heartbeat(self, lease: Lease, ttl: timedelta) -> Lease | None:
-        now = self._clock.now()
+        now = await self._time.now()
         expires = now + ttl
         row = await self._db.pool.fetchrow(
             """
@@ -49,6 +53,7 @@ class PostgresLeaseStore:
                SET lease_expires_at = $5, updated_at = $6
              WHERE tenant_id = $1 AND conversation_id = $2
                AND lease_owner = $3 AND conversation_epoch = $4
+               AND lease_expires_at > $6  -- an expired lease is gone: it cannot be resurrected
             RETURNING 1
             """,
             lease.key.tenant_id,
@@ -72,5 +77,5 @@ class PostgresLeaseStore:
             lease.key.conversation_id,
             lease.owner,
             lease.epoch,
-            self._clock.now(),
+            (await self._time.now()),
         )

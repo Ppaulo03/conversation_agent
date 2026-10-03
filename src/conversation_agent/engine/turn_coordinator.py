@@ -30,9 +30,11 @@ from conversation_agent.core.models.journal import JournalStepType
 from conversation_agent.core.models.runtime import (
     ConversationKey,
     FenceToken,
+    InvocationStatus,
     OpenedTurn,
     OutboundMessage,
     Ownership,
+    ToolInvocation,
 )
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
@@ -46,13 +48,25 @@ from conversation_agent.ports.uow import ConversationUnitOfWorkFactory
 
 log = logging.getLogger(__name__)
 
-RunStatus = Literal["idle", "busy", "done", "retry_later", "stale"]
+RunStatus = Literal["idle", "busy", "done", "retry_later", "waiting", "stale"]
 
 
 @dataclass(frozen=True)
 class ConversationRun:
     status: RunStatus
     turns_completed: int = 0
+
+
+def default_side_effect_notice(invocations: list[ToolInvocation]) -> str | None:
+    """Deterministic message for a turn that failed after real external effects."""
+    if not invocations:
+        return None
+    ref = invocations[0].invocation_id[:8]
+    if any(
+        i.status in (InvocationStatus.SUCCEEDED, InvocationStatus.RECONCILED) for i in invocations
+    ):
+        return f"Your request was carried out, but I could not compose the full reply. Ref: {ref}."
+    return f"I could not confirm the outcome of your request; a person will check it. Ref: {ref}."
 
 
 class TurnCoordinator:
@@ -70,7 +84,9 @@ class TurnCoordinator:
         lease_ttl: timedelta = timedelta(seconds=30),
         heartbeat_interval_seconds: float = 10.0,
         max_turn_attempts: int = 5,
+        side_effect_notice: Callable[[list[ToolInvocation]], str | None] | None = None,
     ) -> None:
+        self._side_effect_notice = side_effect_notice or default_side_effect_notice
         self._owner = owner
         self._leases = leases
         self._uows = uows
@@ -104,6 +120,11 @@ class TurnCoordinator:
                 step = await self._process_next_turn(handle)
                 if step == "none":
                     break
+                if step == "waiting":
+                    # Not a failure: a tool outcome is pending (executing/unknown/reconciling).
+                    # Nothing is counted, nothing is re-run; the turn resumes once it is known.
+                    await self._leases.release(handle.lease)
+                    return ConversationRun("waiting", completed)
                 if step == "retry":
                     # A handled failure (not a crash): give the conversation back so the
                     # next pass can resume this open turn from its journal.
@@ -121,7 +142,7 @@ class TurnCoordinator:
 
     async def _process_next_turn(
         self, handle: LeaseHandle
-    ) -> Literal["none", "completed", "retry"]:
+    ) -> Literal["none", "completed", "retry", "waiting"]:
         fence = handle.fence
         async with self._uows.begin(fence) as uow:
             stored = await uow.state.load()
@@ -149,13 +170,15 @@ class TurnCoordinator:
             log.error("ALERT journal divergence, turn failed closed: %s", exc)
             await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
             return "completed"
-        except (LLMProviderError, ToolResultPendingError) as exc:
-            if opened.attempts >= self._max_attempts:
+        except ToolResultPendingError:
+            return "waiting"
+        except LLMProviderError as exc:
+            async with self._uows.begin(fence) as uow:
+                failures = await uow.turns.record_failure(opened.turn_id)
+                await uow.commit()
+            if failures >= self._max_attempts:
                 log.error(
-                    "ALERT turn %s failed after %s attempts: %s",
-                    opened.turn_id,
-                    opened.attempts,
-                    exc,
+                    "ALERT turn %s failed after %s attempts: %s", opened.turn_id, failures, exc
                 )
                 await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
                 return "completed"
@@ -201,12 +224,16 @@ class TurnCoordinator:
         async with self._uows.begin(fence) as uow:
             await uow.turns.fail(opened.turn_id, reason)
             await uow.inbox.dead(opened.event_ids)
+            # A turn that dies AFTER an external side effect must still tell the contact
+            # something deterministic: never dead-letter silently behind a real action.
+            notice = self._side_effect_notice(await uow.invocations.for_turn(opened.turn_id))
+            if notice is not None:
+                await uow.outbox.add(self._outbound(opened, notice, index=1))
             await uow.commit()
 
     @staticmethod
-    def _outbound(opened: OpenedTurn, text: str) -> OutboundMessage:
+    def _outbound(opened: OpenedTurn, text: str, index: int = 0) -> OutboundMessage:
         identity = opened.identity
-        index = 0
         key = stable_hash(identity.tenant_id, identity.conversation_id, opened.turn_id, index)
         return OutboundMessage(
             outbox_id=key[:32],

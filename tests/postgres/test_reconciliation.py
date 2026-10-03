@@ -63,6 +63,10 @@ def worker(world: World, api: ApiHandle, owner: str, llm: Any, *, provider: Any 
     )
 
 
+def book() -> list[Any]:
+    return [tool_call_response("scheduling__create", BOOKING_ARGS), text_response("Agendado!")]
+
+
 def book_first() -> FakeLLM:
     return FakeLLM([tool_call_response("scheduling__create", BOOKING_ARGS)])
 
@@ -104,7 +108,7 @@ async def test_C05_response_lost_write_is_unknown_then_status_lookup_adopts_the_
     await start(world)
     api.state.fault = {"status_after_effect": 503}  # booking IS created, caller sees a 503
     run = await worker(world, api, "w1", book_first()).process_conversation(KEY)
-    assert run.status == "retry_later"  # the turn waits: the outcome is not known
+    assert run.status == "waiting"  # the turn waits: the outcome is not known
     inv = await only_invocation(world)
     assert inv.status is InvocationStatus.UNKNOWN and inv.result_application_status == "none"
     assert len(api.state.bookings) == 1 and len(posts(api)) == 1
@@ -380,3 +384,65 @@ async def test_timers_survive_a_restart_and_an_abandoned_claim_is_reclaimed(
         assert again.scheduler_key == first.scheduler_key
     finally:
         await reborn.close()
+
+
+# --- waiting for a result is not a failure (Phase 2.1) ---
+
+
+async def test_pending_tool_result_never_exhausts_turn_attempts(
+    world: World, api: ApiHandle
+) -> None:
+    await start(world)
+    api.state.fault = {"status_after_effect": 503}
+    await worker(world, api, "w1", book_first(), max_turn_attempts=3).process_conversation(KEY)
+    api.state.fault = None
+    providers = {"http": world.http_provider(api.base_url)}
+
+    for i in range(10):  # the turn worker polls far more often than reconciliation resolves
+        run = await worker(
+            world, api, f"poll{i}", FakeLLM([]), max_turn_attempts=3
+        ).process_conversation(KEY)
+        assert run.status == "waiting"
+    assert await world.count("turns", "status='PROCESSING'") == 1  # not FAILED
+    assert await world.count("inbox_events", "status='CLAIMED'") == 1  # not DEAD
+    assert await world.count("outbox_messages") == 0
+    assert len(posts(api)) == 1  # and nothing was re-executed
+
+    await world.reconciler("r", providers=providers).run_once()
+    await finish_turn(world, api)
+    assert await world.count("turns", "status='COMPLETED'") == 1
+    assert len(posts(api)) == 1
+
+
+async def test_llm_failures_still_exhaust_attempts_and_fail_the_turn_closed(world: World) -> None:
+    from conversation_agent.core.errors import LLMProviderError
+
+    await world.inbox.insert_if_absent(event("e1", "oi", clock=world.clock))
+    for i in range(3):
+        run = await world.coordinator(
+            f"w{i}", FakeLLM([LLMProviderError("down")]), max_turn_attempts=3
+        ).process_conversation(KEY)
+    assert run.turns_completed == 1  # the third failure gives up
+    assert await world.count("turns", "status='FAILED'") == 1
+    assert await world.count("inbox_events", "status='DEAD'") == 1
+    assert await world.count("outbox_messages") == 0  # no side effect happened: nothing to report
+
+
+async def test_a_turn_that_fails_after_a_side_effect_still_notifies_the_contact(
+    world: World, api: ApiHandle
+) -> None:
+    """The booking happened; if the LLM then dies for good the user must not be left in silence."""
+    from conversation_agent.core.errors import LLMProviderError
+
+    await start(world)
+    for i in range(2):
+        llm = (
+            FakeLLM([*book()[:1], LLMProviderError("down")])
+            if i == 0
+            else FakeLLM([LLMProviderError("down")])
+        )
+        await worker(world, api, f"w{i}", llm, max_turn_attempts=2).process_conversation(KEY)
+    assert await world.count("turns", "status='FAILED'") == 1
+    assert len(api.state.bookings) == 1
+    (row,) = await world.db.pool.fetch("SELECT text FROM outbox_messages")
+    assert "carried out" in row["text"] and "Ref:" in row["text"]

@@ -285,7 +285,7 @@ async def test_C04_crash_before_the_request_leaves_an_executing_invocation_nobod
 
     world.clock.set(world.clock.now() + TTL + timedelta(seconds=1))  # conversation lease expired
     run = await worker(world, api, "w2", FakeLLM([])).process_conversation(KEY)
-    assert run.status == "retry_later"  # the outcome is not known: the turn waits (no re-run)
+    assert run.status == "waiting"  # the outcome is not known: the turn waits (no re-run)
     assert posts(api) == []
     assert await world.count("turns", "status='PROCESSING'") == 1
 

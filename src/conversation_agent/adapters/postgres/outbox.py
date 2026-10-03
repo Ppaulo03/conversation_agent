@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.rows import OUTBOX_COLUMNS, outbox_from_row
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
@@ -11,7 +12,15 @@ _O_COLUMNS = ", ".join(f"o.{c.strip()}" for c in OUTBOX_COLUMNS.split(","))
 
 
 class PostgresOutboxStore:
-    def __init__(self, db: PostgresDatabase, clock: Clock, *, max_attempts: int = 5) -> None:
+    def __init__(
+        self,
+        db: PostgresDatabase,
+        clock: Clock,
+        *,
+        max_attempts: int = 5,
+        coordination: CoordinationTime | None = None,
+    ) -> None:
+        self._time = coordination or CoordinationTime(db, clock)
         self._db = db
         self._clock = clock
         self._max_attempts = max_attempts
@@ -22,7 +31,7 @@ class PostgresOutboxStore:
         """PENDING-and-due or stale-SENDING rows -> SENDING. A stale SENDING row is a message
         whose sender died mid-flight: it is retried with the *same* payload and idempotency
         key (never regenerated)."""
-        now = self._clock.now()
+        now = await self._time.now()
         rows = await self._db.pool.fetch(
             f"""
             WITH picked AS (
@@ -51,7 +60,7 @@ class PostgresOutboxStore:
     ) -> None:
         """Compare-and-set on (status=SENDING, claim_owner): a sender that lost its claim to
         another worker cannot overwrite the newer outcome."""
-        now = self._clock.now()
+        now = await self._time.now()
         status = result.status
         available_at = now
         if (

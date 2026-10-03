@@ -98,7 +98,7 @@ class OpenedTurn(_Frozen):
     late_event_ids: tuple[str, ...] = ()
     last_event_at: AwareDatetime | None = None  # newest occurred_at among the turn's events
     resumed: bool = False  # True when an earlier owner had already opened this turn
-    attempts: int = 1
+    attempts: int = 0  # failed processing attempts so far (NOT waits for tool results)
 
 
 # --- Outbox ---------------------------------------------------------------------------------

@@ -14,6 +14,7 @@ from datetime import timedelta
 
 import asyncpg
 
+from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.rows import INVOCATION_COLUMNS, invocation_from_row
 from conversation_agent.core.errors import ExecutionFencingError
@@ -36,7 +37,10 @@ def _ledger_status(result: ToolResult) -> str:
 
 
 class PostgresToolInvocationStore:
-    def __init__(self, db: PostgresDatabase, clock: Clock) -> None:
+    def __init__(
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+    ) -> None:
+        self._time = coordination or CoordinationTime(db, clock)
         self._db = db
         self._clock = clock
 
@@ -49,7 +53,7 @@ class PostgresToolInvocationStore:
     async def claim_execution(
         self, tenant_id: str, invocation_id: str, owner: str, ttl: timedelta
     ) -> ExecutionClaim | None:
-        now = self._clock.now()
+        now = await self._time.now()
         row = await self._db.pool.fetchrow(
             """
             UPDATE tool_invocations
@@ -83,7 +87,7 @@ class PostgresToolInvocationStore:
             tenant_id,
             invocation_id,
             claim.epoch,
-            self._clock.now() + ttl,
+            (await self._time.now()) + ttl,
         )
         return row is not None
 
@@ -111,7 +115,7 @@ class PostgresToolInvocationStore:
             result.error.model_dump(mode="json") if result.error else None,
             result.provider_metadata,
             application,
-            self._clock.now(),
+            (await self._time.now()),
         )
         if row is None:
             raise ExecutionFencingError(
@@ -125,7 +129,7 @@ class PostgresToolInvocationStore:
         """UNKNOWN, expired-EXECUTING and expired-RECONCILING invocations -> RECONCILING under a
         *new* execution_epoch. An expired EXECUTING is never presumed failed (DESIGN §14), and
         the previous executor is fenced out the moment its epoch is superseded."""
-        now = self._clock.now()
+        now = await self._time.now()
         rows = await self._db.pool.fetch(
             f"""
             WITH picked AS (
@@ -169,7 +173,7 @@ class PostgresToolInvocationStore:
         *,
         handoff: bool = False,
     ) -> ToolInvocation:
-        now = self._clock.now()
+        now = await self._time.now()
         if handoff:
             status, application = "HUMAN_HANDOFF", "pending"
         elif result is None or result.status == "unknown":

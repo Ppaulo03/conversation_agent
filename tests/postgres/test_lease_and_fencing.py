@@ -168,9 +168,9 @@ async def test_takeover_waits_for_an_in_flight_fenced_transaction(
     uows = PostgresUnitOfWorkFactory(db, clock)
     a = await leases.acquire(key, "worker-a", TTL)
     assert a is not None
-    clock.set(clock.now() + TTL + timedelta(seconds=1))  # a's lease is now expired
 
-    async with uows.begin(a.fence) as uow:  # a still holds the row lock via its open tx
+    async with uows.begin(a.fence) as uow:  # a passed the fence check: it holds the row lock
+        clock.set(clock.now() + TTL + timedelta(seconds=1))  # its lease expires mid-transaction
         takeover = asyncio.create_task(leases.acquire(key, "worker-b", TTL))
         await asyncio.sleep(0.3)
         assert not takeover.done()  # blocked behind the in-flight transaction
@@ -183,3 +183,66 @@ async def test_takeover_waits_for_an_in_flight_fenced_transaction(
     with pytest.raises(FencingError):  # ...and anything *after* the takeover is refused
         async with uows.begin(a.fence) as uow:
             await uow.commit()
+
+
+async def test_an_expired_lease_cannot_open_a_unit_of_work_even_before_any_takeover(
+    db: PostgresDatabase,
+    clock: FixedClock,
+    conversation: ConversationIdentity,
+    key: ConversationKey,
+) -> None:
+    """Expiry itself makes the holder stale; it does not need a rival to notice first."""
+    leases = PostgresLeaseStore(db, clock)
+    uows = PostgresUnitOfWorkFactory(db, clock)
+    lease = await leases.acquire(key, "worker-a", TTL)
+    assert lease is not None
+    async with uows.begin(lease.fence) as uow:  # fine while the lease is valid
+        await uow.journal.append(entry("t1", 0))
+        await uow.commit()
+
+    clock.set(clock.now() + TTL + timedelta(seconds=1))  # expired, nobody took over
+    with pytest.raises(FencingError):
+        async with uows.begin(lease.fence) as uow:
+            await uow.journal.append(entry("t1", 1))
+            await uow.commit()
+    assert await db.pool.fetchval("SELECT count(*) FROM turn_journal") == 1
+
+
+async def test_a_heartbeat_cannot_resurrect_an_expired_lease(
+    db: PostgresDatabase,
+    clock: FixedClock,
+    conversation: ConversationIdentity,
+    key: ConversationKey,
+) -> None:
+    leases = PostgresLeaseStore(db, clock)
+    lease = await leases.acquire(key, "worker-a", TTL)
+    assert lease is not None
+    clock.set(clock.now() + TTL + timedelta(seconds=1))
+    assert await leases.heartbeat(lease, TTL) is None  # too late: the lease is gone
+    taken = await leases.acquire(key, "worker-b", TTL)
+    assert taken is not None and taken.epoch == 2
+
+
+async def test_coordination_time_defaults_to_the_database_clock_not_the_app_clock(
+    db: PostgresDatabase, conversation: ConversationIdentity, key: ConversationKey
+) -> None:
+    """Production wiring: leases are timed by PostgreSQL, so workers with skewed local clocks
+    cannot create leases that look pre-expired to everyone else."""
+    from conversation_agent.adapters.postgres.coordination import CoordinationTime
+
+    skewed = FixedClock(clock_far_behind())  # this worker believes it is 2020
+    leases = PostgresLeaseStore(db, skewed, CoordinationTime(db, None))
+    lease = await leases.acquire(key, "worker-a", TTL)
+    assert lease is not None
+    other = PostgresLeaseStore(db, FixedClock(clock_far_behind()), CoordinationTime(db, None))
+    assert (
+        await other.acquire(key, "worker-b", TTL) is None
+    )  # valid for everyone, whatever their clock
+    assert lease.expires_at.year >= 2026  # derived from the database, not from the skewed clock
+
+
+def clock_far_behind():  # type: ignore[no-untyped-def]
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+
+    return datetime(2020, 1, 1, tzinfo=ZoneInfo("UTC"))

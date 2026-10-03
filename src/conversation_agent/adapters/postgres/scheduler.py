@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import timedelta
 
+from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.models.runtime import ScheduledEvent
 from conversation_agent.ports.clock import Clock
@@ -10,7 +11,10 @@ from conversation_agent.ports.clock import Clock
 class PostgresScheduler:
     """Durable timers: due events live in PostgreSQL, so they survive any restart."""
 
-    def __init__(self, db: PostgresDatabase, clock: Clock) -> None:
+    def __init__(
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+    ) -> None:
+        self._time = coordination or CoordinationTime(db, clock)
         self._db = db
         self._clock = clock
 
@@ -42,7 +46,7 @@ class PostgresScheduler:
         )
 
     async def claim_due(self, owner: str, limit: int, claim_ttl: timedelta) -> list[ScheduledEvent]:
-        now = self._clock.now()
+        now = await self._time.now()
         rows = await self._db.pool.fetch(
             """
             WITH picked AS (

@@ -17,6 +17,7 @@ from typing import Any
 
 import asyncpg
 
+from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.rows import (
     INVOCATION_COLUMNS,
@@ -102,9 +103,8 @@ class _TurnRepo(_Repo):
         identity = (await _StateRepo(self._c, f, self._clock).load()).identity
 
         open_turn = await self._c.fetchrow(
-            "UPDATE turns SET attempts = attempts + 1 "
-            "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PROCESSING' "
-            "RETURNING turn_id, user_text, event_ids, late_event_ids, attempts",
+            "SELECT turn_id, user_text, event_ids, late_event_ids, attempts FROM turns "
+            "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PROCESSING'",
             f.tenant_id,
             f.conversation_id,
         )
@@ -181,6 +181,16 @@ class _TurnRepo(_Repo):
             event_ids=tuple(event_ids),
             late_event_ids=tuple(late),
         )
+
+    async def record_failure(self, turn_id: str) -> int:
+        """Counts one genuine processing failure and returns the new total."""
+        value = await self._c.fetchval(
+            "UPDATE turns SET attempts = attempts + 1 "
+            "WHERE tenant_id=$1 AND turn_id=$2 AND status='PROCESSING' RETURNING attempts",
+            self._f.tenant_id,
+            turn_id,
+        )
+        return int(value or 0)
 
     async def complete(self, turn_id: str) -> None:
         await self._c.execute(
@@ -275,6 +285,16 @@ class _InvocationRepo(_Repo):
         )
         return invocation_from_row(r) if r else None
 
+    async def for_turn(self, turn_id: str) -> list[ToolInvocation]:
+        rows = await self._c.fetch(
+            f"SELECT {INVOCATION_COLUMNS} FROM tool_invocations "
+            "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 ORDER BY prepared_at",
+            self._f.tenant_id,
+            self._f.conversation_id,
+            turn_id,
+        )
+        return [invocation_from_row(r) for r in rows]
+
     async def mark_applied(self, invocation_id: str, now: datetime) -> None:
         await self._c.execute(
             "UPDATE tool_invocations SET result_application_status='applied', applied_at=$3 "
@@ -347,9 +367,12 @@ class PostgresUnitOfWork:
 
 
 class PostgresUnitOfWorkFactory:
-    def __init__(self, db: PostgresDatabase, clock: Clock) -> None:
+    def __init__(
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+    ) -> None:
         self._db = db
         self._clock = clock
+        self._time = coordination or CoordinationTime(db, clock)
 
     @asynccontextmanager
     async def begin(self, fence: FenceToken) -> AsyncIterator[PostgresUnitOfWork]:
@@ -358,18 +381,22 @@ class PostgresUnitOfWorkFactory:
             await tx.start()
             uow = PostgresUnitOfWork(conn, tx, fence, self._clock)
             try:
+                # Owner + epoch + a lease that has NOT expired. A lease whose TTL elapsed is
+                # stale even if nobody has taken over yet: its holder must stop writing.
                 owned = await conn.fetchval(
                     "SELECT 1 FROM conversation_states WHERE tenant_id=$1 AND conversation_id=$2 "
-                    "AND conversation_epoch=$3 AND lease_owner=$4 FOR SHARE",
+                    "AND conversation_epoch=$3 AND lease_owner=$4 AND lease_expires_at > $5 "
+                    "FOR SHARE",
                     fence.tenant_id,
                     fence.conversation_id,
                     fence.epoch,
                     fence.owner,
+                    await self._time.now(conn),
                 )
                 if owned is None:
                     raise FencingError(
                         f"conversation {fence.conversation_id} is no longer owned by "
-                        f"{fence.owner} at epoch {fence.epoch}"
+                        f"{fence.owner} at epoch {fence.epoch} (taken over or lease expired)"
                     )
                 yield uow
             except BaseException:
