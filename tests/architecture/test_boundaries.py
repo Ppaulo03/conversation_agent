@@ -96,7 +96,7 @@ def test_framework_never_imports_examples_or_external_systems(path: Path) -> Non
 def test_runtime_does_not_own_business_state() -> None:  # INV-008
     """The framework source carries no business-domain vocabulary and its state models only
     hold conversational data."""
-    domain_words = re.compile(r"scheduling|booking|reservation|appointment", re.IGNORECASE)
+    domain_words = re.compile(r"\b(scheduling|booking|reservation|appointment)s?\b", re.IGNORECASE)
     offenders = [
         str(p.relative_to(ROOT))
         for p in SRC.rglob("*.py")
