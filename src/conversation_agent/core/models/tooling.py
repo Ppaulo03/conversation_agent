@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 ToolStatus = Literal[
     "success",
@@ -45,11 +45,28 @@ class ToolError(_Frozen):
     details_ref: str | None = None
 
 
+def _check_status_payload(status: ToolStatus, data: object, error: object) -> None:
+    """success <=> data without error; every other status carries an error and no data."""
+    if status == "success":
+        if error is not None:
+            raise ValueError("a successful result cannot carry an error")
+    else:
+        if error is None:
+            raise ValueError(f"status {status!r} requires an error")
+        if data is not None:
+            raise ValueError(f"status {status!r} cannot carry data")
+
+
 class ToolResult(_Frozen):
     status: ToolStatus
     data: dict[str, Any] | list[Any] | None = None
     error: ToolError | None = None
     provider_metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _consistent(self) -> ToolResult:
+        _check_status_payload(self.status, self.data, self.error)
+        return self
 
 
 class CapabilityRequest(_Frozen):
@@ -70,6 +87,11 @@ class CapabilityResult(_Frozen):
     status: ToolStatus
     data: dict[str, Any] | None = None
     error: ToolError | None = None
+
+    @model_validator(mode="after")
+    def _consistent(self) -> CapabilityResult:
+        _check_status_payload(self.status, self.data, self.error)
+        return self
 
 
 class PolicyDecision(_Frozen):

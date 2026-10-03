@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.llm import LLMToolDefinition
@@ -37,6 +37,16 @@ class Evaluation(BaseModel):
     request: CapabilityRequest | None = None
     rejection: ToolError | None = None
 
+    @model_validator(mode="after")
+    def _consistent(self) -> Evaluation:
+        """deny -> neither; otherwise exactly one of a validated request / a rejection."""
+        if self.decision.outcome == "deny":
+            if self.request is not None or self.rejection is not None:
+                raise ValueError("a denied evaluation carries no request or rejection")
+        elif (self.request is None) == (self.rejection is None):
+            raise ValueError("a non-denied evaluation needs exactly one of request / rejection")
+        return self
+
 
 class CapabilityOutcome(BaseModel):
     """Exactly one of `result` (executed or refused) / `proposal` (draft, not executed)."""
@@ -46,9 +56,11 @@ class CapabilityOutcome(BaseModel):
     result: CapabilityResult | None = None
     proposal: CapabilityRequest | None = None
 
-
-def llm_tool_name(capability_name: str) -> str:
-    return capability_name.replace(".", "__")
+    @model_validator(mode="after")
+    def _exactly_one(self) -> CapabilityOutcome:
+        if (self.result is None) == (self.proposal is None):
+            raise ValueError("exactly one of result / proposal is required")
+        return self
 
 
 class CapabilityPipeline:
@@ -56,7 +68,7 @@ class CapabilityPipeline:
         self._agent = agent
         self._policy = policy
         self._runner = runner
-        self._by_tool_name = {llm_tool_name(c.name): c.name for c in agent.capabilities}
+        self._by_tool_name = {c.llm_name: c.name for c in agent.capabilities}
 
     def exposed_tools(self) -> tuple[LLMToolDefinition, ...]:
         """Capability schemas (never API schemas) for allowed capabilities only."""
@@ -69,7 +81,7 @@ class CapabilityPipeline:
             note = _PROTECTED_NOTE if decision.outcome == "require_confirmation" else ""
             tools.append(
                 LLMToolDefinition(
-                    name=llm_tool_name(cap.name),
+                    name=cap.llm_name,
                     description=cap.description + note,
                     input_schema=cap.input_model.model_json_schema(),
                 )

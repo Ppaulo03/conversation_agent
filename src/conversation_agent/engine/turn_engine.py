@@ -23,6 +23,7 @@ from conversation_agent.core.models.llm import (
     LLMMessage,
     LLMRequest,
     LLMResponse,
+    LLMStopReason,
     ToolResultPart,
     llm_request_hash,
 )
@@ -85,10 +86,15 @@ class TurnEngine:
         proposals: dict[str, CapabilityRequest] = {}
         llm_calls = 0
         reply: str | None = None
+        halted: Literal["step_limit", "llm_truncated"] | None = None
 
         for _ in range(self._max_steps):
             response = await self._llm_step(cursor, turn_id, system, working)
             llm_calls += 1
+            if response.stop_reason is LLMStopReason.MAX_TOKENS:
+                # Truncated output (possibly cut-off tool arguments): never treat as a final answer.
+                halted = "llm_truncated"
+                break
             calls = response.tool_calls
             if not calls:
                 reply = response.text.strip()
@@ -102,7 +108,8 @@ class TurnEngine:
                 result_parts.append(part)
             working.append(LLMMessage(role="user", parts=tuple(result_parts)))
 
-        halted: Literal["step_limit"] | None = "step_limit" if reply is None else None
+        if reply is None and halted is None:
+            halted = "step_limit"
         final_reply = reply or self._agent.fallback_reply
         await cursor.step(
             JournalStepType.TURN_COMPLETED,

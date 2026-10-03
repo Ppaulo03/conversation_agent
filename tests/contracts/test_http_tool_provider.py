@@ -107,29 +107,52 @@ async def test_error_never_leaks_raw_body(api: ApiHandle) -> None:
 
 
 @pytest.mark.parametrize("bad_path", ["http://evil.example/x", "//evil.example/x", "no-slash"])
-async def test_rejects_non_relative_tool_paths(bad_path: str, api: ApiHandle) -> None:
+async def test_non_relative_tool_path_is_a_configuration_error_not_a_validation_error(
+    bad_path: str, api: ApiHandle
+) -> None:
+    """The defect is in the ToolDefinition, not in the caller's arguments."""
     binding = availability_binding()
     tool = binding.tool.model_copy(update={"http": HTTPRequestSpec(method="GET", path=bad_path)})
     result = await provider_for(api.base_url).execute(
         binding.model_copy(update={"tool": tool}), {}, CONTEXT
     )
-    assert result.status == "validation_error"
+    assert result.status == "technical_error"
+    assert result.error is not None and result.error.code == "INVALID_TOOL_CONFIGURATION"
     assert api.requests == []
 
 
-async def test_path_parameters_are_quoted_and_dot_segments_rejected(api: ApiHandle) -> None:
+def path_param_binding() -> ResolvedToolBinding:
     binding = availability_binding()
     spec = HTTPRequestSpec(method="GET", path="/bookings/{id}")
-    tool = binding.tool.model_copy(update={"http": spec})
-    binding = binding.model_copy(update={"tool": tool})
-    provider = provider_for(api.base_url)
+    return binding.model_copy(update={"tool": binding.tool.model_copy(update={"http": spec})})
 
-    traversal = await provider.execute(binding, {"id": ".."}, CONTEXT)
-    assert traversal.status == "validation_error"
 
-    await provider.execute(binding, {"id": "a/b?x=1"}, CONTEXT)
-    assert api.requests[-1]["path"] == "/bookings/a/b"  # server decodes %2F; no query smuggled
+@pytest.mark.parametrize(
+    "value",
+    ["..", ".", "", "a/b", "a\\b", "a?x=1", "a#f", "a%2Fb", "a%2e%2e", "a b", "a\nb", "ü"],
+)
+async def test_illegal_path_parameter_values_are_rejected_before_any_request(
+    value: str, api: ApiHandle
+) -> None:
+    """A path parameter can never introduce a new segment, query or fragment, nor rely on the
+    server percent-decoding it into one."""
+    result = await provider_for(api.base_url).execute(path_param_binding(), {"id": value}, CONTEXT)
+    assert result.status == "validation_error"
+    assert result.error is not None and result.error.code == "INVALID_PATH_PARAMETER"
+    assert api.requests == []
+
+
+async def test_legal_path_parameter_stays_a_single_segment(api: ApiHandle) -> None:
+    await provider_for(api.base_url).execute(path_param_binding(), {"id": "bk_1-2.3~x"}, CONTEXT)
+    assert api.requests[-1]["path"] == "/bookings/bk_1-2.3~x"
     assert api.requests[-1]["query"] == {}
+
+
+async def test_missing_path_parameter_is_a_configuration_error(api: ApiHandle) -> None:
+    result = await provider_for(api.base_url).execute(path_param_binding(), {}, CONTEXT)
+    assert result.status == "technical_error"
+    assert result.error is not None and result.error.code == "INVALID_TOOL_CONFIGURATION"
+    assert api.requests == []
 
 
 async def test_does_not_follow_redirects() -> None:

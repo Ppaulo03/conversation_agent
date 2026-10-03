@@ -90,5 +90,6 @@ def build_llm(config: LLMConfig) -> LLMProvider:
 
 
 async def close_llm(llm: LLMProvider) -> None:
-    if isinstance(llm, OpenAICompatLLM):
+    """Releases HTTP clients held by real adapters (no-op for fakes)."""
+    if isinstance(llm, OpenAICompatLLM | AnthropicLLM):
         await llm.aclose()

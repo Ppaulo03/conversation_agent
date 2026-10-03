@@ -45,4 +45,4 @@ class TurnOutcome(_Frozen):
     reply: str
     state: ConversationState
     llm_calls: int
-    halted: Literal["step_limit"] | None = None
+    halted: Literal["step_limit", "llm_truncated"] | None = None

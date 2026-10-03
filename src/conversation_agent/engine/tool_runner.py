@@ -24,8 +24,20 @@ from conversation_agent.ports.tool_provider import ToolProvider
 from conversation_agent.tools.mapping import TRANSFORMS, apply_mapping
 
 
-def _failure(resolved: ResolvedToolBinding, code: str, message: str) -> CapabilityResult:
-    """Internal/contract failures: a possible write is `unknown`, a read is `technical_error`."""
+def _failure_before_io(code: str, message: str) -> CapabilityResult:
+    """Nothing was sent to the external system, so non-execution is *known*: a plain
+    technical_error for any risk (never `unknown`, which would trigger pointless reconciliation)."""
+    return CapabilityResult(
+        status="technical_error",
+        error=ToolError(code=code, message_safe=message, retryable=False),
+    )
+
+
+def _failure_after_possible_io(
+    resolved: ResolvedToolBinding, code: str, message: str
+) -> CapabilityResult:
+    """The call may have reached the system: a possible write is `unknown`, a read is
+    `technical_error`."""
     status = "technical_error" if resolved.effective_risk == "read" else "unknown"
     return CapabilityResult(
         status=status, error=ToolError(code=code, message_safe=message, retryable=False)
@@ -46,7 +58,7 @@ class ToolRunner:
     ) -> CapabilityResult:
         provider = self._providers.get(resolved.tool.provider)
         if provider is None:
-            return _failure(resolved, "PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
+            return _failure_before_io("PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
 
         try:
             mapped = apply_mapping(resolved.binding.input_map, request.args, self._transforms)
@@ -65,7 +77,9 @@ class ToolRunner:
         try:
             result = await provider.execute(resolved, tool_args, context)
         except Exception:  # provider contract violation: never leak, never assume safe
-            return _failure(resolved, "PROVIDER_CONTRACT_VIOLATION", "Tool provider failed.")
+            return _failure_after_possible_io(
+                resolved, "PROVIDER_CONTRACT_VIOLATION", "Tool provider failed."
+            )
 
         return self._to_capability_result(resolved, result)
 
@@ -80,7 +94,7 @@ class ToolRunner:
             mapped = apply_mapping(resolved.binding.output_map, result.data, self._transforms)
             data = resolved.capability.output_model.model_validate(mapped).model_dump(mode="json")
         except (MappingError, ValidationError):
-            return _failure(
+            return _failure_after_possible_io(
                 resolved,
                 "BINDING_OUTPUT_MAPPING_FAILED",
                 "The external system answered in an unexpected format.",

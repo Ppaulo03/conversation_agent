@@ -34,7 +34,22 @@ class HTTPConnection(BaseModel):
 
 
 def _validation_error(code: str, message: str) -> ToolResult:
+    """The *business arguments* are unusable (e.g. an illegal id value)."""
     return ToolResult(status="validation_error", error=ToolError(code=code, message_safe=message))
+
+
+def _configuration_error(code: str, message: str) -> ToolResult:
+    """The ToolDefinition/connection is broken: not the caller's fault, nothing was sent."""
+    return ToolResult(status="technical_error", error=ToolError(code=code, message_safe=message))
+
+
+class _IllegalPathValue(ValueError):
+    pass
+
+
+# A path *segment* value: unreserved characters only. No "/", "\\", "?", "#", "%" (which would
+# let a server decode a new segment/query out of one parameter), no whitespace or controls.
+_SEGMENT_VALUE = re.compile(r"[A-Za-z0-9._~-]+")
 
 
 class HTTPToolProvider:
@@ -56,17 +71,21 @@ class HTTPToolProvider:
         spec = tool.http
         connection = self._connections.get(tool.connection or "")
         if spec is None or connection is None:
-            return ToolResult(
-                status="technical_error",
-                error=ToolError(code="CONNECTION_NOT_CONFIGURED", message_safe="No connection."),
-            )
+            return _configuration_error("CONNECTION_NOT_CONFIGURED", "No connection.")
         if not spec.path.startswith("/") or spec.path.startswith("//") or "://" in spec.path:
-            return _validation_error("INVALID_TOOL_PATH", "Tool path must be relative.")
+            return _configuration_error(
+                "INVALID_TOOL_CONFIGURATION", "Tool path must be relative to its connection."
+            )
 
         path_params = set(_PATH_PARAM.findall(spec.path))
+        missing = sorted(p for p in path_params if args.get(p) is None)
+        if missing:
+            return _configuration_error(
+                "INVALID_TOOL_CONFIGURATION", f"Path parameter(s) not provided: {missing}."
+            )
         try:
             path = _PATH_PARAM.sub(lambda m: self._path_value(args, m.group(1)), spec.path)
-        except ValueError as exc:
+        except _IllegalPathValue as exc:
             return _validation_error("INVALID_PATH_PARAMETER", str(exc))
         query = {k: args[k] for k in spec.query if args.get(k) is not None and k not in path_params}
         body = {k: args[k] for k in spec.body if k in args and k not in path_params}
@@ -119,9 +138,7 @@ class HTTPToolProvider:
 
     @staticmethod
     def _path_value(args: dict[str, Any], name: str) -> str:
-        if name not in args or args[name] is None:
-            raise ValueError(f"missing path parameter {name!r}")
         value = str(args[name])
-        if value in ("", ".", ".."):
-            raise ValueError(f"illegal value for path parameter {name!r}")
+        if value in (".", "..") or not _SEGMENT_VALUE.fullmatch(value):
+            raise _IllegalPathValue(f"illegal value for path parameter {name!r}")
         return quote(value, safe="")

@@ -71,6 +71,11 @@ class AnthropicLLM:
     def from_api_key(cls, api_key: str, model: str) -> AnthropicLLM:
         return cls(anthropic.AsyncAnthropic(api_key=api_key), model)
 
+    async def aclose(self) -> None:
+        close = getattr(self._client, "close", None)  # AsyncAnthropic.close(); stubs may lack it
+        if close is not None:
+            await close()
+
     async def complete(self, request: LLMRequest) -> LLMResponse:
         kwargs: dict[str, Any] = {
             "model": self._model,
