@@ -1,7 +1,14 @@
 # IMPLEMENTATION_STATUS
 
-Fonte de verdade: `docs/INVARIANTS.md` > `docs/RUNTIME_PROTOCOL.md` > `docs/DESIGN.md` > `docs/ROADMAP.md`
-(os arquivos no repositório não têm o sufixo `_v4`).
+Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
+
+- `INVARIANTS.md` — invariantes normativas e mapa INV → teste;
+- `RUNTIME_PROTOCOL.md` — protocolo de execução (lease, epochs, journal, side effects, outbox);
+- `ROADMAP.md` — fases, DoD, GO/NO-GO e chaos gates;
+- `DESIGN.md` — visão consolidada e racional.
+
+Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
+relaxa uma invariante.
 
 **Fase atual:** 1 — Vertical slice (concluída; Fase 2 não iniciada).
 
@@ -38,7 +45,7 @@ Itens implementados:
 - `app/cli.py`: loop multi-turn genérico. `examples/vertical-slice`: agente de scheduling (todo o domínio).
 - `examples/reference-scheduling-api`: sistema externo FastAPI (`GET /availability`).
 
-Testes (155 passam, 2 live deselecionados; sem LLM real no CI):
+Testes (238 passam, 5 live deselecionados; sem LLM real no CI):
 
 | Área | Arquivo | # |
 |---|---|---|
@@ -48,9 +55,31 @@ Testes (155 passam, 2 live deselecionados; sem LLM real no CI):
 | mapping / error mapping / binding | `test_mapping.py`, `test_error_mapping.py`, `test_binding_and_runner.py` | 41 |
 | engine (INV-002/003/013, replay INV-014/017/018) | `tests/engine/*` | 20 |
 | GO/NO-GO e2e | `tests/evals/test_phase1_go_nogo.py` | 9 |
-| live (marker `integration`) | `tests/integration/test_live_anthropic.py` | 2 (skipped sem chave) |
+| live (marker `integration`) | `tests/integration/test_live_llm.py`, `test_live_scenarios.py` | 5 (orçamento diário) |
+| hardening 1.1 | `test_model_invariants.py`, `tests/engine/test_hardening.py`, `test_http_tool_provider.py` | 40+ |
 
 Qualidade: `ruff check` + `ruff format --check` verdes; `mypy --strict src examples` verde; `lint-imports` 6/6 contratos.
+
+## Phase 1.1 — hardening antes da Fase 2
+
+Status: **PASS** (revisão externa do código da Fase 1; todos os pontos verificados e corrigidos, cada um com teste).
+
+- [✓] P1 colisão de nome de tool: nomes de capability `dominio.acao` em lower_snake sem `__` → `name.replace(".", "__")`
+      é injetivo (`a.b__c` e `a__b.c` agora são rejeitados na definição). `CapabilityDefinition.llm_name`.
+- [✓] P1 invariantes nos modelos: `ToolResult`/`CapabilityResult` (success ⇒ sem error; demais ⇒ error e sem data),
+      `CapabilityOutcome` (result XOR proposal), `Evaluation` (forma segue a decisão). Journal revalida no replay.
+- [✓] P1 pré-I/O vs pós-I/O: provider/conexão ausente = `technical_error` (nada foi tentado); crash/mapeamento de saída
+      pós-envio de write = `unknown`.
+- [✓] P1 path param HTTP: só `[A-Za-z0-9._~-]`, sem `.`/`..`; `/ \ ? # %` rejeitados antes de qualquer request
+      (o teste que congelava o comportamento antigo foi substituído).
+- [✓] P2 defeito de configuração HTTP = `technical_error INVALID_TOOL_CONFIGURATION`; `validation_error` só para
+      argumentos de negócio.
+- [✓] P2 `stop_reason=MAX_TOKENS` não vira resposta final: `halted="llm_truncated"`, tool call truncada não executa, journalado.
+- [✓] P2 `AnthropicLLM.aclose()`; `close_llm` fecha qualquer adapter com client.
+- [✓] docs: precedência por escopo; resíduos do status antigo removidos.
+
+Decisão de governança: a recomendação de autoridade por escopo foi adotada; a regra de conflito do pedido original
+(INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP) permanece como desempate.
 
 ### INV → teste (Fase 1)
 
@@ -126,10 +155,10 @@ garante que não há vocabulário de scheduling no framework).
 
 ### Questões encontradas
 
-- **Live**: a suíte live (`uv run --env-file .env pytest -m integration`) passou com Groq; consome no máx. ~6 chamadas e tem
-  orçamento diário local (`LIVE_LLM_DAILY_CALLS`, padrão 20, `.live_llm_usage.json`; 429 zera o dia). Anthropic segue validado contra o contrato com client do SDK stubado e tipos reais do SDK;
-  `tests/integration/test_live_anthropic.py` (`uv run pytest -m integration`) cobre o contrato com a API real e uma sonda
-  de qualidade (o modelo só oferece slots que a API tem). **Rode-o antes de fechar o GO definitivo**; é o único item do
-  GO/NO-GO que não foi executado.
+- **Live (Groq `openai/gpt-oss-120b`)**: `uv run --env-file .env pytest -m integration`. Passaram: contrato live, sonda "só oferece
+  slots reais", **S3** (dia indisponível → alternativa sem slots inventados) e **S6** (escolha de slot → draft válido de
+  `scheduling.create`, nenhuma escrita na API). **S4** (correção "na verdade quinta") existe mas ainda não foi executado
+  com LLM real (orçamento diário). Orçamento local: `LIVE_LLM_DAILY_CALLS` (padrão 20), `.live_llm_usage.json`; 429 zera o dia.
+  Anthropic segue validado só contra o contrato com client do SDK stubado.
 - Nenhuma contradição normativa entre os documentos foi encontrada; as lacunas (representação do "draft" na Fase 1,
   posição de `tools/` nas camadas) foram resolvidas como decisões locais acima.

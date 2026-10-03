@@ -20,6 +20,10 @@ Deltas do repositório sobre o `AGENTS.md` global.
 
 ## Aprendizados acumulados
 
+- Nomes de capability são validados (dominio.acao, lower_snake, sem `__`) para o nome LLM (.→`__`) ser injetivo.
+- Modelos de resultado impõem invariantes (success⇔sem error; falha⇔error sem data): construa ToolResult/CapabilityResult coerentes.
+- Falha antes de qualquer I/O = technical_error; só ambiguidade pós-envio de write vira unknown.
+
 - Nunca criar `__init__.py` com `Set-Content -Encoding utf8` no PowerShell 5.1: grava BOM e o `ast.parse` quebra.
   Use `[System.IO.File]::WriteAllBytes(path, [byte[]]@())`. Idem para ler/regravar arquivos com acentos: não use
   `Get-Content` sem `-Encoding UTF8` (corrompe UTF-8).
