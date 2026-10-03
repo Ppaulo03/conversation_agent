@@ -109,7 +109,15 @@ class _TurnRepo(_Repo):
             f.conversation_id,
         )
         if open_turn is not None:
+            last = await self._c.fetchval(
+                "SELECT max(occurred_at) FROM inbox_events "
+                "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3",
+                f.tenant_id,
+                f.conversation_id,
+                open_turn["turn_id"],
+            )
             return OpenedTurn(
+                last_event_at=last,
                 turn_id=open_turn["turn_id"],
                 identity=identity,
                 user_text=open_turn["user_text"],
@@ -166,6 +174,7 @@ class _TurnRepo(_Repo):
             turn_id,
         )
         return OpenedTurn(
+            last_event_at=max(e["occurred_at"] for e in events),
             turn_id=turn_id,
             identity=identity,
             user_text=text,

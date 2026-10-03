@@ -66,12 +66,19 @@ class TurnEngine:
         state: ConversationState,
         user_text: str,
         turn_id: str,
+        *,
+        guard: Callable[[], None] | None = None,
+        late_event_ids: tuple[str, ...] = (),
     ) -> TurnOutcome:
         """Process one turn. Re-running the same `turn_id` replays journaled steps (INV-014)."""
         cursor = TurnJournalCursor(self._journal, turn_id)
 
         async def aggregate() -> dict[str, Any]:
-            return {"user_text": user_text, "turn_reference_time": self._clock.now().isoformat()}
+            return {
+                "user_text": user_text,
+                "turn_reference_time": self._clock.now().isoformat(),
+                "late_event_ids": list(late_event_ids),
+            }
 
         inbound = await cursor.step(
             JournalStepType.INBOUND_AGGREGATED, stable_hash(user_text), aggregate
@@ -89,6 +96,8 @@ class TurnEngine:
         halted: Literal["step_limit", "llm_truncated"] | None = None
 
         for _ in range(self._max_steps):
+            if guard is not None:
+                guard()  # safe boundary: a stale worker starts no new step
             response = await self._llm_step(cursor, turn_id, system, working)
             llm_calls += 1
             if response.stop_reason is LLMStopReason.MAX_TOKENS:
@@ -102,6 +111,8 @@ class TurnEngine:
             working.append(LLMMessage(role="assistant", parts=response.parts))
             result_parts: list[ToolResultPart] = []
             for call in calls:
+                if guard is not None:
+                    guard()
                 part = await self._capability_step(
                     cursor, identity, turn_id, call.id, call.name, call.arguments, proposals
                 )

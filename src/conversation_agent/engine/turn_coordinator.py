@@ -1,0 +1,221 @@
+"""TurnCoordinator: the normative turn algorithm (DESIGN §39D) over the reliability ports.
+
+  candidate -> conversation lease -> claim events (inside the lease) -> turn + journal
+  -> ownership gate -> engine -> one local transaction {state, outbox, turn, inbox consumed}
+  -> release lease
+
+No database transaction is open while the LLM or an external system is being called: each
+write is a short fenced UoW. A crash at any point leaves the turn open; the next owner
+(higher epoch) resumes the same turn and replays its journal.
+"""
+
+from __future__ import annotations
+
+import logging
+from collections.abc import Callable
+from dataclasses import dataclass
+from datetime import timedelta
+from typing import Literal
+
+from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.errors import (
+    FencingError,
+    JournalDivergenceError,
+    LLMProviderError,
+    StaleWorkerError,
+    ToolResultPendingError,
+)
+from conversation_agent.core.models.conversation import ConversationMessage, ConversationState
+from conversation_agent.core.models.journal import JournalStepType
+from conversation_agent.core.models.runtime import (
+    ConversationKey,
+    FenceToken,
+    OpenedTurn,
+    OutboundMessage,
+    Ownership,
+)
+from conversation_agent.engine.heartbeat import LeaseHandle
+from conversation_agent.engine.journal_steps import TurnJournalCursor
+from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.faults import FaultInjector
+from conversation_agent.ports.inbox import InboxStore
+from conversation_agent.ports.journal import TurnJournal
+from conversation_agent.ports.lease import ConversationLeaseStore
+from conversation_agent.ports.uow import ConversationUnitOfWorkFactory
+
+log = logging.getLogger(__name__)
+
+RunStatus = Literal["idle", "busy", "done", "retry_later", "stale"]
+
+
+@dataclass(frozen=True)
+class ConversationRun:
+    status: RunStatus
+    turns_completed: int = 0
+
+
+class TurnCoordinator:
+    def __init__(
+        self,
+        *,
+        owner: str,
+        leases: ConversationLeaseStore,
+        uows: ConversationUnitOfWorkFactory,
+        inbox: InboxStore,
+        journal_factory: Callable[[FenceToken], TurnJournal],
+        engine_factory: Callable[[FenceToken, TurnJournal], TurnEngine],
+        clock: Clock,
+        faults: FaultInjector,
+        lease_ttl: timedelta = timedelta(seconds=30),
+        heartbeat_interval_seconds: float = 10.0,
+        max_turn_attempts: int = 5,
+    ) -> None:
+        self._owner = owner
+        self._leases = leases
+        self._uows = uows
+        self._inbox = inbox
+        self._journal_factory = journal_factory
+        self._engine_factory = engine_factory
+        self._clock = clock
+        self._faults = faults
+        self._ttl = lease_ttl
+        self._interval = heartbeat_interval_seconds
+        self._max_attempts = max_turn_attempts
+
+    async def run_once(self, limit: int = 50) -> list[ConversationRun]:
+        """One polling pass: candidates are chosen without claiming anything; the claim
+        happens only after the conversation lease is held."""
+        candidates = await self._inbox.list_ready_conversations(limit)
+        return [await self.process_conversation(key) for key in candidates]
+
+    async def process_conversation(self, key: ConversationKey) -> ConversationRun:
+        lease = await self._leases.acquire(key, self._owner, self._ttl)
+        if lease is None:
+            return ConversationRun("busy")  # nothing is claimed by the losing worker
+        handle = LeaseHandle(
+            lease, self._leases, self._clock, ttl=self._ttl, interval_seconds=self._interval
+        )
+        await handle.start()
+        completed = 0
+        try:
+            while True:
+                handle.ensure_active()
+                step = await self._process_next_turn(handle)
+                if step == "none":
+                    break
+                if step == "retry":
+                    # A handled failure (not a crash): give the conversation back so the
+                    # next pass can resume this open turn from its journal.
+                    await self._leases.release(handle.lease)
+                    return ConversationRun("retry_later", completed)
+                completed += 1
+            await self._leases.release(handle.lease)
+            return ConversationRun("done" if completed else "idle", completed)
+        except (StaleWorkerError, FencingError):
+            # We no longer own the conversation: do not touch it (and do not release a lease
+            # that is not ours). The new owner resumes from the journal/ledger.
+            return ConversationRun("stale", completed)
+        finally:
+            await handle.stop()
+
+    async def _process_next_turn(
+        self, handle: LeaseHandle
+    ) -> Literal["none", "completed", "retry"]:
+        fence = handle.fence
+        async with self._uows.begin(fence) as uow:
+            stored = await uow.state.load()
+            opened = await uow.turns.open_next(self._owner, self._clock.now())
+            await uow.commit()
+        if opened is None:
+            return "none"
+
+        journal = self._journal_factory(fence)
+        if stored.ownership is not Ownership.BOT:
+            await self._record_silent_turn(fence, journal, opened, stored.state, stored.ownership)
+            return "completed"
+
+        engine = self._engine_factory(fence, journal)
+        try:
+            outcome = await engine.process_turn(
+                opened.identity,
+                stored.state,
+                opened.user_text,
+                opened.turn_id,
+                guard=handle.ensure_active,
+                late_event_ids=opened.late_event_ids,
+            )
+        except JournalDivergenceError as exc:
+            log.error("ALERT journal divergence, turn failed closed: %s", exc)
+            await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
+            return "completed"
+        except (LLMProviderError, ToolResultPendingError) as exc:
+            if opened.attempts >= self._max_attempts:
+                log.error(
+                    "ALERT turn %s failed after %s attempts: %s",
+                    opened.turn_id,
+                    opened.attempts,
+                    exc,
+                )
+                await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
+                return "completed"
+            return "retry"  # the turn stays open; the next pass resumes it from the journal
+
+        await self._faults.hit("C16_after_apply_before_compose")
+        async with self._uows.begin(fence) as uow:
+            await uow.state.save(outcome.state, last_event_at=opened.last_event_at)
+            await uow.outbox.add(self._outbound(opened, outcome.reply))
+            await uow.turns.complete(opened.turn_id)
+            await uow.inbox.consume(opened.event_ids)
+            await uow.commit()
+        return "completed"
+
+    async def _record_silent_turn(
+        self,
+        fence: FenceToken,
+        journal: TurnJournal,
+        opened: OpenedTurn,
+        state: ConversationState,
+        ownership: Ownership,
+    ) -> None:
+        """INV-019: a conversation not owned by the bot gets context persisted and nothing
+        else: no Router, no LLM, no tool, no outbound."""
+        cursor = TurnJournalCursor(journal, opened.turn_id)
+
+        async def check() -> dict[str, object]:
+            return {"ownership": ownership.value, "event_ids": list(opened.event_ids)}
+
+        await cursor.step(JournalStepType.OWNERSHIP_CHECK, stable_hash(opened.user_text), check)
+        new_state = state.model_copy(
+            update={
+                "history": (*state.history, ConversationMessage(role="user", text=opened.user_text))
+            }
+        )
+        async with self._uows.begin(fence) as uow:
+            await uow.state.save(new_state, last_event_at=opened.last_event_at)
+            await uow.turns.complete(opened.turn_id)
+            await uow.inbox.consume(opened.event_ids)
+            await uow.commit()
+
+    async def _fail_turn(self, fence: FenceToken, opened: OpenedTurn, reason: str) -> None:
+        async with self._uows.begin(fence) as uow:
+            await uow.turns.fail(opened.turn_id, reason)
+            await uow.inbox.dead(opened.event_ids)
+            await uow.commit()
+
+    @staticmethod
+    def _outbound(opened: OpenedTurn, text: str) -> OutboundMessage:
+        identity = opened.identity
+        index = 0
+        key = stable_hash(identity.tenant_id, identity.conversation_id, opened.turn_id, index)
+        return OutboundMessage(
+            outbox_id=key[:32],
+            tenant_id=identity.tenant_id,
+            conversation_id=identity.conversation_id,
+            channel_id=identity.channel_id,
+            contact_id=identity.contact_id,
+            turn_id=opened.turn_id,
+            message_index=index,
+            text=text,
+            idempotency_key=key,
+        )

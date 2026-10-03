@@ -96,6 +96,7 @@ class OpenedTurn(_Frozen):
     user_text: str
     event_ids: tuple[str, ...]
     late_event_ids: tuple[str, ...] = ()
+    last_event_at: AwareDatetime | None = None  # newest occurred_at among the turn's events
     resumed: bool = False  # True when an earlier owner had already opened this turn
     attempts: int = 1
 

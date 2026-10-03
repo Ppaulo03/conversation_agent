@@ -107,3 +107,16 @@ def test_runtime_does_not_own_business_state() -> None:  # INV-008
     from conversation_agent.core.models.conversation import ConversationState
 
     assert set(ConversationState.model_fields) == {"history", "proposals"}
+
+
+def test_outbound_delivery_only_from_outbox() -> None:  # INV-007 (structural half)
+    """Only the OutboxWorker may depend on the MessageSender port; nothing else in the
+    framework can put bytes on a channel."""
+    users = sorted(
+        p.relative_to(SRC).as_posix()
+        for p in SRC.rglob("*.py")
+        if "conversation_agent.ports.sender" in imported_modules(p.read_text(encoding="utf-8"))
+        and p.parent.name != "adapters"
+        and "adapters" not in p.parts
+    )
+    assert users == ["engine/outbox_worker.py"]
