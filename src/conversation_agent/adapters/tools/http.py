@@ -97,6 +97,10 @@ class HTTPToolProvider:
             "X-Trace-Id": context.trace_id,
             "X-Invocation-Id": context.invocation_id,
         }
+        if binding.effective_risk != "read" and tool.idempotency_supported:
+            # The key is the stable invocation identity: the same on every technical retry,
+            # replay and reconciliation, never regenerated (INV-021).
+            headers["Idempotency-Key"] = context.invocation_id
         started = time.monotonic()
         try:
             response = await self._client.request(

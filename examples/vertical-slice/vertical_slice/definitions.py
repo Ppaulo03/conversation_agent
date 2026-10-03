@@ -18,7 +18,7 @@ from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.binding import CapabilityBinding, ErrorMap, ErrorRule
 from conversation_agent.core.definitions.capability import CapabilityDefinition
 from conversation_agent.core.definitions.mapping import Const, Each, Ref
-from conversation_agent.core.definitions.tool import HTTPRequestSpec, ToolDefinition
+from conversation_agent.core.definitions.tool import HTTPRequestSpec, RecoverySpec, ToolDefinition
 
 CONNECTION = "scheduling_api"
 ServiceId = Literal["haircut", "consultation"]
@@ -59,6 +59,18 @@ class CreateOutput(_Strict):
     booking_id: str
     status: str
 
+
+class LookupInput(_Strict):
+    idempotency_key: str  # supplied by the runtime during reconciliation, never by the LLM
+
+
+LOOKUP = CapabilityDefinition(
+    name="scheduling.lookup_booking",
+    description="Finds the booking created with a given idempotency key (runtime/recovery use).",
+    input_model=LookupInput,
+    output_model=CreateOutput,
+    risk="read",
+)
 
 AVAILABILITY = CapabilityDefinition(
     name="scheduling.availability",
@@ -135,7 +147,7 @@ ERP_GET_AVAILABLE_SLOTS = ToolDefinition(
 
 ERP_CREATE_RESERVATION = ToolDefinition(
     name="erp_create_reservation",
-    description="POST /bookings on the scheduling API (endpoint arrives in Phase 2).",
+    description="POST /bookings on the scheduling API (idempotent by Idempotency-Key).",
     input_model=ErpCreateArgs,
     output_model=ErpCreateResponse,
     risk="irreversible",
@@ -146,6 +158,25 @@ ERP_CREATE_RESERVATION = ToolDefinition(
     http=HTTPRequestSpec(
         method="POST", path="/bookings", body=("service_code", "starts_at", "hours")
     ),
+    idempotency_supported=True,
+    # An unknown outcome is resolved by asking the ERP what it did (never by blind retry).
+    recovery=RecoverySpec(strategy="status_lookup", lookup_capability="scheduling.lookup_booking"),
+)
+
+
+class ErpFindArgs(_Strict):
+    key: str
+
+
+ERP_FIND_RESERVATION = ToolDefinition(
+    name="erp_find_reservation",
+    description="GET /bookings/by-idempotency-key/{key} on the scheduling API.",
+    input_model=ErpFindArgs,
+    output_model=ErpCreateResponse,
+    risk="read",
+    provider="http",
+    connection=CONNECTION,
+    http=HTTPRequestSpec(method="GET", path="/bookings/by-idempotency-key/{key}"),
 )
 
 
@@ -193,6 +224,18 @@ CREATE_BINDING = CapabilityBinding(
     ),
 )
 
+LOOKUP_BINDING = CapabilityBinding(
+    capability="scheduling.lookup_booking",
+    tool="erp_find_reservation",
+    input_map={"key": "$.idempotency_key"},
+    output_map={"booking_id": "$.id", "status": "$.state"},
+    error_map=ErrorMap(
+        http_status={404: ErrorRule(type="business_error", code="BOOKING_NOT_FOUND")},
+        default_5xx={"read": ErrorRule(type="technical_error", retryable=True)},
+        timeout={"read": ErrorRule(type="timeout", retryable=True)},
+    ),
+)
+
 PERSONA = """\
 Você é a assistente virtual de agendamentos de uma clínica/salão. Responda sempre em \
 português do Brasil, de forma curta, cordial e objetiva.
@@ -222,9 +265,9 @@ def build_agent() -> AgentDefinition:
         version="0.1.0",
         persona=PERSONA,
         timezone="America/Sao_Paulo",
-        capabilities=(AVAILABILITY, CREATE),
-        tools=(ERP_GET_AVAILABLE_SLOTS, ERP_CREATE_RESERVATION),
-        bindings=(AVAILABILITY_BINDING, CREATE_BINDING),
+        capabilities=(AVAILABILITY, CREATE, LOOKUP),
+        tools=(ERP_GET_AVAILABLE_SLOTS, ERP_CREATE_RESERVATION, ERP_FIND_RESERVATION),
+        bindings=(AVAILABILITY_BINDING, CREATE_BINDING, LOOKUP_BINDING),
         allowed_capabilities=frozenset({"scheduling.availability", "scheduling.create"}),
         fallback_reply="Desculpe, não consegui concluir agora. Pode tentar novamente?",
     )

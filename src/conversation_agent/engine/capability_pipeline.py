@@ -11,6 +11,7 @@ from typing import Any
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.core.models.tooling import (
     CapabilityRequest,
@@ -87,6 +88,12 @@ class CapabilityPipeline:
                 )
             )
         return tuple(tools)
+
+    def resolve(self, capability_name: str) -> ResolvedToolBinding:
+        resolved = self._agent.resolve(capability_name)
+        if resolved is None:
+            raise KeyError(f"no binding for capability {capability_name!r}")
+        return resolved
 
     def capability_name_for(self, llm_tool_name_: str) -> str:
         """Unknown names are passed through so the PolicyGate denies them."""

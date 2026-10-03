@@ -35,6 +35,7 @@ from conversation_agent.engine.capability_pipeline import (
 )
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
+from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
@@ -52,6 +53,7 @@ class TurnEngine:
         clock: Clock,
         *,
         max_steps: int = MAX_STEPS_DEFAULT,
+        tool_executor: ToolStepExecutor | None = None,
     ) -> None:
         self._agent = agent
         self._llm = llm
@@ -59,6 +61,7 @@ class TurnEngine:
         self._journal = journal
         self._clock = clock
         self._max_steps = max_steps
+        self._executor: ToolStepExecutor = tool_executor or DirectToolExecutor(pipeline)
 
     async def process_turn(
         self,
@@ -114,7 +117,7 @@ class TurnEngine:
                 if guard is not None:
                     guard()
                 part = await self._capability_step(
-                    cursor, identity, turn_id, call.id, call.name, call.arguments, proposals
+                    cursor, identity, turn_id, call.id, call.name, call.arguments, proposals, guard
                 )
                 result_parts.append(part)
             working.append(LLMMessage(role="user", parts=tuple(result_parts)))
@@ -181,6 +184,7 @@ class TurnEngine:
         tool_name: str,
         arguments: dict[str, Any],
         proposals: dict[str, CapabilityRequest],
+        guard: Callable[[], None] | None,
     ) -> ToolResultPart:
         capability = self._pipeline.capability_name_for(tool_name)
         # tool_call_id is ephemeral and deliberately excluded from every identity (§9.1).
@@ -201,15 +205,34 @@ class TurnEngine:
             await cursor.step(JournalStepType.POLICY_DECISION, request_hash, decide)
         )
 
-        async def execute() -> dict[str, Any]:
-            context = self._tool_context(identity, turn_id, logical_step_id, evaluation)
-            return (await self._pipeline.execute(evaluation, context)).model_dump(mode="json")
-
-        outcome = CapabilityOutcome.model_validate(
-            await cursor.step(
-                JournalStepType.TOOL_RESULT, request_hash, execute, logical_step_id=logical_step_id
+        context = self._tool_context(identity, turn_id, logical_step_id, evaluation)
+        if evaluation.decision.outcome == "allow" and evaluation.request is not None:
+            # A real external operation: the configured executor owns the side-effect protocol.
+            outcome = await self._executor.run(
+                cursor,
+                ToolStep(
+                    identity=identity,
+                    turn_id=turn_id,
+                    logical_step_id=logical_step_id,
+                    request_hash=request_hash,
+                    evaluation=evaluation,
+                    context=context,
+                    guard=guard,
+                ),
             )
-        )
+        else:  # denied / invalid / proposal: no external operation, nothing to ledger
+
+            async def immediate() -> dict[str, Any]:
+                return (await self._pipeline.execute(evaluation, context)).model_dump(mode="json")
+
+            outcome = CapabilityOutcome.model_validate(
+                await cursor.step(
+                    JournalStepType.TOOL_RESULT,
+                    request_hash,
+                    immediate,
+                    logical_step_id=logical_step_id,
+                )
+            )
         if outcome.proposal is not None:
             proposals[outcome.proposal.capability] = outcome.proposal
             return ToolResultPart(

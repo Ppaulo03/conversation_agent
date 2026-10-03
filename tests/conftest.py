@@ -41,4 +41,6 @@ def api(_live_api: tuple[LiveServer, object]) -> ApiHandle:
     handle.state.fault = None
     handle.state.fully_booked_dates = set()
     handle.state.taken_slots = set()
+    handle.state.bookings.clear()
+    handle.state.by_key.clear()
     return handle
