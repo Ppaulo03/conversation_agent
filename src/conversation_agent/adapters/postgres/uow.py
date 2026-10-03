@@ -25,15 +25,24 @@ from conversation_agent.adapters.postgres.rows import (
 )
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.errors import FencingError, JournalConflictError
+from conversation_agent.core.models.actions import (
+    ActionConfirmation,
+    PendingAction,
+    PendingActionStatus,
+    PromptRecord,
+)
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
 from conversation_agent.core.models.journal import JournalEntry, JournalStepType
 from conversation_agent.core.models.runtime import (
     FenceToken,
+    InboundRef,
     OpenedTurn,
     OutboundMessage,
+    OutboxStatus,
     Ownership,
     ToolInvocation,
 )
+from conversation_agent.core.models.tooling import CapabilityRequest
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.uow import StoredConversation
 
@@ -97,6 +106,17 @@ class _StateRepo(_Repo):
         )
 
 
+def _refs(rows: list[asyncpg.Record]) -> tuple[InboundRef, ...]:
+    return tuple(
+        InboundRef(
+            event_id=r["event_id"],
+            provider_occurred_at=r["provider_occurred_at"],
+            reply_to_provider_message_id=r["reply_to_provider_message_id"],
+        )
+        for r in rows
+    )
+
+
 class _TurnRepo(_Repo):
     async def open_next(self, owner: str, now: datetime) -> OpenedTurn | None:
         f = self._f
@@ -109,15 +129,17 @@ class _TurnRepo(_Repo):
             f.conversation_id,
         )
         if open_turn is not None:
-            last = await self._c.fetchval(
-                "SELECT max(occurred_at) FROM inbox_events "
-                "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3",
+            rows = await self._c.fetch(
+                "SELECT event_id, occurred_at, provider_occurred_at, reply_to_provider_message_id "
+                "FROM inbox_events WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 "
+                "ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id",
                 f.tenant_id,
                 f.conversation_id,
                 open_turn["turn_id"],
             )
             return OpenedTurn(
-                last_event_at=last,
+                last_event_at=max((r["occurred_at"] for r in rows), default=None),
+                inbound=_refs(rows),
                 turn_id=open_turn["turn_id"],
                 identity=identity,
                 user_text=open_turn["user_text"],
@@ -129,7 +151,8 @@ class _TurnRepo(_Repo):
 
         events = await self._c.fetch(
             """
-            SELECT event_id, text, occurred_at FROM inbox_events
+            SELECT event_id, text, occurred_at, provider_occurred_at,
+                   reply_to_provider_message_id FROM inbox_events
              WHERE tenant_id=$1 AND conversation_id=$2 AND status='READY'
              ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id
             """,
@@ -175,6 +198,7 @@ class _TurnRepo(_Repo):
         )
         return OpenedTurn(
             last_event_at=max(e["occurred_at"] for e in events),
+            inbound=_refs(events),
             turn_id=turn_id,
             identity=identity,
             user_text=text,
@@ -307,7 +331,171 @@ class _InvocationRepo(_Repo):
         )
 
 
+_ACTION_COLUMNS = (
+    "tenant_id, conversation_id, action_id, capability, tool_name, request_json, args_hash, "
+    "protected_fields, summary, created_from_turn, latest_prompt_outbox_id, "
+    "confirmation_attempts, expires_at, status"
+)
+
+
+def _action_from_row(r: asyncpg.Record) -> PendingAction:
+    return PendingAction(
+        tenant_id=r["tenant_id"],
+        conversation_id=r["conversation_id"],
+        action_id=r["action_id"],
+        capability=r["capability"],
+        tool_name=r["tool_name"],
+        request=CapabilityRequest.model_validate(r["request_json"]),
+        args_hash=r["args_hash"],
+        protected_fields=tuple(r["protected_fields"]),
+        summary=r["summary"],
+        created_from_turn=r["created_from_turn"],
+        latest_prompt_outbox_id=r["latest_prompt_outbox_id"],
+        confirmation_attempts=r["confirmation_attempts"],
+        expires_at=r["expires_at"],
+        status=PendingActionStatus(r["status"]),
+    )
+
+
+class _ActionRepo(_Repo):
+    async def create_or_reuse(self, action: PendingAction) -> tuple[PendingAction, bool]:
+        f = self._f
+        stored = await self.get(action.action_id)
+        if stored is not None:  # replay of the same turn: same deterministic action_id
+            return stored, False
+        awaiting = await self.awaiting()
+        if awaiting is not None:
+            if (awaiting.capability, awaiting.args_hash) == (action.capability, action.args_hash):
+                return awaiting, False  # equivalent action already pending: reuse it
+            # A different proposal replaces it: the old confirmation can never authorise the
+            # new arguments (INV-010).
+            await self.transition(awaiting.action_id, PendingActionStatus.INVALIDATED)
+        now = self._clock.now()
+        await self._c.execute(
+            """
+            INSERT INTO pending_actions (tenant_id, conversation_id, action_id, capability,
+                tool_name, request_json, args_hash, protected_fields, summary, created_from_turn,
+                latest_prompt_outbox_id, confirmation_attempts, expires_at, status,
+                created_at, updated_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,'PENDING_CONFIRMATION',$14,$14)
+            """,
+            f.tenant_id,
+            f.conversation_id,
+            action.action_id,
+            action.capability,
+            action.tool_name,
+            action.request.model_dump(mode="json"),
+            action.args_hash,
+            list(action.protected_fields),
+            action.summary,
+            action.created_from_turn,
+            action.latest_prompt_outbox_id,
+            action.confirmation_attempts,
+            action.expires_at,
+            now,
+        )
+        created = await self.get(action.action_id)
+        assert created is not None
+        return created, True
+
+    async def awaiting(self) -> PendingAction | None:
+        r = await self._c.fetchrow(
+            f"SELECT {_ACTION_COLUMNS} FROM pending_actions "
+            "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PENDING_CONFIRMATION'",
+            self._f.tenant_id,
+            self._f.conversation_id,
+        )
+        return _action_from_row(r) if r else None
+
+    async def get(self, action_id: str) -> PendingAction | None:
+        r = await self._c.fetchrow(
+            f"SELECT {_ACTION_COLUMNS} FROM pending_actions WHERE tenant_id=$1 AND action_id=$2",
+            self._f.tenant_id,
+            action_id,
+        )
+        return _action_from_row(r) if r else None
+
+    async def set_prompt(self, action_id: str, outbox_id: str, *, new_attempt: bool) -> None:
+        await self._c.execute(
+            "UPDATE pending_actions SET latest_prompt_outbox_id=$3, updated_at=$4, "
+            "confirmation_attempts = confirmation_attempts + $5 "
+            "WHERE tenant_id=$1 AND action_id=$2",
+            self._f.tenant_id,
+            action_id,
+            outbox_id,
+            self._clock.now(),
+            1 if new_attempt else 0,
+        )
+
+    async def transition(
+        self,
+        action_id: str,
+        to: PendingActionStatus,
+        *,
+        expected: PendingActionStatus = PendingActionStatus.PENDING_CONFIRMATION,
+    ) -> bool:
+        status = await self._c.execute(
+            "UPDATE pending_actions SET status=$4, updated_at=$5 "
+            "WHERE tenant_id=$1 AND action_id=$2 AND status=$3",
+            self._f.tenant_id,
+            action_id,
+            expected.value,
+            to.value,
+            self._clock.now(),
+        )
+        return bool(status.endswith(" 1"))
+
+    async def record_confirmation(self, confirmation: ActionConfirmation) -> None:
+        await self._c.execute(
+            """
+            INSERT INTO action_confirmations (tenant_id, action_id, inbound_message_id,
+                prompt_outbox_id, reply_to_provider_message_id, decision, interpreter,
+                confidence, occurred_at, confirmed_at, created_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
+            ON CONFLICT DO NOTHING
+            """,
+            self._f.tenant_id,
+            confirmation.action_id,
+            confirmation.inbound_message_id,
+            confirmation.prompt_outbox_id,
+            confirmation.reply_to_provider_message_id,
+            confirmation.decision,
+            confirmation.interpreter,
+            confirmation.confidence,
+            confirmation.occurred_at,
+            confirmation.confirmed_at,
+            self._clock.now(),
+        )
+
+    async def prompts(self, action_id: str) -> list[PromptRecord]:
+        rows = await self._c.fetch(
+            "SELECT outbox_id, status, provider_message_id, provider_accepted_at "
+            "FROM outbox_messages WHERE tenant_id=$1 AND action_id=$2 "
+            "ORDER BY created_at, outbox_id",
+            self._f.tenant_id,
+            action_id,
+        )
+        return [
+            PromptRecord(
+                outbox_id=r["outbox_id"],
+                status=OutboxStatus(r["status"]),
+                provider_message_id=r["provider_message_id"],
+                provider_accepted_at=r["provider_accepted_at"],
+            )
+            for r in rows
+        ]
+
+
 class _OutboxRepo(_Repo):
+    async def supersede(self, outbox_id: str) -> None:
+        await self._c.execute(
+            "UPDATE outbox_messages SET status='SUPERSEDED', updated_at=$3 "
+            "WHERE tenant_id=$1 AND outbox_id=$2 AND status IN ('UNKNOWN', 'RECONCILING')",
+            self._f.tenant_id,
+            outbox_id,
+            self._clock.now(),
+        )
+
     async def add(self, message: OutboundMessage) -> bool:
         now = self._clock.now()
         status = await self._c.execute(
@@ -360,6 +548,7 @@ class PostgresUnitOfWork:
         self.turns = _TurnRepo(conn, fence, clock)
         self.journal = _JournalRepo(conn, fence, clock)
         self.invocations = _InvocationRepo(conn, fence, clock)
+        self.actions = _ActionRepo(conn, fence, clock)
         self.outbox = _OutboxRepo(conn, fence, clock)
         self.inbox = _InboxRepo(conn, fence, clock)
 

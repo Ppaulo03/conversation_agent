@@ -30,6 +30,9 @@ class CapabilityDefinition(BaseModel):
     output_model: type[BaseModel]
     risk: Risk = "read"
     confirmation_required: bool = False
+    # Human-readable one-liner for confirmation prompts, formatted with the (validated) args,
+    # e.g. "Book {service_id} at {start_at}". Absent -> a generic summary is generated.
+    summary_template: str | None = None
 
     @field_validator("name")
     @classmethod

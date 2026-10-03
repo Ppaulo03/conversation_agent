@@ -76,6 +76,9 @@ class InboundEvent(_Frozen):
     occurred_at: AwareDatetime
     received_at: AwareDatetime
     source_sequence: int | None = None
+    # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
+    provider_occurred_at: AwareDatetime | None = None  # comparable with `provider_accepted_at`
+    reply_to_provider_message_id: str | None = None
 
     @property
     def identity(self) -> ConversationIdentity:
@@ -88,6 +91,12 @@ class InboundEvent(_Frozen):
         )
 
 
+class InboundRef(_Frozen):
+    event_id: str
+    provider_occurred_at: AwareDatetime | None = None
+    reply_to_provider_message_id: str | None = None
+
+
 class OpenedTurn(_Frozen):
     """A turn whose events were claimed under the conversation lease."""
 
@@ -97,6 +106,7 @@ class OpenedTurn(_Frozen):
     event_ids: tuple[str, ...]
     late_event_ids: tuple[str, ...] = ()
     last_event_at: AwareDatetime | None = None  # newest occurred_at among the turn's events
+    inbound: tuple[InboundRef, ...] = ()  # channel evidence per event, in burst order
     resumed: bool = False  # True when an earlier owner had already opened this turn
     attempts: int = 0  # failed processing attempts so far (NOT waits for tool results)
 

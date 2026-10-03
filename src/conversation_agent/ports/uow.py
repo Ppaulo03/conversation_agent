@@ -6,6 +6,12 @@ from typing import Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from conversation_agent.core.models.actions import (
+    ActionConfirmation,
+    PendingAction,
+    PendingActionStatus,
+    PromptRecord,
+)
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
 from conversation_agent.core.models.journal import JournalEntry
 from conversation_agent.core.models.runtime import (
@@ -60,9 +66,39 @@ class InvocationRepository(Protocol):
     async def mark_applied(self, invocation_id: str, now: datetime) -> None: ...
 
 
+class ActionRepository(Protocol):
+    """PendingAction / ActionConfirmation, all inside the fenced local transaction."""
+
+    async def create_or_reuse(self, action: PendingAction) -> tuple[PendingAction, bool]:
+        """Idempotent on action_id. An equivalent awaiting action (same capability + args_hash)
+        is reused; a different awaiting one is INVALIDATED first (INV-010). Returns
+        (stored action, created_new)."""
+        ...
+
+    async def awaiting(self) -> PendingAction | None: ...
+    async def get(self, action_id: str) -> PendingAction | None: ...
+    async def set_prompt(self, action_id: str, outbox_id: str, *, new_attempt: bool) -> None: ...
+    async def transition(
+        self,
+        action_id: str,
+        to: PendingActionStatus,
+        *,
+        expected: PendingActionStatus = PendingActionStatus.PENDING_CONFIRMATION,
+    ) -> bool:
+        """Compare-and-set on the current status. False if it was not `expected`."""
+        ...
+
+    async def record_confirmation(self, confirmation: ActionConfirmation) -> None: ...
+    async def prompts(self, action_id: str) -> list[PromptRecord]: ...
+
+
 class OutboxRepository(Protocol):
     async def add(self, message: OutboundMessage) -> bool:
         """Idempotent on (tenant, conversation, turn, message_index). False if it existed."""
+        ...
+
+    async def supersede(self, outbox_id: str) -> None:
+        """An UNKNOWN prompt that was replaced by a new one: no longer eligible (SUPERSEDED)."""
         ...
 
 
@@ -82,6 +118,7 @@ class ConversationUnitOfWork(Protocol):
     turns: TurnRepository
     journal: JournalRepository
     invocations: InvocationRepository
+    actions: ActionRepository
     outbox: OutboxRepository
     inbox: InboxRepository
 

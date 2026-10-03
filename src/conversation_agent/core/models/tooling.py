@@ -79,6 +79,7 @@ class CapabilityRequest(_Frozen):
     capability: str
     args: dict[str, Any]
     args_hash: str
+    summary: str | None = None  # for confirmation prompts; NOT part of args_hash
 
 
 class CapabilityResult(_Frozen):

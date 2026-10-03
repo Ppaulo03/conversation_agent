@@ -23,6 +23,18 @@ def _rejected(message: str) -> RequestRejected:
     return RequestRejected(ToolError(code="INVALID_CAPABILITY_ARGUMENTS", message_safe=message))
 
 
+def _summary(capability: CapabilityDefinition, shown_args: dict[str, Any]) -> str:
+    """Rendered from the validated args as the user gave them (original offsets), not from the
+    canonical UTC form."""
+    if capability.summary_template:
+        try:
+            return capability.summary_template.format_map(shown_args)
+        except (KeyError, IndexError, ValueError):
+            pass
+    pairs = ", ".join(f"{k}={v}" for k, v in sorted(shown_args.items()))
+    return f"{capability.name}({pairs})"
+
+
 def build_capability_request(
     capability: CapabilityDefinition, raw_args: dict[str, Any]
 ) -> CapabilityRequest:
@@ -47,4 +59,5 @@ def build_capability_request(
         capability=capability.name,
         args=canonical,
         args_hash=stable_hash(capability.name, canonical),
+        summary=_summary(capability, parsed.model_dump(mode="json")),
     )
