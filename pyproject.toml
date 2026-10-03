@@ -9,6 +9,7 @@ dependencies = [
     "httpx>=0.27",
     "anthropic>=0.40",
     "tzdata>=2024.1",
+    "asyncpg>=0.30",
 ]
 
 [dependency-groups]
@@ -55,6 +56,10 @@ strict = true
 plugins = ["pydantic.mypy"]
 mypy_path = ["src", "examples/vertical-slice", "examples/reference-scheduling-api"]
 explicit_package_bases = true
+
+[[tool.mypy.overrides]]
+module = ["asyncpg", "asyncpg.*"]
+ignore_missing_imports = true
 
 [tool.importlinter]
 root_packages = ["conversation_agent", "scheduling_api", "vertical_slice"]

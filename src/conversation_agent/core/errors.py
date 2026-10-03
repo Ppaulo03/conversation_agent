@@ -32,3 +32,21 @@ class MappingError(ConversationAgentError):
 
 class DefinitionError(ConversationAgentError):
     """Inconsistent agent/capability/binding definitions."""
+
+
+class FencingError(ConversationAgentError):
+    """The conversation lease/epoch is no longer ours: no conversational mutation may commit
+    (INV-009)."""
+
+
+class ExecutionFencingError(ConversationAgentError):
+    """The invocation was taken over by another executor (stale `execution_epoch`) (INV-016)."""
+
+
+class StaleWorkerError(ConversationAgentError):
+    """Heartbeat lost / lease expired locally: stop at the next safe boundary (no new steps)."""
+
+
+class ToolResultPendingError(ConversationAgentError):
+    """The tool outcome is not known yet (executing elsewhere or under reconciliation).
+    The turn stays open and is resumed later; nothing is re-executed."""
