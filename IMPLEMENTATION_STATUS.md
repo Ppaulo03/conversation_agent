@@ -165,7 +165,7 @@ garante que não há vocabulário de scheduling no framework).
 
 ## Phase 2 — Reliability core
 
-Status: **PASS** após a Fase 2.1 de hardening (revisão externa; ver seção abaixo). DoD verificado contra PostgreSQL 16 real e a API de referência real; 358 testes.
+Status: **PASS** após a Fase 2.1 de hardening (revisão externa; ver seção abaixo). DoD verificado contra PostgreSQL 16 real e a API de referência real; 357 testes.
 
 DoD (`ROADMAP.md` Fase 2):
 
@@ -217,7 +217,7 @@ com `POST /bookings` idempotente, lookup por chave e `DELETE`.
 
 ## Phase 2.1 — hardening pós-revisão da Fase 2
 
-Status: **PASS** (todos os achados verificados contra o código; os 3 P0 corrigidos antes da Fase 3). 358 testes.
+Status: **PASS** (todos os achados verificados contra o código; os 3 P0 corrigidos antes da Fase 3). 357 testes.
 
 | Achado | Resolução | Teste |
 |---|---|---|
