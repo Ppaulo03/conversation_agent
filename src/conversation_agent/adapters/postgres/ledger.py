@@ -124,7 +124,7 @@ class PostgresToolInvocationStore:
         return invocation_from_row(row)
 
     async def claim_reconciliation(
-        self, owner: str, limit: int, ttl: timedelta
+        self, owner: str, limit: int, ttl: timedelta, *, agent_id: str | None = None
     ) -> list[tuple[ToolInvocation, ExecutionClaim]]:
         """UNKNOWN, expired-EXECUTING and expired-RECONCILING invocations -> RECONCILING under a
         *new* execution_epoch. An expired EXECUTING is never presumed failed (DESIGN §14), and
@@ -134,12 +134,14 @@ class PostgresToolInvocationStore:
             f"""
             WITH picked AS (
                 SELECT tenant_id, invocation_id FROM tool_invocations
-                 WHERE (status = 'UNKNOWN' AND NOT EXISTS (
+                 WHERE ((status = 'UNKNOWN' AND NOT EXISTS (
                            SELECT 1 FROM scheduled_events s
                             WHERE s.tenant_id = tool_invocations.tenant_id
                               AND s.scheduler_key = 'reconcile:' || tool_invocations.invocation_id
                               AND s.status IN ('PENDING', 'CLAIMED')))  -- backoff timer pending
-                    OR (status IN ('EXECUTING', 'RECONCILING') AND execution_lease_expires_at <= $1)
+                    OR (status IN ('EXECUTING', 'RECONCILING')
+                        AND execution_lease_expires_at <= $1))
+                   AND ($5::text IS NULL OR context_json->>'agent_id' = $5)
                  ORDER BY prepared_at
                  LIMIT $2 FOR UPDATE SKIP LOCKED
             )
@@ -155,6 +157,7 @@ class PostgresToolInvocationStore:
             limit,
             owner,
             now + ttl,
+            agent_id,
         )
         return [
             (

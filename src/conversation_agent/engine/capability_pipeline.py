@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.llm import LLMToolDefinition
+from conversation_agent.core.models.runtime import ExecutionIntent
 from conversation_agent.core.models.tooling import (
     CapabilityRequest,
     CapabilityResult,
@@ -22,6 +23,7 @@ from conversation_agent.core.models.tooling import (
 )
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.tool_runner import ToolRunner
+from conversation_agent.tools.intent import binding_fingerprint
 from conversation_agent.tools.requests import RequestRejected, build_capability_request
 
 _PROTECTED_NOTE = (
@@ -106,13 +108,27 @@ class CapabilityPipeline:
             return CapabilityResult(status="validation_error", error=exc.error)
         return await self._runner.run(resolved, request, context)
 
-    async def rerun_authorized(
-        self, request: CapabilityRequest, context: ToolContext
-    ) -> CapabilityResult:
-        """Re-sends an invocation that was ALREADY authorised and prepared, with the same
-        identity/idempotency key. Only reconciliation may call this, and only for tools whose
-        recovery contract allows it (retry_same_key / status_lookup on idempotent tools)."""
-        return await self._runner.run(self.resolve(request.capability), request, context)
+    @property
+    def agent_id(self) -> str:
+        return self._agent.agent_id
+
+    def freeze(self, request: CapabilityRequest) -> ExecutionIntent | CapabilityResult:
+        """Resolve the concrete external operation (no I/O) so it can be persisted at PREPARE."""
+        return self._runner.freeze(self.resolve(request.capability), request)
+
+    def intent_matches(self, intent: ExecutionIntent) -> bool:
+        """True iff the operation resolved from the *currently deployed* definitions is the one
+        that was frozen. A false answer means "do not execute": the world changed (INV-023)."""
+        try:
+            resolved = self.resolve(intent.capability)
+        except KeyError:
+            return False
+        return binding_fingerprint(resolved) == intent.binding_fingerprint
+
+    async def run_frozen(self, intent: ExecutionIntent, context: ToolContext) -> CapabilityResult:
+        """Execute a frozen intent EXACTLY (same tool args, same identity/idempotency key).
+        Callers must have checked `intent_matches`."""
+        return await self._runner.run_frozen(self.resolve(intent.capability), intent, context)
 
     def resolve(self, capability_name: str) -> ResolvedToolBinding:
         resolved = self._agent.resolve(capability_name)

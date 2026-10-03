@@ -132,6 +132,9 @@ class HTTPToolProvider:
             return failure.model_copy(
                 update={"provider_metadata": {**failure.provider_metadata, **metadata}}
             )
+        if response.status_code == 204 or not response.content:
+            # A known success with no body (e.g. DELETE): not an "unusable response".
+            return ToolResult(status="success", data={}, provider_metadata=metadata)
         try:
             data = response.json()
         except ValueError:

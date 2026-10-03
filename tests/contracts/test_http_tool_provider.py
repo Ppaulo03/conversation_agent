@@ -164,3 +164,23 @@ async def test_does_not_follow_redirects() -> None:
     result: ToolResult = await provider.execute(availability_binding(), tool_args(), CONTEXT)
     assert result.status == "technical_error"
     assert result.error is not None and result.error.code == "EXTERNAL_UNEXPECTED_STATUS"
+
+
+async def test_204_no_content_is_a_known_success_not_an_unusable_response(api: ApiHandle) -> None:
+    """DELETE answers 204: for a write, a body-less 2xx must not degrade into `unknown`."""
+    created = httpx.post(
+        f"{api.base_url}/bookings",
+        json={"service_code": "HC-01", "starts_at": "2026-10-06T13:00:00+00:00", "hours": 0.5},
+        headers={"Idempotency-Key": "k-delete-test"},
+    )
+    assert created.status_code == 201
+    base = create_binding()
+    spec = HTTPRequestSpec(method="DELETE", path="/bookings/{id}")
+    tool = base.tool.model_copy(update={"http": spec, "output_model": None})
+    binding = base.model_copy(update={"tool": tool})
+
+    result = await provider_for(api.base_url).execute(
+        binding, {"id": created.json()["id"]}, CONTEXT
+    )
+    assert result.status == "success" and result.data == {}
+    assert api.state.bookings[created.json()["id"]]["state"] == "cancelled"

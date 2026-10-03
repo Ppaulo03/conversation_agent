@@ -118,6 +118,7 @@ class World:
         faults: FaultInjector | None = None,
         providers: Mapping[str, ToolProvider] | None = None,
         policy: PolicyGate | None = None,
+        pipeline: CapabilityPipeline | None = None,
         heartbeat_interval_seconds: float = 10.0,
         **kwargs: Any,
     ) -> TurnCoordinator:
@@ -132,7 +133,7 @@ class World:
                 api_base_url="http://unused",
                 journal=journal,
                 clock=self.clock,
-                pipeline=self.pipeline(providers, policy),
+                pipeline=pipeline or self.pipeline(providers, policy),
                 executor_factory=lambda pipeline: LedgerToolExecutor(
                     pipeline=pipeline,
                     uows=self.uows,

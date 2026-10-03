@@ -27,15 +27,19 @@ class HTTPRequestSpec(BaseModel):
 class RecoverySpec(BaseModel):
     """What the reconciliation worker may do about an `unknown` outcome (DESIGN §13).
 
+    safe_retry      re-run a READ (no side effect, repeating is harmless)
     retry_same_key  re-send with the same idempotency key (needs `idempotency_supported`)
-    status_lookup   ask the external system what happened, via a read capability
+    status_lookup   ask the external system what happened, via a read capability;
+                    only a `business_error` whose code is in `absent_codes` proves "it did
+                    not happen" and allows a same-key re-send (any other error is not proof)
     human_handoff   escalate: no safe automatic recovery
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    strategy: Literal["retry_same_key", "status_lookup", "human_handoff"]
+    strategy: Literal["safe_retry", "retry_same_key", "status_lookup", "human_handoff"]
     lookup_capability: str | None = None  # required for status_lookup
+    absent_codes: tuple[str, ...] = ()  # lookup error codes that prove the operation is absent
 
 
 class ToolDefinition(BaseModel):
@@ -67,11 +71,16 @@ class ToolDefinition(BaseModel):
             return self
         if r.strategy == "retry_same_key" and not self.idempotency_supported:
             raise ValueError(f"{self.name!r}: retry_same_key requires idempotency_supported")
+        if r.strategy == "safe_retry" and self.risk != "read":
+            raise ValueError(f"{self.name!r}: safe_retry is only valid for read tools")
         if r.strategy == "status_lookup" and not r.lookup_capability:
             raise ValueError(f"{self.name!r}: status_lookup requires lookup_capability")
         return self
 
     @property
     def effective_recovery(self) -> RecoverySpec:
-        """Safe default: without an explicit contract, an unknown outcome goes to a human."""
-        return self.recovery or RecoverySpec(strategy="human_handoff")
+        """Default when no contract is declared: reads are safely re-run, anything that can
+        change the world goes to a human."""
+        if self.recovery is not None:
+            return self.recovery
+        return RecoverySpec(strategy="safe_retry" if self.risk == "read" else "human_handoff")

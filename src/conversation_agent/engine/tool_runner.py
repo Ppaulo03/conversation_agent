@@ -2,6 +2,11 @@
 
 Capability request -> input_map -> Tool -> Provider -> output_map -> Capability result.
 The Flow/LLM only ever sees Capability schemas.
+
+Two phases, so that an operation can be frozen between them (INV-023):
+
+  freeze()      capability args -> concrete tool args (input mapping + tool schema), no I/O
+  run_frozen()  concrete tool args -> provider -> output mapping
 """
 
 from __future__ import annotations
@@ -13,6 +18,7 @@ from pydantic import ValidationError
 
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.errors import MappingError
+from conversation_agent.core.models.runtime import ExecutionIntent
 from conversation_agent.core.models.tooling import (
     CapabilityRequest,
     CapabilityResult,
@@ -21,6 +27,7 @@ from conversation_agent.core.models.tooling import (
     ToolResult,
 )
 from conversation_agent.ports.tool_provider import ToolProvider
+from conversation_agent.tools.intent import build_intent
 from conversation_agent.tools.mapping import TRANSFORMS, apply_mapping
 
 
@@ -53,50 +60,64 @@ class ToolRunner:
         self._providers = providers
         self._transforms = transforms
 
-    async def run(
-        self, resolved: ResolvedToolBinding, request: CapabilityRequest, context: ToolContext
-    ) -> CapabilityResult:
-        provider = self._providers.get(resolved.tool.provider)
-        if provider is None:
-            return _failure_before_io("PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
-
+    def freeze(
+        self, resolved: ResolvedToolBinding, request: CapabilityRequest
+    ) -> ExecutionIntent | CapabilityResult:
+        """Resolve the concrete operation without touching the outside world. A mapping defect
+        is returned as a (pre-I/O) failure: such a request must never be prepared."""
         try:
             mapped = apply_mapping(resolved.binding.input_map, request.args, self._transforms)
             tool_args = resolved.tool.input_model.model_validate(mapped).model_dump(mode="json")
         except (MappingError, ValidationError):
             # The capability args were already valid, so this is a binding defect, and
             # nothing was sent to the external system.
-            return CapabilityResult(
-                status="technical_error",
-                error=ToolError(
-                    code="BINDING_INPUT_MAPPING_FAILED",
-                    message_safe="The request could not be adapted to the external tool.",
-                ),
+            return _failure_before_io(
+                "BINDING_INPUT_MAPPING_FAILED",
+                "The request could not be adapted to the external tool.",
             )
+        return build_intent(resolved, tool_args)
 
+    async def run(
+        self, resolved: ResolvedToolBinding, request: CapabilityRequest, context: ToolContext
+    ) -> CapabilityResult:
+        intent = self.freeze(resolved, request)
+        if isinstance(intent, CapabilityResult):
+            return intent
+        return await self.run_frozen(resolved, intent, context)
+
+    async def run_frozen(
+        self, resolved: ResolvedToolBinding, intent: ExecutionIntent, context: ToolContext
+    ) -> CapabilityResult:
+        provider = self._providers.get(resolved.tool.provider)
+        if provider is None:
+            return _failure_before_io("PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
         try:
-            result = await provider.execute(resolved, tool_args, context)
+            result = await provider.execute(resolved, dict(intent.tool_args), context)
         except Exception:  # provider contract violation: never leak, never assume safe
             return _failure_after_possible_io(
                 resolved, "PROVIDER_CONTRACT_VIOLATION", "Tool provider failed."
             )
-
         return self._to_capability_result(resolved, result)
 
     def _to_capability_result(
         self, resolved: ResolvedToolBinding, result: ToolResult
     ) -> CapabilityResult:
         if result.status != "success":
-            return CapabilityResult(status=result.status, error=result.error)
+            return CapabilityResult(
+                status=result.status, error=result.error, provider_metadata=result.provider_metadata
+            )
         try:
             if resolved.tool.output_model is not None:
                 resolved.tool.output_model.model_validate(result.data)
             mapped = apply_mapping(resolved.binding.output_map, result.data, self._transforms)
             data = resolved.capability.output_model.model_validate(mapped).model_dump(mode="json")
         except (MappingError, ValidationError):
-            return _failure_after_possible_io(
+            failure = _failure_after_possible_io(
                 resolved,
                 "BINDING_OUTPUT_MAPPING_FAILED",
                 "The external system answered in an unexpected format.",
             )
-        return CapabilityResult(status="success", data=data)
+            return failure.model_copy(update={"provider_metadata": result.provider_metadata})
+        return CapabilityResult(
+            status="success", data=data, provider_metadata=result.provider_metadata
+        )

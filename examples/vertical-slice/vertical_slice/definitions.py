@@ -160,7 +160,12 @@ ERP_CREATE_RESERVATION = ToolDefinition(
     ),
     idempotency_supported=True,
     # An unknown outcome is resolved by asking the ERP what it did (never by blind retry).
-    recovery=RecoverySpec(strategy="status_lookup", lookup_capability="scheduling.lookup_booking"),
+    recovery=RecoverySpec(
+        strategy="status_lookup",
+        lookup_capability="scheduling.lookup_booking",
+        # ONLY this answer proves the booking was never created (any other error proves nothing).
+        absent_codes=("BOOKING_NOT_FOUND",),
+    ),
 )
 
 

@@ -4,6 +4,7 @@ from datetime import datetime
 
 import asyncpg
 
+from conversation_agent.core.errors import ConversationIdentityConflictError
 from conversation_agent.core.models.conversation import ConversationIdentity
 
 
@@ -22,3 +23,16 @@ async def ensure_conversation(
         identity.session_id,
         now,
     )
+    row = await conn.fetchrow(
+        "SELECT channel_id, contact_id FROM conversation_states "
+        "WHERE tenant_id = $1 AND conversation_id = $2",
+        identity.tenant_id,
+        identity.conversation_id,
+    )
+    if row is not None and (
+        row["channel_id"] != identity.channel_id or row["contact_id"] != identity.contact_id
+    ):
+        raise ConversationIdentityConflictError(
+            f"conversation_id {identity.conversation_id!r} already belongs to another "
+            "channel/contact within this tenant"
+        )

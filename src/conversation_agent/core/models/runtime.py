@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -169,6 +169,34 @@ class ApplicationStatus(StrEnum):
     APPLIED = "applied"  # applied (C2)
 
 
+class RecoverySnapshot(_Frozen):
+    """The recovery contract as it was when the operation was prepared (frozen)."""
+
+    strategy: Literal["safe_retry", "retry_same_key", "status_lookup", "human_handoff"]
+    lookup_capability: str | None = None
+    absent_codes: tuple[str, ...] = ()
+    idempotency_supported: bool = False
+
+
+class ExecutionIntent(_Frozen):
+    """The concrete external operation, frozen at PREPARE (INV-023).
+
+    Retry and reconciliation execute *this*: the already-mapped tool arguments against the
+    same provider/connection/endpoint. They never re-map arguments or re-resolve the binding
+    with whatever definitions happen to be deployed later; if the resolved operation no longer
+    matches `binding_fingerprint` they refuse and escalate.
+    """
+
+    capability: str
+    tool_name: str
+    provider: str
+    connection: str | None = None
+    tool_args: dict[str, Any]
+    tool_args_hash: str
+    binding_fingerprint: str
+    recovery: RecoverySnapshot
+
+
 class ToolInvocation(_Frozen):
     """One external-operation attempt. Identity is runtime-made, never LLM-made (§9.1)."""
 
@@ -186,6 +214,7 @@ class ToolInvocation(_Frozen):
     idempotency_key: str
     request: CapabilityRequest
     context: ToolContext
+    intent: ExecutionIntent
     status: InvocationStatus = InvocationStatus.PREPARED
     execution_owner: str | None = None
     execution_lease_expires_at: datetime | None = None

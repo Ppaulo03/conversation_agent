@@ -8,6 +8,7 @@ import asyncpg
 
 from conversation_agent.core.models.runtime import (
     ApplicationStatus,
+    ExecutionIntent,
     InvocationStatus,
     OutboundMessage,
     OutboxStatus,
@@ -20,7 +21,7 @@ INVOCATION_COLUMNS = (
     "attempt_semantic_id, action_id, tool_name, capability, args_hash, idempotency_key, "
     "request_json, context_json, status, execution_owner, execution_lease_expires_at, "
     "execution_epoch, result_application_status, result_json, error_json, provider_metadata, "
-    "reconcile_attempts"
+    "reconcile_attempts, intent_json"
 )
 
 OUTBOX_COLUMNS = (
@@ -45,6 +46,7 @@ def invocation_from_row(r: asyncpg.Record | dict[str, Any]) -> ToolInvocation:
         idempotency_key=r["idempotency_key"],
         request=CapabilityRequest.model_validate(r["request_json"]),
         context=ToolContext.model_validate(r["context_json"]),
+        intent=ExecutionIntent.model_validate(r["intent_json"]),
         status=InvocationStatus(r["status"]),
         execution_owner=r["execution_owner"],
         execution_lease_expires_at=r["execution_lease_expires_at"],

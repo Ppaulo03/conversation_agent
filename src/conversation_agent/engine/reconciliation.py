@@ -67,7 +67,7 @@ class ReconciliationWorker:
     async def run_once(self, limit: int = 10) -> list[ToolInvocation]:
         resolved: list[ToolInvocation] = []
         for invocation, claim in await self._ledger.claim_reconciliation(
-            self._owner, limit, self._ttl
+            self._owner, limit, self._ttl, agent_id=self._pipeline.agent_id
         ):
             await self._faults.hit("C11_during_reconciliation")  # claimed, nothing persisted yet
             result, handoff = await self._resolve(invocation)
@@ -94,12 +94,14 @@ class ReconciliationWorker:
         )
 
     async def _resolve(self, invocation: ToolInvocation) -> tuple[ToolResult | None, bool]:
-        """Returns (result, handoff). (None, False) means "still unknown, try again later"."""
-        tool = self._pipeline.resolve(invocation.capability).tool
-        recovery = tool.effective_recovery
+        """Returns (result, handoff). (None, False) means "still unknown, try again later".
+
+        Decisions come from the recovery contract FROZEN at PREPARE (INV-023), and any re-send
+        executes the frozen operation, never one re-derived from today's definitions."""
+        intent = invocation.intent
+        recovery = intent.recovery
         if invocation.reconcile_attempts > self._max_attempts:
             return self._handoff("RECONCILIATION_EXHAUSTED"), True
-
         if recovery.strategy == "human_handoff":
             return self._handoff("NO_AUTOMATIC_RECOVERY"), True
 
@@ -112,18 +114,28 @@ class ReconciliationWorker:
             )
             if found.status == "success":
                 return to_tool_result(found), False  # it DID happen: adopt the recorded result
-            if found.status != "business_error":
-                return None, False  # lookup itself failed: outcome still unknown
-            # "no such operation": it did not happen. Re-send only if that is safe.
-            if not tool.idempotency_supported:
+            proves_absent = (
+                found.status == "business_error"
+                and found.error is not None
+                and found.error.code in recovery.absent_codes
+            )
+            if not proves_absent:
+                # Lookup failed, or answered with an error that is NOT proof of absence
+                # (e.g. "account suspended"): the outcome is still unknown.
+                return None, False
+            if not recovery.idempotency_supported:
                 return self._handoff("NOT_FOUND_BUT_NOT_IDEMPOTENT"), True
+        elif recovery.strategy == "retry_same_key" and not recovery.idempotency_supported:
+            return self._handoff("NOT_IDEMPOTENT"), True
 
-        return await self._resend_same_key(invocation), False
+        return await self._resend_frozen(invocation)
 
-    async def _resend_same_key(self, invocation: ToolInvocation) -> ToolResult:
-        """Same request, same context, same idempotency key (INV-021): never a new identity."""
-        result = await self._pipeline.rerun_authorized(invocation.request, invocation.context)
-        return to_tool_result(result)
+    async def _resend_frozen(self, invocation: ToolInvocation) -> tuple[ToolResult | None, bool]:
+        """Same frozen tool args, same context, same idempotency key (INV-021, INV-023)."""
+        if not self._pipeline.intent_matches(invocation.intent):
+            return self._handoff("INTENT_CHANGED"), True  # definitions moved on: never guess
+        result = await self._pipeline.run_frozen(invocation.intent, invocation.context)
+        return to_tool_result(result), False
 
     @staticmethod
     def _handoff(code: str) -> ToolResult:

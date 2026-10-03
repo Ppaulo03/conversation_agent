@@ -34,6 +34,13 @@ class DefinitionError(ConversationAgentError):
     """Inconsistent agent/capability/binding definitions."""
 
 
+class ConversationIdentityConflictError(ConversationAgentError):
+    """An event reused a conversation_id with a different channel or contact.
+
+    `conversation_id` is unique within a tenant and bound to one channel and one contact;
+    reusing it elsewhere would mix two people's state, so the event is refused."""
+
+
 class FencingError(ConversationAgentError):
     """The conversation lease/epoch is no longer ours: no conversational mutation may commit
     (INV-009)."""

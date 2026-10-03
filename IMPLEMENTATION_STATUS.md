@@ -143,7 +143,7 @@ garante que não há vocabulário de scheduling no framework).
 
 - Proposta antiga não é invalidada por cancelamento/rejeição do usuário (só substituída por nova proposta da mesma
   capability). Invalidação real vem com `PendingAction` (Fase 3) / Flow (Fase 4).
-- `scheduling.create` tem tool/binding definidos, mas `POST /bookings` não existe na API de referência (Fase 2).
+- (resolvido na Fase 2) `POST /bookings` e o lookup por idempotency key agora existem na API de referência.
 - `TOOL_RESULT` no journal é provisório: na Fase 2 o fato externo passa a viver no ToolInvocation ledger
   (`execution_epoch`); o journal referenciará a invocation.
 - `INBOUND_AGGREGATED` por turno único: sem Inbox/burst/ordering (Fase 2).
@@ -165,7 +165,7 @@ garante que não há vocabulário de scheduling no framework).
 
 ## Phase 2 — Reliability core
 
-Status: **PASS** (DoD satisfeito e verificado contra PostgreSQL 16 real e a API de referência real; 337 testes).
+Status: **PASS** após a Fase 2.1 de hardening (revisão externa; ver seção abaixo). DoD verificado contra PostgreSQL 16 real e a API de referência real; 358 testes.
 
 DoD (`ROADMAP.md` Fase 2):
 
@@ -214,3 +214,26 @@ com `POST /bookings` idempotente, lookup por chave e `DELETE`.
 - Workers são `run_once()` chamáveis; o loop residente/processo (`app/worker.py`) e OpenTelemetry básico ficam para o hardening.
 - Cancelamento cooperativo (`C12`) é Fase 4. HANDOFF_PENDING terá política própria.
 - `tests/postgres` exige o container (`docker compose up -d`); sem ele os testes são pulados com mensagem explícita.
+
+## Phase 2.1 — hardening pós-revisão da Fase 2
+
+Status: **PASS** (todos os achados verificados contra o código; os 3 P0 corrigidos antes da Fase 3). 358 testes.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| P0 intent não congelada | `ExecutionIntent` (args mapeados, provider, connection, fingerprint, recovery) gravada no PREPARE; B/retry/reconciliation executam a intent; fingerprint divergente → `INTENT_CHANGED` (INV-023) | `test_prepared_invocation_executes_the_frozen_intent_*`, `test_a_changed_input_mapping_*`, `test_recovery_follows_the_frozen_contract_*`, `test_run_frozen_sends_exactly_*`, `test_a_deploy_between_prepare_and_execute_*` |
+| P0 espera de reconciliation consumia `max_turn_attempts` | `ToolResultPendingError` → status `waiting`, sem contar; só falha real (LLM) incrementa `turns.attempts` (INV-025) | `test_pending_tool_result_never_exhausts_turn_attempts`, `test_llm_failures_still_exhaust_attempts_*` |
+| P0/P1 lease expirado ainda abria UoW | UoW exige `lease_expires_at > agora`; heartbeat não ressuscita lease expirado (INV-024) | `test_an_expired_lease_cannot_open_a_unit_of_work_*`, `test_a_heartbeat_cannot_resurrect_*` (o teste que formalizava o comportamento antigo foi reescrito) |
+| Relógio de coordenação | `CoordinationTime`: `clock_timestamp()` do Postgres por padrão; `Clock` fixo só nos testes | `test_coordination_time_defaults_to_the_database_clock_*` |
+| P1 `provider_metadata` perdido | `CapabilityResult.provider_metadata` (interno; nunca renderizado ao LLM) chega ao ledger | `test_provider_metadata_is_recorded_in_the_ledger_but_never_shown_to_the_llm` |
+| P1 qualquer `business_error` = "não existe" | `RecoverySpec.absent_codes`; só esses códigos autorizam reenvio | `test_only_declared_absent_codes_authorise_a_resend` |
+| P1 reconciler single-agent | claim escopado por `agent_id`; versão fica protegida pelo fingerprint | `test_reconciliation_only_claims_invocations_of_the_agent_it_serves` |
+| P2 read abandonado → handoff | default `safe_retry` para reads sem contrato | `test_an_abandoned_read_is_safely_re_run_*` |
+| P2 `204 No Content` | sucesso conhecido (`data={}`), não `unknown` | `test_204_no_content_is_a_known_success_*` |
+| P2 identidade `conversation_id` | contrato explícito: único no tenant e preso a um channel+contact; reuso é recusado | `test_a_conversation_id_cannot_be_reused_*` |
+| Fase 3 (side effect + LLM morto) | turno que falha depois de um side effect emite aviso determinístico no outbox | `test_a_turn_that_fails_after_a_side_effect_still_notifies_the_contact` |
+| Docs | INV-023/024/025, protocolo §4A/§Fase 2.1, status | — |
+
+Débitos remanescentes: `AgentRegistry`/versão histórica por invocation (hoje o fingerprint falha fechado em vez de resolver a
+versão antiga); uma `session_id` por conversa (o modelo conceitual admite várias); `blocked_on_invocation_id`/wake explícito
+em vez de polling do turno em espera; autoridade de tempo do `LeaseHandle` local ainda usa o `Clock` da aplicação.

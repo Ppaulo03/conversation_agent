@@ -29,6 +29,9 @@ INV-019  ownership HUMAN nunca produz resposta automática do bot.
 INV-020  evento inbound duplicado nunca cria turno duplicado.
 INV-021  retry automático de write/irreversible só é permitido com idempotência explícita e reutilização da mesma idempotency key.
 INV-022  prompt de confirmação só é elegível após ACCEPTED pelo canal; QUEUED/SENDING/UNKNOWN não autorizam ação protegida.
+INV-023  uma ToolInvocation PREPARED é imutável quanto à operação externa que representa: retry e reconciliation executam a intent congelada no PREPARE e nunca re-resolvem binding/tool com outra versão; se a operação resolvida mudou, falham fechado e escalam.
+INV-024  um lease de conversa expirado não autoriza escrita, mesmo antes de qualquer takeover; o heartbeat nunca ressuscita um lease expirado.
+INV-025  aguardar o resultado de uma tool (EXECUTING/UNKNOWN/RECONCILING) não é falha do turno e nunca consome tentativas nem dead-letteriza o inbound.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -61,6 +64,9 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-020 | `test_duplicate_event_never_creates_duplicate_turn` |
 | INV-021 | `test_write_retry_requires_supported_idempotency_and_same_key` |
 | INV-022 | `C13_confirm_while_prompt_ambiguous` |
+| INV-023 | `test_prepared_invocation_executes_the_frozen_intent_never_a_re_resolved_one`, `test_a_deploy_between_prepare_and_execute_fails_closed_without_sending` |
+| INV-024 | `test_an_expired_lease_cannot_open_a_unit_of_work_even_before_any_takeover`, `test_a_heartbeat_cannot_resurrect_an_expired_lease` |
+| INV-025 | `test_pending_tool_result_never_exhausts_turn_attempts` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

@@ -54,6 +54,8 @@ Nenhuma transação de banco fica aberta durante LLM ou HTTP externo.
 
 ```text
 A. PREPARE (conversation_epoch)
+   freeze the concrete operation (INV-023): mapped tool args, provider, connection,
+     binding fingerprint, recovery contract snapshot — resolved once, with no I/O
    persist logical_step_id / attempt_semantic_id
    create ToolInvocation(PREPARED)
    append journal
@@ -86,13 +88,31 @@ Se C1 ocorreu e o worker perdeu o conversation lease, o novo owner aplica C2.
 reconciliation o resolver. Enquanto isso o turno permanece aberto (`ToolResultPendingError`) e é
 retomado pelo journal; nada é reexecutado.
 
+### Intent congelada, tempo de coordenação e espera (Fase 2.1)
+
+- A `ToolInvocation` guarda `intent`: `tool_args` já mapeados, `provider`, `connection`,
+  `binding_fingerprint` (endpoint/risco/idempotência/input_map) e o `recovery` vigente no PREPARE.
+  B, retry e reconciliation executam **essa** intent (mesmos args, mesma idempotency key). Se o
+  fingerprint resolvido hoje difere, nada é enviado: `INTENT_CHANGED` (FAILED antes do envio; no
+  recovery, `HUMAN_HANDOFF`). Mudanças só de output_map/error_map/recovery não movem a operação.
+- Lease/claim/backoff são medidos pela *CoordinationTime* (por padrão `clock_timestamp()` do
+  PostgreSQL), não pelo relógio de cada worker. O `Clock` da aplicação continua governando o tempo
+  conversacional. A UoW exige `lease_expires_at > agora` além de dono+epoch (INV-024).
+- `ToolResultPendingError` não é falha: o coordinator libera o lease e devolve `waiting`; apenas
+  falhas reais (ex.: LLM) incrementam `turns.attempts`. Um turno que morre depois de um side effect
+  emite um aviso determinístico no outbox.
+- `provider_metadata` acompanha o resultado até o ledger (nunca ao LLM).
+
 ### Reconciliation (implementação da Fase 2)
 
 - `UNKNOWN`, `EXECUTING` com lease expirado e `RECONCILING` com lease expirado são claimados para
   `RECONCILING` com **novo** `execution_epoch`; o executor/reconciliador anterior fica fenced (C11).
 - A estratégia vem do contrato da tool: `status_lookup` (capability de leitura), `retry_same_key`
-  (exige `idempotency_supported`) ou `human_handoff` (default sem contrato). "Não encontrado" no
-  lookup só leva a reenvio com a **mesma** idempotency key em tool idempotente; caso contrário, handoff.
+  (exige `idempotency_supported`), `safe_retry` (somente reads; é o default de um read sem contrato)
+  ou `human_handoff` (default de write sem contrato). Só um `business_error` cujo código esteja em
+  `absent_codes` prova que a operação não aconteceu e leva a reenvio com a **mesma** idempotency key
+  em tool idempotente; qualquer outro erro do lookup deixa a invocation `UNKNOWN`; sem idempotência, handoff.
+- O claim é escopado por `agent_id` (o worker serve as definições de um agente).
 - Lookup indisponível mantém `UNKNOWN` e agenda um timer durável (`reconcile:<invocation_id>`);
   enquanto o timer existe, a invocation não é reclaimada. Após `max_attempts`, handoff.
 

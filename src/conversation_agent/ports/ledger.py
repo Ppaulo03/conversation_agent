@@ -34,8 +34,9 @@ class ToolInvocationStore(Protocol):
         ...
 
     async def claim_reconciliation(
-        self, owner: str, limit: int, ttl: timedelta
+        self, owner: str, limit: int, ttl: timedelta, *, agent_id: str | None = None
     ) -> list[tuple[ToolInvocation, ExecutionClaim]]:
+        # `agent_id` scopes the claim to the agent whose definitions this worker serves.
         """UNKNOWN / expired-EXECUTING / expired-RECONCILING -> RECONCILING (new epoch)."""
         ...
 

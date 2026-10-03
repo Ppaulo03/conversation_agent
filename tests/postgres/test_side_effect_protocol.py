@@ -18,7 +18,12 @@ from conversation_agent.adapters.faults import ChaosFaults, SimulatedCrash
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.errors import ExecutionFencingError, FencingError
-from conversation_agent.core.models.runtime import InvocationStatus, ToolInvocation
+from conversation_agent.core.models.runtime import (
+    ExecutionIntent,
+    InvocationStatus,
+    RecoverySnapshot,
+    ToolInvocation,
+)
 from conversation_agent.core.models.tooling import (
     CapabilityRequest,
     ToolContext,
@@ -314,6 +319,16 @@ def make_invocation(invocation_id: str = "inv-1") -> ToolInvocation:
         idempotency_key=invocation_id,
         request=CapabilityRequest(capability="scheduling.create", args={}, args_hash="h"),
         context=context,
+        intent=ExecutionIntent(
+            capability="scheduling.create",
+            tool_name="erp_create_reservation",
+            provider="http",
+            connection="scheduling_api",
+            tool_args={"service_code": "HC-01"},
+            tool_args_hash="th",
+            binding_fingerprint="fp",
+            recovery=RecoverySnapshot(strategy="human_handoff"),
+        ),
     )
 
 

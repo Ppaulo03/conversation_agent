@@ -291,7 +291,7 @@ async def test_no_recovery_contract_means_human_handoff_and_an_honest_reply(
 
     await start(world)
     api.state.fault = {"status_after_effect": 503}
-    await worker(world, api, "w1", book_first()).process_conversation(KEY)
+    await worker(world, api, "w1", book_first(), pipeline=pipeline).process_conversation(KEY)
     api.state.fault = None
     (final,) = await world.reconciler("r1", providers=providers, pipeline=pipeline).run_once()
     assert final.status is InvocationStatus.HUMAN_HANDOFF
@@ -325,7 +325,12 @@ async def test_write_retry_requires_supported_idempotency_and_same_key(
     await start(world)
     with pytest.raises(SimulatedCrash):  # crash before any request: the booking never happened
         await worker(
-            world, api, "w1", book_first(), faults=ChaosFaults("C04_before_external_request")
+            world,
+            api,
+            "w1",
+            book_first(),
+            pipeline=pipeline,
+            faults=ChaosFaults("C04_before_external_request"),
         ).process_conversation(KEY)
     advance(world, 61)
     (final,) = await world.reconciler(

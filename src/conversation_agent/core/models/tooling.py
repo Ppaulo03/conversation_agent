@@ -87,6 +87,9 @@ class CapabilityResult(_Frozen):
     status: ToolStatus
     data: dict[str, Any] | None = None
     error: ToolError | None = None
+    # Operational facts from the provider (http status, external request ids, ...). Recorded in
+    # the ledger for recovery; deliberately never rendered to the LLM.
+    provider_metadata: dict[str, Any] = Field(default_factory=dict)
 
     @model_validator(mode="after")
     def _consistent(self) -> CapabilityResult:

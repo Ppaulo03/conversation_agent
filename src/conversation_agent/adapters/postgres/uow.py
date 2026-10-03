@@ -252,8 +252,9 @@ class _InvocationRepo(_Repo):
             """
             INSERT INTO tool_invocations (tenant_id, invocation_id, conversation_id, session_id,
                 turn_id, logical_step_id, attempt_semantic_id, action_id, tool_name, capability,
-                args_hash, idempotency_key, request_json, context_json, status, prepared_at)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,'PREPARED',$15)
+                args_hash, idempotency_key, request_json, context_json, intent_json, status,
+                prepared_at)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,'PREPARED',$16)
             ON CONFLICT (tenant_id, invocation_id) DO NOTHING
             """,
             invocation.tenant_id,
@@ -270,6 +271,7 @@ class _InvocationRepo(_Repo):
             invocation.idempotency_key,
             invocation.request.model_dump(mode="json"),
             invocation.context.model_dump(mode="json"),
+            invocation.intent.model_dump(mode="json"),
             self._clock.now(),
         )
         stored = await self.get(invocation.invocation_id)
