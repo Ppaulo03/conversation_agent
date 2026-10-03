@@ -8,8 +8,9 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - Setup: `uv sync` · Testes: `uv run pytest` · Lint: `uv run ruff check . && uv run ruff format --check .`
 - Tipos: `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
 - API de referência: `uv run uvicorn scheduling_api.main:app --port 8001` · CLI: `uv run python -m vertical_slice`
-- Testes live (explícitos): `uv run pytest -m integration` (precisa `GROQ_API_KEY` ou `ANTHROPIC_API_KEY`).
-- Provider real preferido: Groq (`OpenAICompatLLM.groq`, API compatível com OpenAI); chaves só via ambiente/`.env` (git-ignored).
+- Testes live (explícitos): `uv run pytest -m integration` (`uv run --env-file .env pytest -m integration`; precisa de provider configurado).
+- LLM provider-agnóstico via env: `LLM_PROVIDER` (groq|openai|openai_compat|anthropic), `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`;
+  `GROQ_API_KEY`/`ANTHROPIC_API_KEY` valem como fallback. Resolução em `app/llm_factory.py`. `.env` é git-ignored e nunca deve ser lido/impresso.
 - Postgres local: `docker compose up -d` (`docker-compose.yml`, credenciais dev em `.env.example`).
 - Docs normativos em `docs/` (sem sufixo `_v4`). Progresso e DoD em `IMPLEMENTATION_STATUS.md`.
 - Repo git inicializado (`main` = baseline da Fase 1). Trabalho em `feature/*`; nada direto em `main`.

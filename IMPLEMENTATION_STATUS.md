@@ -107,7 +107,8 @@ garante que não há vocabulário de scheduling no framework).
    Trace-Id/Invocation-Id` vêm do `ToolContext`. Endurecimento completo (SSRF/DNS/secrets) é Fase 3.
 10. **Provider real adicional: `OpenAICompatLLM` (Groq)** em `adapters/llm/openai_compat.py`, sobre `httpx`
     (sem SDK). Passa o mesmo contrato LLM (`openai-compat-stub`); structured output via function call forçada.
-    CLI: `--provider groq|anthropic` (default groq, chave em `GROQ_API_KEY`).
+    Seleção por env (`LLM_PROVIDER`/`LLM_API_KEY`/`LLM_MODEL`/`LLM_BASE_URL`, fallback para chaves legadas) em
+    `app/llm_factory.py`; suporta groq, openai, openai_compat (qualquer servidor compatível) e anthropic.
 11. Python alvo `>=3.12` (testado em 3.13.1).
 
 ### Débitos conhecidos

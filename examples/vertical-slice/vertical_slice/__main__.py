@@ -1,4 +1,9 @@
-"""`python -m vertical_slice`: scheduling agent on the CLI with a real LLM provider."""
+"""`python -m vertical_slice`: scheduling agent on the CLI with a real LLM provider.
+
+Configuration comes from the environment (see conversation_agent.app.llm_factory):
+LLM_PROVIDER / LLM_API_KEY / LLM_MODEL / LLM_BASE_URL, or the legacy GROQ_API_KEY /
+ANTHROPIC_API_KEY. Run with `uv run --env-file .env python -m vertical_slice`.
+"""
 
 from __future__ import annotations
 
@@ -7,37 +12,26 @@ import asyncio
 import os
 import sys
 
-from conversation_agent.adapters.llm.anthropic import AnthropicLLM
-from conversation_agent.adapters.llm.openai_compat import GROQ_DEFAULT_MODEL, OpenAICompatLLM
 from conversation_agent.app.cli import run_cli
+from conversation_agent.app.llm_factory import LLMConfig, LLMConfigError, build_llm, close_llm
 from conversation_agent.core.models.conversation import ConversationIdentity
-from conversation_agent.ports.llm import LLMProvider
 from vertical_slice.wiring import build_engine
-
-ANTHROPIC_DEFAULT_MODEL = "claude-sonnet-5-5"
-
-
-def build_llm(provider: str, model: str | None) -> LLMProvider | None:
-    """Keys come from the environment only (never from flags or files)."""
-    if provider == "groq":
-        key = os.environ.get("GROQ_API_KEY")
-        return OpenAICompatLLM.groq(key, model or GROQ_DEFAULT_MODEL) if key else None
-    key = os.environ.get("ANTHROPIC_API_KEY")
-    return AnthropicLLM.from_api_key(key, model or ANTHROPIC_DEFAULT_MODEL) if key else None
 
 
 async def main() -> int:
     parser = argparse.ArgumentParser(prog="vertical_slice")
     parser.add_argument("--api-url", default="http://127.0.0.1:8001")
-    parser.add_argument("--provider", choices=["groq", "anthropic"], default="groq")
+    parser.add_argument("--provider", choices=["groq", "openai", "openai_compat", "anthropic"])
     parser.add_argument("--model", default=None)
     args = parser.parse_args()
 
-    llm = build_llm(args.provider, args.model)
-    if llm is None:
-        env = "GROQ_API_KEY" if args.provider == "groq" else "ANTHROPIC_API_KEY"
-        print(f"Set {env} to use the {args.provider} provider.", file=sys.stderr)
+    try:
+        config = LLMConfig.from_env(os.environ, provider=args.provider, model=args.model)
+    except LLMConfigError as exc:
+        print(f"LLM configuration error: {exc}", file=sys.stderr)
         return 2
+    llm = build_llm(config)
+    print(f"[llm] provider={config.provider} model={config.model}")
 
     engine, _, http = build_engine(llm, api_base_url=args.api_url)
     identity = ConversationIdentity(
@@ -52,8 +46,7 @@ async def main() -> int:
     finally:
         if http is not None:
             await http.aclose()
-        if isinstance(llm, OpenAICompatLLM):
-            await llm.aclose()
+        await close_llm(llm)
     return 0
 
 

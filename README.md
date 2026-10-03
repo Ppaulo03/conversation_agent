@@ -17,9 +17,8 @@ uv sync
 uv run uvicorn scheduling_api.main:app --port 8001
 
 # terminal 2: the CLI agent (real provider)
-export GROQ_API_KEY=...             # PowerShell: $env:GROQ_API_KEY = "..."
-uv run python -m vertical_slice                       # default provider: groq
-# or: ANTHROPIC_API_KEY=... uv run python -m vertical_slice --provider anthropic
+# configure LLM_PROVIDER / LLM_API_KEY (or GROQ_API_KEY ...) in .env, see .env.example
+uv run --env-file .env python -m vertical_slice
 ```
 
 ## Local services (Docker)

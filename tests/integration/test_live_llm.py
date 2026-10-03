@@ -1,7 +1,8 @@
 """Live provider checks. Explicit profile only: `uv run pytest -m integration`.
 
-Uses Groq when GROQ_API_KEY is set, else Anthropic when ANTHROPIC_API_KEY is set; skipped
-(and excluded by default) otherwise. Never part of the normal CI.
+Provider comes from the environment (LLM_PROVIDER / LLM_API_KEY / LLM_MODEL, or a legacy
+GROQ_API_KEY / ANTHROPIC_API_KEY); skipped (and excluded by default) when none is configured.
+Run: `uv run --env-file .env pytest -m integration`. Never part of the normal CI.
 """
 
 from __future__ import annotations
@@ -19,31 +20,31 @@ from contracts.llm_assertions import (
     assert_tool_call_response,
     simple_request,
 )
-from conversation_agent.adapters.llm.anthropic import AnthropicLLM
-from conversation_agent.adapters.llm.openai_compat import GROQ_DEFAULT_MODEL, OpenAICompatLLM
+from conversation_agent.app.llm_factory import LLMConfig, LLMConfigError, build_llm
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.ports.llm import LLMProvider
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.wiring import build_engine
 
+
+def _config() -> LLMConfig | None:
+    try:
+        return LLMConfig.from_env(os.environ)
+    except LLMConfigError:
+        return None
+
+
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(
-        not (os.environ.get("GROQ_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")),
-        reason="no GROQ_API_KEY / ANTHROPIC_API_KEY set",
-    ),
+    pytest.mark.skipif(_config() is None, reason="no LLM provider configured in the environment"),
 ]
 
 
 def live_llm() -> LLMProvider:
-    if os.environ.get("GROQ_API_KEY"):
-        return OpenAICompatLLM.groq(
-            os.environ["GROQ_API_KEY"], os.environ.get("GROQ_MODEL", GROQ_DEFAULT_MODEL)
-        )
-    return AnthropicLLM.from_api_key(
-        os.environ["ANTHROPIC_API_KEY"], os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
-    )
+    config = _config()
+    assert config is not None
+    return build_llm(config)
 
 
 async def test_live_provider_passes_the_same_shape_contract() -> None:
