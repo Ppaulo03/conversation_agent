@@ -1,0 +1,115 @@
+"""Capability -> Binding -> PolicyGate -> ToolRunner (INV-003).
+
+`evaluate` is pure (no I/O) and `execute` is the only path to an external operation.
+Both outputs are journaled by the TurnEngine, so replay never re-evaluates blindly.
+"""
+
+from __future__ import annotations
+
+from typing import Any
+
+from pydantic import BaseModel, ConfigDict
+
+from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.models.llm import LLMToolDefinition
+from conversation_agent.core.models.tooling import (
+    CapabilityRequest,
+    CapabilityResult,
+    PolicyDecision,
+    ToolContext,
+    ToolError,
+)
+from conversation_agent.engine.policy_gate import PolicyGate
+from conversation_agent.engine.tool_runner import ToolRunner
+from conversation_agent.tools.requests import RequestRejected, build_capability_request
+
+_PROTECTED_NOTE = (
+    " PROTECTED: calling this only records a proposal for later confirmation; "
+    "it does NOT perform the action."
+)
+
+
+class Evaluation(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    capability: str
+    decision: PolicyDecision
+    request: CapabilityRequest | None = None
+    rejection: ToolError | None = None
+
+
+class CapabilityOutcome(BaseModel):
+    """Exactly one of `result` (executed or refused) / `proposal` (draft, not executed)."""
+
+    model_config = ConfigDict(frozen=True)
+
+    result: CapabilityResult | None = None
+    proposal: CapabilityRequest | None = None
+
+
+def llm_tool_name(capability_name: str) -> str:
+    return capability_name.replace(".", "__")
+
+
+class CapabilityPipeline:
+    def __init__(self, agent: AgentDefinition, policy: PolicyGate, runner: ToolRunner) -> None:
+        self._agent = agent
+        self._policy = policy
+        self._runner = runner
+        self._by_tool_name = {llm_tool_name(c.name): c.name for c in agent.capabilities}
+
+    def exposed_tools(self) -> tuple[LLMToolDefinition, ...]:
+        """Capability schemas (never API schemas) for allowed capabilities only."""
+        tools: list[LLMToolDefinition] = []
+        for cap in self._agent.capabilities:
+            resolved = self._agent.resolve(cap.name)
+            if cap.name not in self._agent.allowed_capabilities or resolved is None:
+                continue
+            decision = self._policy.evaluate(cap.name, resolved)
+            note = _PROTECTED_NOTE if decision.outcome == "require_confirmation" else ""
+            tools.append(
+                LLMToolDefinition(
+                    name=llm_tool_name(cap.name),
+                    description=cap.description + note,
+                    input_schema=cap.input_model.model_json_schema(),
+                )
+            )
+        return tuple(tools)
+
+    def capability_name_for(self, llm_tool_name_: str) -> str:
+        """Unknown names are passed through so the PolicyGate denies them."""
+        return self._by_tool_name.get(llm_tool_name_, llm_tool_name_)
+
+    def evaluate(self, capability_name: str, raw_args: dict[str, Any]) -> Evaluation:
+        resolved = self._agent.resolve(capability_name)
+        decision = self._policy.evaluate(capability_name, resolved)
+        if decision.outcome == "deny" or resolved is None:
+            return Evaluation(capability=capability_name, decision=decision)
+        try:
+            request = build_capability_request(resolved.capability, raw_args)
+        except RequestRejected as exc:
+            return Evaluation(capability=capability_name, decision=decision, rejection=exc.error)
+        return Evaluation(capability=capability_name, decision=decision, request=request)
+
+    async def execute(self, evaluation: Evaluation, context: ToolContext) -> CapabilityOutcome:
+        if evaluation.decision.outcome == "deny":
+            return CapabilityOutcome(
+                result=CapabilityResult(
+                    status="policy_denied",
+                    error=ToolError(
+                        code=evaluation.decision.reason.upper(),
+                        message_safe="This capability is not available.",
+                    ),
+                )
+            )
+        if evaluation.rejection is not None or evaluation.request is None:
+            return CapabilityOutcome(
+                result=CapabilityResult(status="validation_error", error=evaluation.rejection)
+            )
+        if evaluation.decision.outcome == "require_confirmation":
+            return CapabilityOutcome(proposal=evaluation.request)
+        resolved = self._agent.resolve(evaluation.capability)
+        assert resolved is not None  # allow implies resolvable
+        return CapabilityOutcome(
+            result=await self._runner.run(resolved, evaluation.request, context)
+        )

@@ -1,0 +1,48 @@
+"""Conversational state only. Business state belongs to external systems (INV-008)."""
+
+from __future__ import annotations
+
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from conversation_agent.core.models.tooling import CapabilityRequest
+
+
+class _Frozen(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+
+class ConversationIdentity(_Frozen):
+    """Trusted identity, supplied by the inbound adapter. Never inferred by the LLM."""
+
+    tenant_id: str
+    channel_id: str
+    conversation_id: str
+    session_id: str
+    contact_id: str
+
+
+class ConversationMessage(_Frozen):
+    role: Literal["user", "assistant"]
+    text: str
+
+
+class ConversationState(_Frozen):
+    """What the framework owns for a conversation in the vertical slice.
+
+    `proposals` holds at most one validated draft `CapabilityRequest` per protected
+    capability (e.g. a "create" capability). A proposal is *not* a PendingAction: nothing
+    is confirmed or executed until the Phase 3 protected-action machinery exists.
+    """
+
+    history: tuple[ConversationMessage, ...] = ()
+    proposals: dict[str, CapabilityRequest] = Field(default_factory=dict)
+
+
+class TurnOutcome(_Frozen):
+    turn_id: str
+    reply: str
+    state: ConversationState
+    llm_calls: int
+    halted: Literal["step_limit"] | None = None

@@ -1,0 +1,123 @@
+[project]
+name = "conversation-agent"
+version = "0.1.0"
+description = "Framework for stateful conversational agents (conversation state, not business state)."
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+    "httpx>=0.27",
+    "anthropic>=0.40",
+    "tzdata>=2024.1",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=8",
+    "pytest-asyncio>=0.24",
+    "ruff>=0.6",
+    "mypy>=1.11",
+    "import-linter>=2.0",
+    # reference-scheduling-api (external system used by examples/tests)
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/conversation_agent"]
+# Editable installs also expose the examples (they are separate top-level packages,
+# never imported by src/conversation_agent — enforced by import-linter).
+dev-mode-dirs = ["src", "examples/vertical-slice", "examples/reference-scheduling-api"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests", "examples/reference-scheduling-api/tests"]
+markers = [
+    "integration: needs a real LLM provider / network credentials (skipped by default)",
+]
+addopts = "-m 'not integration'"
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+src = ["src", "examples/vertical-slice", "examples/reference-scheduling-api", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+plugins = ["pydantic.mypy"]
+mypy_path = ["src", "examples/vertical-slice", "examples/reference-scheduling-api"]
+explicit_package_bases = true
+
+[tool.importlinter]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice"]
+include_external_packages = true
+
+[[tool.importlinter.contracts]]
+name = "Layers: core <- ports <- tools <- engine (INV-001)"
+type = "layers"
+layers = [
+    "conversation_agent.engine",
+    "conversation_agent.tools",
+    "conversation_agent.ports",
+    "conversation_agent.core",
+]
+
+[[tool.importlinter.contracts]]
+name = "core/ports/tools/engine never import adapters or app (INV-001)"
+type = "forbidden"
+source_modules = [
+    "conversation_agent.core",
+    "conversation_agent.ports",
+    "conversation_agent.tools",
+    "conversation_agent.engine",
+]
+forbidden_modules = ["conversation_agent.adapters", "conversation_agent.app"]
+
+[[tool.importlinter.contracts]]
+name = "core/ports/tools/engine never import external SDKs (INV-001)"
+type = "forbidden"
+source_modules = [
+    "conversation_agent.core",
+    "conversation_agent.ports",
+    "conversation_agent.tools",
+    "conversation_agent.engine",
+]
+forbidden_modules = [
+    "httpx",
+    "anthropic",
+    "openai",
+    "psycopg",
+    "asyncpg",
+    "sqlalchemy",
+    "fastapi",
+    "uvicorn",
+    "mcp",
+    "relayplane",
+]
+allow_indirect_imports = true
+
+[[tool.importlinter.contracts]]
+name = "adapters never import the engine"
+type = "forbidden"
+source_modules = ["conversation_agent.adapters"]
+forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
+
+[[tool.importlinter.contracts]]
+name = "framework never imports example/external-system code (INV-008)"
+type = "forbidden"
+source_modules = ["conversation_agent"]
+forbidden_modules = ["scheduling_api", "vertical_slice"]
+
+[[tool.importlinter.contracts]]
+name = "reference API is an external system: no framework imports"
+type = "forbidden"
+source_modules = ["scheduling_api"]
+forbidden_modules = ["conversation_agent"]
