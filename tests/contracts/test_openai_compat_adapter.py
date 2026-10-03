@@ -122,6 +122,16 @@ BAD_ARGUMENTS = {
 }
 
 
+async def test_error_includes_provider_error_code_but_not_message() -> None:
+    body = {"error": {"code": "model_not_found", "message": "secret detail"}}
+    llm = llm_with(lambda r: httpx.Response(404, json=body))
+    request = LLMRequest(system="s", messages=(LLMMessage.text("user", "x"),))
+    with pytest.raises(LLMProviderError) as info:
+        await llm.complete(request)
+    assert "model_not_found" in str(info.value)
+    assert "secret detail" not in str(info.value)
+
+
 @pytest.mark.parametrize("body", [{}, {"choices": []}, BAD_ARGUMENTS])
 async def test_malformed_provider_payload_is_a_provider_error(body: dict[str, Any]) -> None:
     llm = llm_with(lambda r: httpx.Response(200, json=body))

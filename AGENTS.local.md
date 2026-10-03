@@ -8,6 +8,9 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - Setup: `uv sync` · Testes: `uv run pytest` · Lint: `uv run ruff check . && uv run ruff format --check .`
 - Tipos: `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
 - API de referência: `uv run uvicorn scheduling_api.main:app --port 8001` · CLI: `uv run python -m vertical_slice`
+- Teste live com orçamento diário (`tests/support/live_budget.py`, `LIVE_LLM_DAILY_CALLS`=20, estado em `.live_llm_usage.json`
+  git-ignored; 429 zera o dia). Não rodar em loop: o Groq tem limite diário baixo. Modelo Groq vigente: `openai/gpt-oss-120b`
+  (`llama-3.3-70b-versatile` retornou 404 nesta conta; listar com `GET /openai/v1/models`).
 - Testes live (explícitos): `uv run pytest -m integration` (`uv run --env-file .env pytest -m integration`; precisa de provider configurado).
 - LLM provider-agnóstico via env: `LLM_PROVIDER` (groq|openai|openai_compat|anthropic), `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`;
   `GROQ_API_KEY`/`ANTHROPIC_API_KEY` valem como fallback. Resolução em `app/llm_factory.py`. `.env` é git-ignored e nunca deve ser lido/impresso.

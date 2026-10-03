@@ -7,8 +7,7 @@ Fonte de verdade: `docs/INVARIANTS.md` > `docs/RUNTIME_PROTOCOL.md` > `docs/DESI
 
 ## Phase 1
 
-Status: **PASS** (DoD satisfeito) · GO/NO-GO: **GO para as abstrações**, com uma pendência explícita
-(avaliação de qualidade com LLM real — ver "Questões encontradas").
+Status: **PASS** (DoD satisfeito) · GO/NO-GO: **GO** (abstrações + sonda live com Groq). Evals de qualidade mais amplos ficam como melhoria contínua.
 
 DoD (`ROADMAP.md` Fase 1):
 
@@ -78,7 +77,7 @@ Qualidade: `ruff check` + `ruff format --check` verdes; `mypy --strict src examp
 | 4 | correção de data/hora acompanha o estado | ✓ (proposta anterior substituída, `args_hash` muda) |
 | 5 | falha HTTP (5xx, API fora do ar) sem sucesso/slots inventados | ✓ |
 | 6 | chega a `CapabilityRequest` válido de `scheduling.create` sem executar | ✓ (API só recebe `GET /availability`) |
-| — | evals de qualidade com LLM real | **pendente** (sem `ANTHROPIC_API_KEY` neste ambiente) |
+| — | sonda de qualidade com LLM real (Groq `openai/gpt-oss-120b`) | ✓ 2026-10-03: contrato live + só oferece slots reais da API |
 
 Nenhuma mudança de domínio foi necessária em core/engine para os cenários (`test_runtime_does_not_own_business_state`
 garante que não há vocabulário de scheduling no framework).
@@ -127,7 +126,8 @@ garante que não há vocabulário de scheduling no framework).
 
 ### Questões encontradas
 
-- **Sem LLM real validado ainda**: Groq e Anthropic foram validados contra o contrato com client do SDK stubado e tipos reais do SDK;
+- **Live**: a suíte live (`uv run --env-file .env pytest -m integration`) passou com Groq; consome no máx. ~6 chamadas e tem
+  orçamento diário local (`LIVE_LLM_DAILY_CALLS`, padrão 20, `.live_llm_usage.json`; 429 zera o dia). Anthropic segue validado contra o contrato com client do SDK stubado e tipos reais do SDK;
   `tests/integration/test_live_anthropic.py` (`uv run pytest -m integration`) cobre o contrato com a API real e uma sonda
   de qualidade (o modelo só oferece slots que a API tem). **Rode-o antes de fechar o GO definitivo**; é o único item do
   GO/NO-GO que não foi executado.

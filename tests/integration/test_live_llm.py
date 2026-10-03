@@ -1,13 +1,13 @@
-"""Live provider checks. Explicit profile only: `uv run pytest -m integration`.
+"""Live provider checks. Explicit profile only: `uv run --env-file .env pytest -m integration`.
 
-Provider comes from the environment (LLM_PROVIDER / LLM_API_KEY / LLM_MODEL, or a legacy
-GROQ_API_KEY / ANTHROPIC_API_KEY); skipped (and excluded by default) when none is configured.
-Run: `uv run --env-file .env pytest -m integration`. Never part of the normal CI.
+The provider comes from the environment (LLM_PROVIDER / LLM_API_KEY / LLM_MODEL, or a legacy
+GROQ_API_KEY / ANTHROPIC_API_KEY). Every call goes through a daily budget (see
+tests/support/live_budget.py and tests/integration/conftest.py) because real providers have low
+daily limits; the whole suite makes at most ~6 calls. Never part of the normal CI.
 """
 
 from __future__ import annotations
 
-import os
 import re
 
 import httpx
@@ -20,36 +20,17 @@ from contracts.llm_assertions import (
     assert_tool_call_response,
     simple_request,
 )
-from conversation_agent.app.llm_factory import LLMConfig, LLMConfigError, build_llm
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.ports.llm import LLMProvider
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.wiring import build_engine
 
-
-def _config() -> LLMConfig | None:
-    try:
-        return LLMConfig.from_env(os.environ)
-    except LLMConfigError:
-        return None
+pytestmark = pytest.mark.integration
 
 
-pytestmark = [
-    pytest.mark.integration,
-    pytest.mark.skipif(_config() is None, reason="no LLM provider configured in the environment"),
-]
-
-
-def live_llm() -> LLMProvider:
-    config = _config()
-    assert config is not None
-    return build_llm(config)
-
-
-async def test_live_provider_passes_the_same_shape_contract() -> None:
-    llm = live_llm()
-    assert_text_response(await llm.complete(simple_request("Reply with the single word OK.")))
+async def test_live_provider_passes_the_same_shape_contract(live_llm: LLMProvider) -> None:
+    assert_text_response(await live_llm.complete(simple_request("Reply with the single word OK.")))
 
     tool = LLMToolDefinition(
         name="get_weather",
@@ -63,14 +44,16 @@ async def test_live_provider_passes_the_same_shape_contract() -> None:
     request = simple_request("What's the weather in Lisbon? Use the tool.").model_copy(
         update={"tools": (tool,)}
     )
-    assert_tool_call_response(await llm.complete(request), "get_weather")
-    assert_canonical_response(await llm.complete(simple_request()))
+    assert_tool_call_response(await live_llm.complete(request), "get_weather")
+    assert_canonical_response(await live_llm.complete(simple_request()))
 
 
-async def test_live_llm_offers_only_slots_that_the_api_really_has(api: ApiHandle) -> None:
+async def test_live_llm_offers_only_slots_that_the_api_really_has(
+    api: ApiHandle, live_llm: LLMProvider
+) -> None:
     """Quality probe for the GO/NO-GO: real LLM + real API through the full pipeline."""
     engine, _, http = build_engine(
-        live_llm(), api_base_url=api.base_url, journal=new_journal(), clock=new_clock()
+        live_llm, api_base_url=api.base_url, journal=new_journal(), clock=new_clock()
     )
     try:
         outcome = await engine.process_turn(

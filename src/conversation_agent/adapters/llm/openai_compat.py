@@ -27,7 +27,7 @@ from conversation_agent.core.models.llm import (
 )
 
 GROQ_BASE_URL = "https://api.groq.com/openai/v1"
-GROQ_DEFAULT_MODEL = "llama-3.3-70b-versatile"
+GROQ_DEFAULT_MODEL = "openai/gpt-oss-120b"
 
 _FINISH_REASONS = {
     "stop": LLMStopReason.END_TURN,
@@ -138,13 +138,23 @@ class OpenAICompatLLM:
         if response.status_code >= 400:
             code = response.status_code
             raise LLMProviderError(
-                f"LLM API error (HTTP {code})",
+                f"LLM API error (HTTP {code}{self._error_code(response)})",
                 retryable=code in (408, 409, 429) or code >= 500,
             )
         try:
             return self._to_response(response.json(), so.name if so else None)
         except (ValueError, KeyError, IndexError, TypeError) as exc:
             raise LLMProviderError("LLM returned an unusable response") from exc
+
+    @staticmethod
+    def _error_code(response: httpx.Response) -> str:
+        """Provider error *identifier* only (e.g. model_not_found); never the message/body."""
+        try:
+            error = response.json()["error"]
+            code = str(error.get("code") or error.get("type") or "")
+        except (ValueError, KeyError, TypeError, AttributeError):
+            return ""
+        return f", {code[:60]}" if code.replace("_", "").replace("-", "").isalnum() else ""
 
     @staticmethod
     def _to_response(payload: dict[str, Any], structured_name: str | None) -> LLMResponse:
