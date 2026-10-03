@@ -16,6 +16,7 @@ from conversation_agent.adapters.postgres.inbox import PostgresInboxStore
 from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
 from conversation_agent.adapters.postgres.ledger import PostgresToolInvocationStore
 from conversation_agent.adapters.postgres.outbox import PostgresOutboxStore
+from conversation_agent.adapters.postgres.scheduler import PostgresScheduler
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
 from conversation_agent.adapters.senders.fake import FakeMessageSender
 from conversation_agent.adapters.tools.fake import FakeToolProvider
@@ -26,6 +27,8 @@ from conversation_agent.core.models.tooling import PolicyDecision, ToolResult
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
+from conversation_agent.engine.reconciliation import RECONCILE_EVENT, ReconciliationWorker
+from conversation_agent.engine.scheduler_worker import SchedulerWorker
 from conversation_agent.engine.side_effects import LedgerToolExecutor
 from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
@@ -89,6 +92,7 @@ class World:
         self.uows = PostgresUnitOfWorkFactory(db, clock)
         self.ledger = PostgresToolInvocationStore(db, clock)
         self.outbox = PostgresOutboxStore(db, clock)
+        self.scheduler = PostgresScheduler(db, clock)
         self.sender = FakeMessageSender()
         self.tools = FakeToolProvider({"erp_get_available_slots": SLOTS})
 
@@ -154,6 +158,31 @@ class World:
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             **kwargs,
         )
+
+    def reconciler(
+        self,
+        owner: str,
+        *,
+        providers: Mapping[str, ToolProvider],
+        pipeline: CapabilityPipeline | None = None,
+        faults: FaultInjector | None = None,
+        **kwargs: Any,
+    ) -> ReconciliationWorker:
+        return ReconciliationWorker(
+            ledger=self.ledger,
+            pipeline=pipeline or self.pipeline(providers, None),
+            scheduler=self.scheduler,
+            faults=faults or NoFaults(),
+            clock=self.clock,
+            owner=owner,
+            **kwargs,
+        )
+
+    def scheduler_worker(self, owner: str) -> SchedulerWorker:
+        async def wake(_: Any) -> None:  # firing the timer lifts the backoff on the invocation
+            return None
+
+        return SchedulerWorker(self.scheduler, {RECONCILE_EVENT: wake}, owner=owner, claim_ttl=TTL)
 
     def outbox_worker(self, owner: str, faults: FaultInjector | None = None) -> OutboxWorker:
         return OutboxWorker(

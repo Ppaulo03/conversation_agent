@@ -1,0 +1,139 @@
+"""Reconciliation of `UNKNOWN` tool invocations (DESIGN §13-14, INV-006, INV-021).
+
+An unknown outcome is never retried blindly. The tool's declared recovery contract decides:
+
+  status_lookup    ask the external system what happened (a read capability);
+                   found -> RECONCILED with that result; "no such operation" -> the write
+                   provably did not happen, so (idempotent tools only) re-send with the SAME key;
+                   lookup unavailable -> stay UNKNOWN and retry later (durable timer)
+  retry_same_key   re-send with the same idempotency key
+  human_handoff    escalate (also the default for tools with no contract, and after too many
+                   attempts)
+
+Every transition is fenced by the claim's `execution_epoch`: a worker killed mid-way (C11) is
+superseded by whoever claims next, and its late writes are refused.
+"""
+
+from __future__ import annotations
+
+from datetime import timedelta
+
+from conversation_agent.core.errors import ExecutionFencingError
+from conversation_agent.core.models.runtime import (
+    ExecutionClaim,
+    InvocationStatus,
+    ScheduledEvent,
+    ToolInvocation,
+)
+from conversation_agent.core.models.tooling import ToolError, ToolResult
+from conversation_agent.engine.capability_pipeline import CapabilityPipeline
+from conversation_agent.engine.side_effects import to_tool_result
+from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.faults import FaultInjector
+from conversation_agent.ports.ledger import ToolInvocationStore
+from conversation_agent.ports.scheduler import Scheduler
+
+RECONCILE_EVENT = "reconcile"
+
+
+def reconcile_key(invocation_id: str) -> str:
+    return f"reconcile:{invocation_id}"
+
+
+class ReconciliationWorker:
+    def __init__(
+        self,
+        *,
+        ledger: ToolInvocationStore,
+        pipeline: CapabilityPipeline,
+        scheduler: Scheduler,
+        faults: FaultInjector,
+        clock: Clock,
+        owner: str,
+        claim_ttl: timedelta = timedelta(seconds=60),
+        retry_backoff: timedelta = timedelta(seconds=30),
+        max_attempts: int = 5,
+    ) -> None:
+        self._ledger = ledger
+        self._pipeline = pipeline
+        self._scheduler = scheduler
+        self._faults = faults
+        self._clock = clock
+        self._owner = owner
+        self._ttl = claim_ttl
+        self._backoff = retry_backoff
+        self._max_attempts = max_attempts
+
+    async def run_once(self, limit: int = 10) -> list[ToolInvocation]:
+        resolved: list[ToolInvocation] = []
+        for invocation, claim in await self._ledger.claim_reconciliation(
+            self._owner, limit, self._ttl
+        ):
+            await self._faults.hit("C11_during_reconciliation")  # claimed, nothing persisted yet
+            result, handoff = await self._resolve(invocation)
+            try:
+                final = await self._ledger.finalize_reconciliation(
+                    invocation.tenant_id, invocation.invocation_id, claim, result, handoff=handoff
+                )
+            except ExecutionFencingError:
+                continue  # superseded by a newer claim: whoever holds it decides
+            if final.status is InvocationStatus.UNKNOWN:
+                await self._schedule_retry(final)
+            resolved.append(final)
+        return resolved
+
+    async def _schedule_retry(self, invocation: ToolInvocation) -> None:
+        await self._scheduler.schedule(
+            ScheduledEvent(
+                tenant_id=invocation.tenant_id,
+                scheduler_key=reconcile_key(invocation.invocation_id),
+                event_type=RECONCILE_EVENT,
+                due_at=self._clock.now() + self._backoff,
+                payload={"invocation_id": invocation.invocation_id},
+            )
+        )
+
+    async def _resolve(self, invocation: ToolInvocation) -> tuple[ToolResult | None, bool]:
+        """Returns (result, handoff). (None, False) means "still unknown, try again later"."""
+        tool = self._pipeline.resolve(invocation.capability).tool
+        recovery = tool.effective_recovery
+        if invocation.reconcile_attempts > self._max_attempts:
+            return self._handoff("RECONCILIATION_EXHAUSTED"), True
+
+        if recovery.strategy == "human_handoff":
+            return self._handoff("NO_AUTOMATIC_RECOVERY"), True
+
+        if recovery.strategy == "status_lookup":
+            assert recovery.lookup_capability is not None
+            found = await self._pipeline.run_internal_read(
+                recovery.lookup_capability,
+                {"idempotency_key": invocation.idempotency_key},
+                invocation.context,
+            )
+            if found.status == "success":
+                return to_tool_result(found), False  # it DID happen: adopt the recorded result
+            if found.status != "business_error":
+                return None, False  # lookup itself failed: outcome still unknown
+            # "no such operation": it did not happen. Re-send only if that is safe.
+            if not tool.idempotency_supported:
+                return self._handoff("NOT_FOUND_BUT_NOT_IDEMPOTENT"), True
+
+        return await self._resend_same_key(invocation), False
+
+    async def _resend_same_key(self, invocation: ToolInvocation) -> ToolResult:
+        """Same request, same context, same idempotency key (INV-021): never a new identity."""
+        result = await self._pipeline.rerun_authorized(invocation.request, invocation.context)
+        return to_tool_result(result)
+
+    @staticmethod
+    def _handoff(code: str) -> ToolResult:
+        return ToolResult(
+            status="unknown",
+            error=ToolError(
+                code=code, message_safe="The outcome could not be confirmed automatically."
+            ),
+        )
+
+
+def claim_of(invocation: ToolInvocation) -> ExecutionClaim:  # test/ops convenience
+    return ExecutionClaim(invocation_id=invocation.invocation_id, epoch=invocation.execution_epoch)

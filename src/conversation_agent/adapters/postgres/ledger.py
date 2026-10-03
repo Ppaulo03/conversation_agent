@@ -130,14 +130,19 @@ class PostgresToolInvocationStore:
             f"""
             WITH picked AS (
                 SELECT tenant_id, invocation_id FROM tool_invocations
-                 WHERE status = 'UNKNOWN'
+                 WHERE (status = 'UNKNOWN' AND NOT EXISTS (
+                           SELECT 1 FROM scheduled_events s
+                            WHERE s.tenant_id = tool_invocations.tenant_id
+                              AND s.scheduler_key = 'reconcile:' || tool_invocations.invocation_id
+                              AND s.status IN ('PENDING', 'CLAIMED')))  -- backoff timer pending
                     OR (status IN ('EXECUTING', 'RECONCILING') AND execution_lease_expires_at <= $1)
                  ORDER BY prepared_at
                  LIMIT $2 FOR UPDATE SKIP LOCKED
             )
             UPDATE tool_invocations t
                SET status = 'RECONCILING', execution_owner = $3, execution_lease_expires_at = $4,
-                   execution_epoch = t.execution_epoch + 1
+                   execution_epoch = t.execution_epoch + 1,
+                   reconcile_attempts = t.reconcile_attempts + 1
               FROM picked
              WHERE t.tenant_id = picked.tenant_id AND t.invocation_id = picked.invocation_id
             RETURNING {_T_COLUMNS}

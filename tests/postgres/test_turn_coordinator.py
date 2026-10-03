@@ -64,7 +64,7 @@ async def test_outbox_worker_is_the_only_path_to_the_channel(world: World) -> No
     assert await world.outbox_worker("sender-1").run_once() == 0  # nothing left to send
 
 
-async def test_duplicate_event_never_creates_a_duplicate_turn(world: World) -> None:  # INV-020
+async def test_duplicate_event_never_creates_duplicate_turn(world: World) -> None:  # INV-020
     results = await asyncio.gather(
         *(world.inbox.insert_if_absent(event("dup", "oi", clock=world.clock)) for _ in range(8))
     )

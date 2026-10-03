@@ -89,6 +89,31 @@ class CapabilityPipeline:
             )
         return tuple(tools)
 
+    async def run_internal_read(
+        self, capability_name: str, raw_args: dict[str, Any], context: ToolContext
+    ) -> CapabilityResult:
+        """Runtime-initiated READ (e.g. a recovery status lookup). It still goes through
+        Capability -> Binding -> ToolRunner, and it refuses anything that needs protection."""
+        resolved = self.resolve(capability_name)
+        if resolved.effective_risk != "read" or resolved.effective_confirmation_required:
+            return CapabilityResult(
+                status="policy_denied",
+                error=ToolError(code="NOT_A_READ", message_safe="Internal calls must be reads."),
+            )
+        try:
+            request = build_capability_request(resolved.capability, raw_args)
+        except RequestRejected as exc:
+            return CapabilityResult(status="validation_error", error=exc.error)
+        return await self._runner.run(resolved, request, context)
+
+    async def rerun_authorized(
+        self, request: CapabilityRequest, context: ToolContext
+    ) -> CapabilityResult:
+        """Re-sends an invocation that was ALREADY authorised and prepared, with the same
+        identity/idempotency key. Only reconciliation may call this, and only for tools whose
+        recovery contract allows it (retry_same_key / status_lookup on idempotent tools)."""
+        return await self._runner.run(self.resolve(request.capability), request, context)
+
     def resolve(self, capability_name: str) -> ResolvedToolBinding:
         resolved = self._agent.resolve(capability_name)
         if resolved is None:

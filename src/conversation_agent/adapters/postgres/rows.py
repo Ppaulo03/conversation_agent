@@ -19,7 +19,8 @@ INVOCATION_COLUMNS = (
     "tenant_id, invocation_id, conversation_id, session_id, turn_id, logical_step_id, "
     "attempt_semantic_id, action_id, tool_name, capability, args_hash, idempotency_key, "
     "request_json, context_json, status, execution_owner, execution_lease_expires_at, "
-    "execution_epoch, result_application_status, result_json, error_json, provider_metadata"
+    "execution_epoch, result_application_status, result_json, error_json, provider_metadata, "
+    "reconcile_attempts"
 )
 
 OUTBOX_COLUMNS = (
@@ -48,6 +49,7 @@ def invocation_from_row(r: asyncpg.Record | dict[str, Any]) -> ToolInvocation:
         execution_owner=r["execution_owner"],
         execution_lease_expires_at=r["execution_lease_expires_at"],
         execution_epoch=r["execution_epoch"],
+        reconcile_attempts=r["reconcile_attempts"],
         result_application_status=ApplicationStatus(r["result_application_status"]),
         result=r["result_json"],
         error=r["error_json"],

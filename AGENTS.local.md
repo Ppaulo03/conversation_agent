@@ -33,3 +33,13 @@ Deltas do repositório sobre o `AGENTS.md` global.
   importado por `src/` (contrato do import-linter + teste de arquitetura).
 - Escrita não-read com timeout/5xx é `unknown` mesmo que o `error_map` diga `technical_error`: coerção em
   `tools/error_mapping.py` (INV-006/INV-021).
+
+- Postgres: `asyncpg` (o psycopg async não roda no ProactorEventLoop do Windows). Testes em `tests/postgres` usam o banco
+  `conversation_agent_test` (criado/migrado/truncado pelos fixtures; `docker compose up -d` antes). Credenciais via
+  `POSTGRES_*` ou defaults do compose.
+- Fencing de conversa = `SELECT ... FOR SHARE` condicionado a (owner, epoch) no começo de toda UoW; o takeover exige lock
+  exclusivo da mesma linha. Ledger usa só `execution_epoch` e nunca toca a linha da conversa (INV-011/016).
+- `SimulatedCrash` é `BaseException` de propósito: nenhum `except Exception` pode engolir um "kill" nos testes de chaos.
+- Cada caso de chaos exigido tem um `test_Cxx_*` nomeado; `tests/architecture/test_chaos_gates.py` falha se faltar algum.
+- PowerShell: `R` é alias de `Invoke-History` (não use como nome de função); `.Replace()` multilinha falha em arquivos
+  CRLF — use a ferramenta Edit; `;` não interrompe um `git commit` após teste vermelho (encadeie com `if ($?)`).

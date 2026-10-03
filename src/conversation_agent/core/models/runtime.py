@@ -190,6 +190,7 @@ class ToolInvocation(_Frozen):
     execution_owner: str | None = None
     execution_lease_expires_at: datetime | None = None
     execution_epoch: int = 0
+    reconcile_attempts: int = 0
     result_application_status: ApplicationStatus = ApplicationStatus.NONE
     result: dict[str, Any] | None = None  # serialised ToolResult
     error: dict[str, Any] | None = None

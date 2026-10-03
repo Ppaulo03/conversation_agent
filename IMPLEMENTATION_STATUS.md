@@ -162,3 +162,55 @@ garante que não há vocabulário de scheduling no framework).
   Anthropic segue validado só contra o contrato com client do SDK stubado.
 - Nenhuma contradição normativa entre os documentos foi encontrada; as lacunas (representação do "draft" na Fase 1,
   posição de `tools/` nas camadas) foram resolvidas como decisões locais acima.
+
+## Phase 2 — Reliability core
+
+Status: **PASS** (DoD satisfeito e verificado contra PostgreSQL 16 real e a API de referência real; 337 testes).
+
+DoD (`ROADMAP.md` Fase 2):
+
+- [✓] duplicate inbound não cria turn duplicado — `test_duplicate_event_never_creates_duplicate_turn` (8 entregas concorrentes, 1 vencedor; UNIQUE no Postgres)
+- [✓] claim de eventos só depois do conversation lease — `test_claim_happens_only_after_the_lease_and_the_loser_claims_nothing`
+- [✓] outbox/scheduler sobrevivem restart — `test_runtime_survives_restart_open_turn_and_pending_outbox`, `test_timers_survive_a_restart_and_an_abandoned_claim_is_reclaimed`
+- [✓] worker zumbi não altera conversation state — `C09` (UoW e coordinator)
+- [✓] executor válido finaliza o ledger após perder o conversation lease — `test_lost_conversation_lease_can_finalize_ledger_only`, `C14`
+- [✓] heartbeat impede expiração silenciosa; perda o torna stale — `test_heartbeat_prevents_silent_expiry_*`, `test_lost_heartbeat_makes_the_worker_stale_*`
+- [✓] journal evita repetir LLM step persistido (`C10`), diverge fail-closed (`C15`), `turn_reference_time` estável através de restart
+- [✓] `UNKNOWN` entra em reconciliation — `ReconciliationWorker` (`C05`, `C06`, `C11`, recovery do `C04`)
+- [✓] nenhum I/O externo com transaction da conversa aberta — `test_no_database_transaction_is_open_during_llm_or_tool_io`
+- [✓] chaos C04–C11 e C14–C16 — um teste nomeado por caso (`tests/architecture/test_chaos_gates.py` impede regressão da cobertura)
+
+Implementado: schema v1 + migration 0002 (`adapters/postgres/migrations`); `PostgresLeaseStore` (epoch monotônico);
+`PostgresUnitOfWorkFactory` (fence por `FOR SHARE` condicionado a (owner, epoch): takeover e commit de zumbi nunca se
+intercalam); journal durável; `PostgresInboxStore`/`PostgresOutboxStore`/`PostgresScheduler`/`PostgresToolInvocationStore`;
+`TurnCoordinator` (algoritmo §39D), `LeaseHandle` (heartbeat), `OutboxWorker`, `SchedulerWorker`, `LedgerToolExecutor`
+(A/B/C1/C2), `ReconciliationWorker`; `ChaosFaults`/`SimulatedCrash` (BaseException) para fault injection; API de referência
+com `POST /bookings` idempotente, lookup por chave e `DELETE`.
+
+### Decisões de arquitetura da Fase 2 (afetam persistência/idempotência/fencing/retry/delivery)
+
+1. **Fencing atômico pelo lock da linha da conversa.** Toda UoW começa com `SELECT ... FOR SHARE` condicionado a (owner,
+   epoch); o takeover (`UPDATE ... epoch+1`) exige lock exclusivo e portanto espera UoWs em voo (teste dedicado).
+2. **PREPARE e C2 atômicos com o journal** via `TurnJournalCursor.step_atomic` (invocation + `TOOL_PREPARED`; mark-applied +
+   `TOOL_RESULT`, cada par em uma transaction). `invocation_id` determinístico (hash de tenant/conversa/turn/logical_step/
+   args_hash) torna PREPARE idempotente no replay.
+3. **Idempotency key = `invocation_id`**, estável em retry técnico, replay e reconciliation; enviada em `Idempotency-Key`.
+4. **`UNKNOWN` não é aplicado à conversa**: fica `result_application_status=none` até reconciliar (atualizado em
+   `RUNTIME_PROTOCOL.md`). O turno permanece aberto e é retomado do journal.
+5. **Reconciliation**: claim com novo `execution_epoch`; `status_lookup` → achou = `RECONCILED`; "não existe" + tool idempotente =
+   reenvio com a mesma key; sem contrato/não idempotente/esgotado = `HUMAN_HANDOFF`. Backoff por timer durável (`reconcile:<id>`).
+6. **Tempo vem do `Clock` injetado** (lease, claims, backoff), nunca do relógio do banco — determinismo nos testes.
+7. **Turno**: um por vez por conversa (índice único de turn aberto); burst = todos os eventos READY no claim, ordenados por
+   `source_sequence`/`occurred_at`/`received_at`/`event_id`; evento tardio (≤ watermark) entra no próximo turno, marcado.
+8. **Ownership ≠ BOT** (HUMAN e HANDOFF_PENDING, por ora) persiste contexto e não gera LLM/tool/outbound (INV-019).
+9. `PolicyGate` continua segurando writes (Fase 3). Os testes de chaos usam `AllowWrites` (apenas teste) para exercitar o
+   protocolo de ponta a ponta com escrita real na API de referência.
+
+### Débitos conhecidos (Fase 2)
+
+- Sem debounce/janela de silêncio no burst (todo READY entra no turno); `confirmation`/`PendingAction` são Fase 3.
+- Outbox `UNKNOWN` ainda não é reconciliada (depende do MessageSender real, Fase 6) e não há `SUPERSEDED`/re-prompt (Fase 3).
+- Falha permanente de LLM só marca o turno `FAILED` após `max_turn_attempts`; não há mensagem de desculpas automática.
+- Workers são `run_once()` chamáveis; o loop residente/processo (`app/worker.py`) e OpenTelemetry básico ficam para o hardening.
+- Cancelamento cooperativo (`C12`) é Fase 4. HANDOFF_PENDING terá política própria.
+- `tests/postgres` exige o container (`docker compose up -d`); sem ele os testes são pulados com mensagem explícita.

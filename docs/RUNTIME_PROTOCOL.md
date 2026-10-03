@@ -80,6 +80,22 @@ C2. APPLY TO CONVERSATION (conversation_epoch)
 
 Se C1 ocorreu e o worker perdeu o conversation lease, o novo owner aplica C2.
 
+`result_application_status = pending` só é gravado para fatos **terminais** (`SUCCEEDED`, `FAILED`,
+`RECONCILED`, `HUMAN_HANDOFF`). Um C1 que resulta em `UNKNOWN` registra status + erro, mas mantém
+`result_application_status = none`: o resultado só pode ser aplicado à conversa depois que a
+reconciliation o resolver. Enquanto isso o turno permanece aberto (`ToolResultPendingError`) e é
+retomado pelo journal; nada é reexecutado.
+
+### Reconciliation (implementação da Fase 2)
+
+- `UNKNOWN`, `EXECUTING` com lease expirado e `RECONCILING` com lease expirado são claimados para
+  `RECONCILING` com **novo** `execution_epoch`; o executor/reconciliador anterior fica fenced (C11).
+- A estratégia vem do contrato da tool: `status_lookup` (capability de leitura), `retry_same_key`
+  (exige `idempotency_supported`) ou `human_handoff` (default sem contrato). "Não encontrado" no
+  lookup só leva a reenvio com a **mesma** idempotency key em tool idempotente; caso contrário, handoff.
+- Lookup indisponível mantém `UNKNOWN` e agenda um timer durável (`reconcile:<invocation_id>`);
+  enquanto o timer existe, a invocation não é reclaimada. Após `max_attempts`, handoff.
+
 ## 5. Semantic attempts
 
 `attempt_semantic_id` muda somente em nova tentativa decidida semanticamente pelo usuário ou Flow.

@@ -115,7 +115,7 @@ async def test_without_a_confirmation_policy_a_write_is_only_a_draft_never_execu
     assert posts(api) == [] and await world.count("tool_invocations") == 0
 
 
-async def test_business_error_is_a_terminal_failed_fact_that_is_never_reopened(
+async def test_terminal_failed_invocation_requires_new_semantic_attempt(
     world: World, api: ApiHandle
 ) -> None:  # INV-015
     api.state.fully_booked_dates = {date(2026, 10, 6)}
