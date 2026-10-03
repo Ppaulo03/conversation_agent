@@ -66,6 +66,11 @@ class CapabilityOutcome(BaseModel):
         return self
 
 
+def llm_name_for(capability_name: str) -> str:
+    """Same injective mapping as `CapabilityDefinition.llm_name`."""
+    return capability_name.replace(".", "__")
+
+
 class CapabilityPipeline:
     def __init__(self, agent: AgentDefinition, policy: PolicyGate, runner: ToolRunner) -> None:
         self._agent = agent

@@ -82,6 +82,14 @@ class CapabilityRequest(_Frozen):
     summary: str | None = None  # for confirmation prompts; NOT part of args_hash
 
 
+class ProposedAction(_Frozen):
+    """A protected call the model asked for this turn; the coordinator turns it into a
+    PendingAction together with its confirmation prompt (same transaction)."""
+
+    request: CapabilityRequest
+    tool_name: str
+
+
 class CapabilityResult(_Frozen):
     """Outcome of a capability call as seen by the engine/LLM (Capability schema)."""
 

@@ -33,6 +33,7 @@ from conversation_agent.core.models.runtime import (
     ToolInvocation,
 )
 from conversation_agent.core.models.tooling import (
+    CapabilityRequest,
     CapabilityResult,
     ToolContext,
     ToolError,
@@ -148,7 +149,15 @@ class LedgerToolExecutor:
         async def write_prepare(entry: JournalEntry) -> None:  # A: one transaction
             async with self._uows.begin(self._fence) as uow:
                 if frozen:
-                    await uow.invocations.create_prepared(self._new_invocation(step, frozen[0]))
+                    await uow.invocations.create_prepared(
+                        new_invocation(
+                            step.context,
+                            step.logical_step_id,
+                            request,
+                            frozen[0],
+                            attempt=f"{step.logical_step_id}:a1",
+                        )
+                    )
                 await uow.journal.append(entry)
                 await uow.commit()
 
@@ -162,10 +171,30 @@ class LedgerToolExecutor:
         if prepared.get("pre_io_failure") is not None:
             return CapabilityOutcome.model_validate(prepared["pre_io_failure"])
 
+        return await self.apply_prepared(
+            cursor,
+            invocation_id=invocation_id,
+            request_hash=step.request_hash,
+            logical_step_id=step.logical_step_id,
+            guard=step.guard,
+        )
+
+    async def apply_prepared(
+        self,
+        cursor: TurnJournalCursor,
+        *,
+        invocation_id: str,
+        request_hash: str | None,
+        logical_step_id: str | None,
+        guard: Callable[[], None] | None,
+    ) -> CapabilityOutcome:
+        """B + C1 + C2 for an invocation that is already PREPARED (by `run` for unprotected
+        calls, or by the atomic confirmation transaction for protected actions)."""
+
         async def result_payload() -> dict[str, Any]:  # only runs when TOOL_RESULT is not journaled
             invocation = await self._ledger.get(self._fence.tenant_id, invocation_id)
             assert invocation is not None, "PREPARED invocation must exist"
-            terminal = await self._drive(invocation, step)
+            terminal = await self._drive(invocation, guard)
             outcome = CapabilityOutcome(result=to_capability_result(terminal))
             return outcome.model_dump(mode="json")
 
@@ -177,14 +206,16 @@ class LedgerToolExecutor:
 
         payload = await cursor.step_atomic(
             JournalStepType.TOOL_RESULT,
-            step.request_hash,
+            request_hash,
             result_payload,
             write_apply,
-            logical_step_id=step.logical_step_id,
+            logical_step_id=logical_step_id,
         )
         return CapabilityOutcome.model_validate(payload)
 
-    async def _drive(self, invocation: ToolInvocation, step: ToolStep) -> ToolInvocation:
+    async def _drive(
+        self, invocation: ToolInvocation, guard: Callable[[], None] | None
+    ) -> ToolInvocation:
         """B + C1 when the invocation is still PREPARED; otherwise reuse the recorded fact."""
         tenant = self._fence.tenant_id
         while True:
@@ -195,8 +226,8 @@ class LedgerToolExecutor:
                 raise ToolResultPendingError(
                     f"invocation {invocation.invocation_id} is {invocation.status}"
                 )
-            if step.guard is not None:
-                step.guard()  # safe boundary: a stale worker starts no new external call
+            if guard is not None:
+                guard()  # safe boundary: a stale worker starts no new external call
             claim = await self._ledger.claim_execution(
                 tenant, invocation.invocation_id, self._owner, self._ttl
             )
@@ -252,24 +283,30 @@ class LedgerToolExecutor:
             with contextlib.suppress(Exception):
                 await self._ledger.renew_execution(tenant, invocation_id, claim, self._ttl)
 
-    @staticmethod
-    def _new_invocation(step: ToolStep, intent: ExecutionIntent) -> ToolInvocation:
-        request = step.evaluation.request
-        assert request is not None
-        ctx = step.context
-        return ToolInvocation(
-            tenant_id=ctx.tenant_id,
-            invocation_id=ctx.invocation_id,
-            conversation_id=ctx.conversation_id,
-            session_id=ctx.session_id,
-            turn_id=ctx.turn_id,
-            logical_step_id=step.logical_step_id,
-            attempt_semantic_id=f"{step.logical_step_id}:a1",
-            tool_name=intent.tool_name,
-            capability=request.capability,
-            args_hash=request.args_hash,
-            idempotency_key=ctx.invocation_id,
-            request=request,
-            context=ctx,
-            intent=intent,
-        )
+
+def new_invocation(
+    ctx: ToolContext,
+    logical_step_id: str,
+    request: CapabilityRequest,
+    intent: ExecutionIntent,
+    *,
+    attempt: str,
+    action_id: str | None = None,
+) -> ToolInvocation:
+    return ToolInvocation(
+        tenant_id=ctx.tenant_id,
+        invocation_id=ctx.invocation_id,
+        conversation_id=ctx.conversation_id,
+        session_id=ctx.session_id,
+        turn_id=ctx.turn_id,
+        logical_step_id=logical_step_id,
+        attempt_semantic_id=attempt,
+        action_id=action_id,
+        tool_name=intent.tool_name,
+        capability=request.capability,
+        args_hash=request.args_hash,
+        idempotency_key=ctx.invocation_id,
+        request=request,
+        context=ctx,
+        intent=intent,
+    )

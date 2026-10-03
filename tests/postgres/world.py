@@ -25,6 +25,7 @@ from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.runtime import ConversationKey, FenceToken, InboundEvent
 from conversation_agent.core.models.tooling import PolicyDecision, ToolResult
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
+from conversation_agent.engine.confirmation_stage import ConfirmationStage
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.reconciliation import RECONCILE_EVENT, ReconciliationWorker
@@ -120,6 +121,7 @@ class World:
         policy: PolicyGate | None = None,
         pipeline: CapabilityPipeline | None = None,
         heartbeat_interval_seconds: float = 10.0,
+        max_reprompts: int = 3,
         **kwargs: Any,
     ) -> TurnCoordinator:
         injector = faults or NoFaults()
@@ -128,21 +130,43 @@ class World:
             return PostgresTurnJournal(self.uows, self.db, fence)
 
         def engine_factory(fence: FenceToken, journal: TurnJournal) -> TurnEngine:
-            engine, _, _ = build_engine(
+            made: list[LedgerToolExecutor] = []
+
+            def make_executor(pipe: CapabilityPipeline) -> LedgerToolExecutor:
+                made.append(
+                    LedgerToolExecutor(
+                        pipeline=pipe,
+                        uows=self.uows,
+                        ledger=self.ledger,
+                        fence=fence,
+                        faults=injector,
+                        clock=self.clock,
+                        owner=owner,
+                    )
+                )
+                return made[0]
+
+            shared = pipeline or self.pipeline(providers, policy)
+            engine, agent, _ = build_engine(
                 llm,
                 api_base_url="http://unused",
                 journal=journal,
                 clock=self.clock,
-                pipeline=pipeline or self.pipeline(providers, policy),
-                executor_factory=lambda pipeline: LedgerToolExecutor(
-                    pipeline=pipeline,
+                pipeline=shared,
+                executor_factory=make_executor,
+            )
+            engine.attach_confirmation(
+                ConfirmationStage(
+                    agent=agent,
+                    pipeline=shared,
                     uows=self.uows,
-                    ledger=self.ledger,
+                    executor=made[0],
                     fence=fence,
                     faults=injector,
-                    clock=self.clock,
-                    owner=owner,
-                ),
+                    host=engine,
+                    skew_tolerance=timedelta(seconds=2),
+                    max_reprompts=max_reprompts,
+                )
             )
             return engine
 

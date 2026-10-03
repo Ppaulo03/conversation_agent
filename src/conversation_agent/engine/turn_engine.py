@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.models.actions import PendingAction
 from conversation_agent.core.models.conversation import (
     ConversationIdentity,
     ConversationMessage,
@@ -24,15 +25,19 @@ from conversation_agent.core.models.llm import (
     LLMRequest,
     LLMResponse,
     LLMStopReason,
+    LLMStructuredOutput,
+    LLMToolDefinition,
     ToolResultPart,
     llm_request_hash,
 )
-from conversation_agent.core.models.tooling import CapabilityRequest, ToolContext
+from conversation_agent.core.models.runtime import InboundRef
+from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
 from conversation_agent.engine.capability_pipeline import (
     CapabilityOutcome,
     CapabilityPipeline,
     Evaluation,
 )
+from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
@@ -62,6 +67,11 @@ class TurnEngine:
         self._clock = clock
         self._max_steps = max_steps
         self._executor: ToolStepExecutor = tool_executor or DirectToolExecutor(pipeline)
+        self._confirmation: ConfirmationStage | None = None
+
+    def attach_confirmation(self, stage: ConfirmationStage) -> None:
+        """Enable the protected-action confirmation stage (needs the ledger executor)."""
+        self._confirmation = stage
 
     async def process_turn(
         self,
@@ -72,6 +82,8 @@ class TurnEngine:
         *,
         guard: Callable[[], None] | None = None,
         late_event_ids: tuple[str, ...] = (),
+        pending: PendingAction | None = None,
+        inbound: tuple[InboundRef, ...] = (),
     ) -> TurnOutcome:
         """Process one turn. Re-running the same `turn_id` replays journaled steps (INV-014)."""
         cursor = TurnJournalCursor(self._journal, turn_id)
@@ -83,17 +95,48 @@ class TurnEngine:
                 "late_event_ids": list(late_event_ids),
             }
 
-        inbound = await cursor.step(
+        aggregated = await cursor.step(
             JournalStepType.INBOUND_AGGREGATED, stable_hash(user_text), aggregate
         )
-        reference_time = datetime.fromisoformat(inbound["turn_reference_time"])  # INV-018
+        reference_time = datetime.fromisoformat(aggregated["turn_reference_time"])  # INV-018
         system = build_system_prompt(self._agent.persona, reference_time, self._agent.timezone)
 
         working: list[LLMMessage] = [
             *self._history_messages(state),
             LLMMessage.text("user", user_text),
         ]
+        if pending is not None and self._confirmation is not None:
+            staged = await self._confirmation.run(
+                cursor,
+                StageInput(
+                    identity=identity,
+                    turn_id=turn_id,
+                    user_text=user_text,
+                    reference_time=reference_time,
+                    pending=pending,
+                    inbound=inbound,
+                    history=self._history_messages(state),
+                    system=system,
+                    guard=guard,
+                ),
+            )
+            if staged.reply is not None:  # handled by the confirmation protocol
+                return await self._finish(
+                    cursor,
+                    turn_id,
+                    state,
+                    user_text,
+                    staged.reply,
+                    {},
+                    (),
+                    staged.llm_calls,
+                    None,
+                    staged.reprompt_action_id,
+                )
+            # modify / not-a-reply: fall through and treat the message as a normal turn
+
         proposals: dict[str, CapabilityRequest] = {}
+        proposed: list[ProposedAction] = []
         llm_calls = 0
         reply: str | None = None
         halted: Literal["step_limit", "llm_truncated"] | None = None
@@ -101,7 +144,7 @@ class TurnEngine:
         for _ in range(self._max_steps):
             if guard is not None:
                 guard()  # safe boundary: a stale worker starts no new step
-            response = await self._llm_step(cursor, turn_id, system, working)
+            response = await self.llm_step(cursor, turn_id, system, working)
             llm_calls += 1
             if response.stop_reason is LLMStopReason.MAX_TOKENS:
                 # Truncated output (possibly cut-off tool arguments): never treat as a final answer.
@@ -117,7 +160,15 @@ class TurnEngine:
                 if guard is not None:
                     guard()
                 part = await self._capability_step(
-                    cursor, identity, turn_id, call.id, call.name, call.arguments, proposals, guard
+                    cursor,
+                    identity,
+                    turn_id,
+                    call.id,
+                    call.name,
+                    call.arguments,
+                    proposals,
+                    proposed,
+                    guard,
                 )
                 result_parts.append(part)
             working.append(LLMMessage(role="user", parts=tuple(result_parts)))
@@ -125,12 +176,44 @@ class TurnEngine:
         if reply is None and halted is None:
             halted = "step_limit"
         final_reply = reply or self._agent.fallback_reply
+        if proposed and self._agent.confirmation_prompt_enabled:
+            # The confirmation question is runtime-owned, not left to the model's wording.
+            line = self._agent.confirmation.prompt.format(
+                summary=proposed[-1].request.summary or proposed[-1].request.capability
+            )
+            final_reply = f"{reply}\n\n{line}" if reply else line
+            halted = None if reply or halted is None else halted
+        return await self._finish(
+            cursor,
+            turn_id,
+            state,
+            user_text,
+            final_reply,
+            proposals,
+            tuple(proposed),
+            llm_calls,
+            halted,
+            None,
+        )
+
+    async def _finish(
+        self,
+        cursor: TurnJournalCursor,
+        turn_id: str,
+        state: ConversationState,
+        user_text: str,
+        final_reply: str,
+        proposals: dict[str, CapabilityRequest],
+        proposed: tuple[ProposedAction, ...],
+        llm_calls: int,
+        halted: Literal["step_limit", "llm_truncated"] | None,
+        reprompt_action_id: str | None,
+    ) -> TurnOutcome:
         await cursor.step(
             JournalStepType.TURN_COMPLETED,
             None,
             _const({"reply": final_reply, "halted": halted}),
         )
-
         new_state = ConversationState(
             history=(
                 *state.history,
@@ -145,6 +228,8 @@ class TurnEngine:
             state=new_state,
             llm_calls=llm_calls,
             halted=halted,
+            proposed=proposed,
+            reprompt_action_id=reprompt_action_id,
         )
 
     def _history_messages(self, state: ConversationState) -> list[LLMMessage]:
@@ -153,11 +238,21 @@ class TurnEngine:
             window = window[1:]
         return [LLMMessage.text(m.role, m.text) for m in window]
 
-    async def _llm_step(
-        self, cursor: TurnJournalCursor, turn_id: str, system: str, messages: list[LLMMessage]
+    async def llm_step(
+        self,
+        cursor: TurnJournalCursor,
+        turn_id: str,
+        system: str,
+        messages: list[LLMMessage],
+        *,
+        tools: tuple[LLMToolDefinition, ...] | None = None,
+        structured: LLMStructuredOutput | None = None,
     ) -> LLMResponse:
         request = LLMRequest(
-            system=system, messages=tuple(messages), tools=self._pipeline.exposed_tools()
+            system=system,
+            messages=tuple(messages),
+            tools=self._pipeline.exposed_tools() if tools is None else tools,
+            structured_output=structured,
         )
         request_hash = llm_request_hash(request)
         llm_request_id = stable_hash(turn_id, cursor.next_index, request_hash)[:32]
@@ -184,6 +279,7 @@ class TurnEngine:
         tool_name: str,
         arguments: dict[str, Any],
         proposals: dict[str, CapabilityRequest],
+        proposed: list[ProposedAction],
         guard: Callable[[], None] | None,
     ) -> ToolResultPart:
         capability = self._pipeline.capability_name_for(tool_name)
@@ -235,6 +331,12 @@ class TurnEngine:
             )
         if outcome.proposal is not None:
             proposals[outcome.proposal.capability] = outcome.proposal
+            proposed.append(
+                ProposedAction(
+                    request=outcome.proposal,
+                    tool_name=self._pipeline.resolve(outcome.proposal.capability).tool.name,
+                )
+            )
             return ToolResultPart(
                 tool_call_id=tool_call_id, content=render_proposal(outcome.proposal)
             )

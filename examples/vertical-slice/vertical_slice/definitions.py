@@ -14,7 +14,7 @@ from typing import Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
-from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.definitions.agent import AgentDefinition, ConfirmationTexts
 from conversation_agent.core.definitions.binding import CapabilityBinding, ErrorMap, ErrorRule
 from conversation_agent.core.definitions.capability import CapabilityDefinition
 from conversation_agent.core.definitions.mapping import Const, Each, Ref
@@ -90,6 +90,7 @@ CREATE = CapabilityDefinition(
     output_model=CreateOutput,
     risk="irreversible",
     confirmation_required=True,
+    summary_template="Agendar {service_id} em {start_at} ({duration_minutes} min)",
 )
 
 
@@ -256,9 +257,9 @@ com a ferramenta; nunca invente horários.
 4. Se o cliente corrigir dia, horário ou serviço, atualize o que foi combinado e, se preciso, \
 consulte de novo.
 5. Quando o cliente escolher um horário que veio da ferramenta, registre a proposta de \
-agendamento (ferramenta de criação). Ela apenas REGISTRA uma proposta: nada é agendado ainda e \
-a confirmação final ainda não está habilitada nesta versão. Resuma a proposta ao cliente e \
-diga claramente que o agendamento ainda não foi efetivado.
+agendamento (ferramenta de criação). Ela apenas REGISTRA uma proposta: nada é agendado ainda. \
+O SISTEMA fará a pergunta de confirmação ao cliente logo após a sua mensagem; portanto resuma \
+a proposta em uma frase, diga que ainda não foi efetivada e NÃO peça confirmação por conta própria.
 6. Se uma ferramenta falhar, avise que não conseguiu consultar agora e peça para tentar de \
 novo mais tarde; nunca finja que deu certo.
 """
@@ -275,4 +276,12 @@ def build_agent() -> AgentDefinition:
         bindings=(AVAILABILITY_BINDING, CREATE_BINDING, LOOKUP_BINDING),
         allowed_capabilities=frozenset({"scheduling.availability", "scheduling.create"}),
         fallback_reply="Desculpe, não consegui concluir agora. Pode tentar novamente?",
+        confirmation=ConfirmationTexts(
+            prompt="Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar.",
+            reprompt="Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar.",
+            rejected="Tudo bem, cancelei o pedido.",
+            expired="Esse pedido expirou. Me diga de novo o que você gostaria de fazer.",
+            gave_up="Não consegui uma confirmação clara, então cancelei o pedido.",
+            executed_fallback="Seu pedido foi processado (situação: {status}).",
+        ),
     )

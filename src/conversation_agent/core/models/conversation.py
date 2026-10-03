@@ -6,7 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from conversation_agent.core.models.tooling import CapabilityRequest
+from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction
 
 
 class _Frozen(BaseModel):
@@ -46,3 +46,6 @@ class TurnOutcome(_Frozen):
     state: ConversationState
     llm_calls: int
     halted: Literal["step_limit", "llm_truncated"] | None = None
+    # Protected actions proposed this turn (-> PendingAction + prompt) / re-asked this turn.
+    proposed: tuple[ProposedAction, ...] = ()
+    reprompt_action_id: str | None = None

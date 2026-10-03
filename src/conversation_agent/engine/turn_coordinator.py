@@ -25,7 +25,12 @@ from conversation_agent.core.errors import (
     StaleWorkerError,
     ToolResultPendingError,
 )
-from conversation_agent.core.models.conversation import ConversationMessage, ConversationState
+from conversation_agent.core.models.actions import PendingAction
+from conversation_agent.core.models.conversation import (
+    ConversationMessage,
+    ConversationState,
+    TurnOutcome,
+)
 from conversation_agent.core.models.journal import JournalStepType
 from conversation_agent.core.models.runtime import (
     ConversationKey,
@@ -33,6 +38,7 @@ from conversation_agent.core.models.runtime import (
     InvocationStatus,
     OpenedTurn,
     OutboundMessage,
+    OutboxStatus,
     Ownership,
     ToolInvocation,
 )
@@ -44,7 +50,7 @@ from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.lease import ConversationLeaseStore
-from conversation_agent.ports.uow import ConversationUnitOfWorkFactory
+from conversation_agent.ports.uow import ConversationUnitOfWork, ConversationUnitOfWorkFactory
 
 log = logging.getLogger(__name__)
 
@@ -85,7 +91,9 @@ class TurnCoordinator:
         heartbeat_interval_seconds: float = 10.0,
         max_turn_attempts: int = 5,
         side_effect_notice: Callable[[list[ToolInvocation]], str | None] | None = None,
+        confirmation_ttl: timedelta = timedelta(minutes=30),
     ) -> None:
+        self._confirmation_ttl = confirmation_ttl
         self._side_effect_notice = side_effect_notice or default_side_effect_notice
         self._owner = owner
         self._leases = leases
@@ -147,6 +155,7 @@ class TurnCoordinator:
         async with self._uows.begin(fence) as uow:
             stored = await uow.state.load()
             opened = await uow.turns.open_next(self._owner, self._clock.now())
+            pending = await uow.actions.awaiting() if opened is not None else None
             await uow.commit()
         if opened is None:
             return "none"
@@ -165,6 +174,8 @@ class TurnCoordinator:
                 opened.turn_id,
                 guard=handle.ensure_active,
                 late_event_ids=opened.late_event_ids,
+                pending=pending,
+                inbound=opened.inbound,
             )
         except JournalDivergenceError as exc:
             log.error("ALERT journal divergence, turn failed closed: %s", exc)
@@ -187,11 +198,58 @@ class TurnCoordinator:
         await self._faults.hit("C16_after_apply_before_compose")
         async with self._uows.begin(fence) as uow:
             await uow.state.save(outcome.state, last_event_at=opened.last_event_at)
-            await uow.outbox.add(self._outbound(opened, outcome.reply))
+            await self._persist_reply(uow, opened, outcome)
             await uow.turns.complete(opened.turn_id)
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()
         return "completed"
+
+    async def _persist_reply(
+        self, uow: ConversationUnitOfWork, opened: OpenedTurn, outcome: TurnOutcome
+    ) -> None:
+        """The reply, and - in the SAME transaction - the PendingAction it asks the user to
+        confirm (or the re-prompt of an existing one), so the prompt row and the action it
+        refers to can never disagree (DESIGN §26.1)."""
+        message = self._outbound(opened, outcome.reply)
+        action_id: str | None = None
+        new_attempt = False
+        if outcome.proposed:
+            proposal = outcome.proposed[-1]  # a newer proposal supersedes earlier ones
+            identity = opened.identity
+            request = proposal.request
+            action = PendingAction(
+                tenant_id=identity.tenant_id,
+                conversation_id=identity.conversation_id,
+                action_id=stable_hash(
+                    identity.tenant_id,
+                    identity.conversation_id,
+                    "action",
+                    opened.turn_id,
+                    request.capability,
+                    request.args_hash,
+                )[:32],
+                capability=request.capability,
+                tool_name=proposal.tool_name,
+                request=request,
+                args_hash=request.args_hash,
+                protected_fields=tuple(sorted(request.args)),  # every argument is protected
+                summary=request.summary or request.capability,
+                created_from_turn=opened.turn_id,
+                expires_at=self._clock.now() + self._confirmation_ttl,
+            )
+            stored, created = await uow.actions.create_or_reuse(action)
+            action_id, new_attempt = stored.action_id, not created
+        elif outcome.reprompt_action_id is not None:
+            action_id, new_attempt = outcome.reprompt_action_id, True
+        if action_id is None:
+            await uow.outbox.add(message)
+            return
+        message = message.model_copy(update={"action_id": action_id})
+        for prompt in await uow.actions.prompts(action_id):
+            if prompt.status is OutboxStatus.UNKNOWN:  # replaced: no longer eligible
+                await uow.outbox.supersede(prompt.outbox_id)
+        await uow.outbox.add(message)
+        await uow.actions.set_prompt(action_id, message.outbox_id, new_attempt=new_attempt)
 
     async def _record_silent_turn(
         self,

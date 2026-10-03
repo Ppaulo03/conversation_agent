@@ -41,6 +41,11 @@ class ConversationIdentityConflictError(ConversationAgentError):
     reusing it elsewhere would mix two people's state, so the event is refused."""
 
 
+class ConfirmationConflictError(ConversationAgentError):
+    """The pending action changed (or the conversation left the bot) while confirming:
+    nothing is confirmed and nothing is prepared."""
+
+
 class FencingError(ConversationAgentError):
     """The conversation lease/epoch is no longer ours: no conversational mutation may commit
     (INV-009)."""

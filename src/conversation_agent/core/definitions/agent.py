@@ -13,6 +13,20 @@ from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 
 
+class ConfirmationTexts(BaseModel):
+    """Deterministic, runtime-owned wording for the confirmation protocol (one language per
+    agent). `{summary}` is the rendered action summary."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    prompt: str = "Please confirm: {summary}. Reply YES to confirm or NO to cancel."
+    reprompt: str = "I did not catch that. {summary} - reply YES to confirm or NO to cancel."
+    rejected: str = "Understood, I cancelled that request."
+    expired: str = "That request expired. Tell me again what you would like to do."
+    gave_up: str = "I could not get a clear confirmation, so I cancelled the request."
+    executed_fallback: str = "Your request was processed (status: {status})."
+
+
 class AgentDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -26,6 +40,8 @@ class AgentDefinition(BaseModel):
     allowed_capabilities: frozenset[str]
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
+    confirmation: ConfirmationTexts = ConfirmationTexts()
+    confirmation_prompt_enabled: bool = True
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
