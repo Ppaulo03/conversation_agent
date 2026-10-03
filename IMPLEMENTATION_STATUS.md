@@ -105,7 +105,10 @@ garante que não há vocabulário de scheduling no framework).
 9. **HTTPToolProvider (Fase 1)**: URL = `connection.base_url + path` relativo; paths absolutos/`//` rejeitados;
    path params com `quote(safe="")` e `.`/`..` rejeitados; sem redirects; headers `X-Tenant-Id/Conversation-Id/
    Trace-Id/Invocation-Id` vêm do `ToolContext`. Endurecimento completo (SSRF/DNS/secrets) é Fase 3.
-10. Python alvo `>=3.12` (testado em 3.13.1).
+10. **Provider real adicional: `OpenAICompatLLM` (Groq)** em `adapters/llm/openai_compat.py`, sobre `httpx`
+    (sem SDK). Passa o mesmo contrato LLM (`openai-compat-stub`); structured output via function call forçada.
+    CLI: `--provider groq|anthropic` (default groq, chave em `GROQ_API_KEY`).
+11. Python alvo `>=3.12` (testado em 3.13.1).
 
 ### Débitos conhecidos
 
@@ -123,7 +126,7 @@ garante que não há vocabulário de scheduling no framework).
 
 ### Questões encontradas
 
-- **Sem LLM real aqui**: o `AnthropicLLM` foi validado contra o contrato com client do SDK stubado e tipos reais do SDK;
+- **Sem LLM real validado ainda**: Groq e Anthropic foram validados contra o contrato com client do SDK stubado e tipos reais do SDK;
   `tests/integration/test_live_anthropic.py` (`uv run pytest -m integration`) cobre o contrato com a API real e uma sonda
   de qualidade (o modelo só oferece slots que a API tem). **Rode-o antes de fechar o GO definitivo**; é o único item do
   GO/NO-GO que não foi executado.

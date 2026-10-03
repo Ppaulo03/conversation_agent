@@ -17,8 +17,16 @@ uv sync
 uv run uvicorn scheduling_api.main:app --port 8001
 
 # terminal 2: the CLI agent (real provider)
-export ANTHROPIC_API_KEY=...        # PowerShell: $env:ANTHROPIC_API_KEY = "..."
-uv run python -m vertical_slice
+export GROQ_API_KEY=...             # PowerShell: $env:GROQ_API_KEY = "..."
+uv run python -m vertical_slice                       # default provider: groq
+# or: ANTHROPIC_API_KEY=... uv run python -m vertical_slice --provider anthropic
+```
+
+## Local services (Docker)
+
+```bash
+docker compose up -d      # PostgreSQL 16 on 127.0.0.1:5432 (used from Phase 2); see .env.example
+docker compose down       # add -v to drop the data volume
 ```
 
 ## Checks

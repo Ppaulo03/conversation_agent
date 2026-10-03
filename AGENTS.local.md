@@ -8,9 +8,11 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - Setup: `uv sync` · Testes: `uv run pytest` · Lint: `uv run ruff check . && uv run ruff format --check .`
 - Tipos: `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
 - API de referência: `uv run uvicorn scheduling_api.main:app --port 8001` · CLI: `uv run python -m vertical_slice`
-- Testes live (explícitos): `uv run pytest -m integration` (precisa `ANTHROPIC_API_KEY`).
+- Testes live (explícitos): `uv run pytest -m integration` (precisa `GROQ_API_KEY` ou `ANTHROPIC_API_KEY`).
+- Provider real preferido: Groq (`OpenAICompatLLM.groq`, API compatível com OpenAI); chaves só via ambiente/`.env` (git-ignored).
+- Postgres local: `docker compose up -d` (`docker-compose.yml`, credenciais dev em `.env.example`).
 - Docs normativos em `docs/` (sem sufixo `_v4`). Progresso e DoD em `IMPLEMENTATION_STATUS.md`.
-- O repositório não é um repo git ainda; GitFlow do AGENTS.md global vale quando for inicializado.
+- Repo git inicializado (`main` = baseline da Fase 1). Trabalho em `feature/*`; nada direto em `main`.
 
 ## Aprendizados acumulados
 
