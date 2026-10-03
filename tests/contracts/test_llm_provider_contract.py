@@ -5,6 +5,7 @@ The live provider runs the shared shape assertions in tests/integration (explici
 
 from __future__ import annotations
 
+import json
 from typing import Any, Protocol
 
 import anthropic
@@ -14,6 +15,7 @@ from anthropic.types import Message, TextBlock, ToolUseBlock, Usage
 
 from conversation_agent.adapters.llm.anthropic import AnthropicLLM
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
+from conversation_agent.adapters.llm.openai_compat import OpenAICompatLLM
 from conversation_agent.core.errors import LLMProviderError
 from conversation_agent.core.models.llm import (
     LLMMessage,
@@ -122,7 +124,60 @@ class AnthropicHarness:
         return self._llm(anthropic.APIConnectionError(request=request))
 
 
-@pytest.fixture(params=[FakeHarness, AnthropicHarness], ids=["fake", "anthropic-stub"])
+class OpenAICompatHarness:
+    """OpenAI-compatible server (e.g. Groq) simulated with an httpx MockTransport."""
+
+    def __init__(self) -> None:
+        self.sent: list[dict[str, Any]] = []
+
+    def _llm(self, status: int, body: dict[str, Any] | None = None, *, boom: bool = False):  # type: ignore[no-untyped-def]
+        def handler(request: httpx.Request) -> httpx.Response:
+            if boom:
+                raise httpx.ConnectError("down", request=request)
+            self.sent.append(json.loads(request.content))
+            return httpx.Response(status, json=body or {})
+
+        client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+        return OpenAICompatLLM(client, base_url="http://llm.test/v1", api_key="k", model="m")
+
+    @staticmethod
+    def _completion(message: dict[str, Any], finish: str) -> dict[str, Any]:
+        return {
+            "choices": [{"message": message, "finish_reason": finish}],
+            "usage": {"prompt_tokens": 7, "completion_tokens": 3},
+        }
+
+    def replying_text(self, text: str) -> LLMProvider:
+        body = self._completion({"role": "assistant", "content": text}, "stop")
+        return self._llm(200, body)
+
+    def _tool_call(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": name, "arguments": json.dumps(arguments)},
+                }
+            ],
+        }
+
+    def calling_tool(self, name: str, arguments: dict[str, Any]) -> LLMProvider:
+        return self._llm(200, self._completion(self._tool_call(name, arguments), "tool_calls"))
+
+    def replying_structured(self, data: dict[str, Any]) -> LLMProvider:
+        return self._llm(200, self._completion(self._tool_call("result", data), "tool_calls"))
+
+    def failing(self) -> LLMProvider:
+        return self._llm(0, boom=True)
+
+
+@pytest.fixture(
+    params=[FakeHarness, AnthropicHarness, OpenAICompatHarness],
+    ids=["fake", "anthropic-stub", "openai-compat-stub"],
+)
 def harness(request: pytest.FixtureRequest) -> Harness:
     return request.param()  # type: ignore[no-any-return]
 

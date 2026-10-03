@@ -1,6 +1,7 @@
 """Live provider checks. Explicit profile only: `uv run pytest -m integration`.
 
-Skipped (and excluded by default) without ANTHROPIC_API_KEY. Never part of the normal CI.
+Uses Groq when GROQ_API_KEY is set, else Anthropic when ANTHROPIC_API_KEY is set; skipped
+(and excluded by default) otherwise. Never part of the normal CI.
 """
 
 from __future__ import annotations
@@ -19,21 +20,30 @@ from contracts.llm_assertions import (
     simple_request,
 )
 from conversation_agent.adapters.llm.anthropic import AnthropicLLM
+from conversation_agent.adapters.llm.openai_compat import GROQ_DEFAULT_MODEL, OpenAICompatLLM
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import LLMToolDefinition
+from conversation_agent.ports.llm import LLMProvider
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.wiring import build_engine
 
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(not os.environ.get("ANTHROPIC_API_KEY"), reason="ANTHROPIC_API_KEY not set"),
+    pytest.mark.skipif(
+        not (os.environ.get("GROQ_API_KEY") or os.environ.get("ANTHROPIC_API_KEY")),
+        reason="no GROQ_API_KEY / ANTHROPIC_API_KEY set",
+    ),
 ]
 
-MODEL = os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
 
-
-def live_llm() -> AnthropicLLM:
-    return AnthropicLLM.from_api_key(os.environ["ANTHROPIC_API_KEY"], MODEL)
+def live_llm() -> LLMProvider:
+    if os.environ.get("GROQ_API_KEY"):
+        return OpenAICompatLLM.groq(
+            os.environ["GROQ_API_KEY"], os.environ.get("GROQ_MODEL", GROQ_DEFAULT_MODEL)
+        )
+    return AnthropicLLM.from_api_key(
+        os.environ["ANTHROPIC_API_KEY"], os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-5-5")
+    )
 
 
 async def test_live_provider_passes_the_same_shape_contract() -> None:
