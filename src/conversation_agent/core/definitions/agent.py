@@ -8,7 +8,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
-from conversation_agent.core.definitions.capability import CapabilityDefinition
+from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 
@@ -40,6 +40,7 @@ class AgentDefinition(BaseModel):
     allowed_capabilities: frozenset[str]
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
+    max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()
     confirmation_prompt_enabled: bool = True
 
@@ -56,6 +57,17 @@ class AgentDefinition(BaseModel):
                 raise DefinitionError(f"binding references unknown capability {b.capability!r}")
             if b.tool not in tools:
                 raise DefinitionError(f"binding references unknown tool {b.tool!r}")
+        by_cap = {c.name: c for c in self.capabilities}
+        by_tool = {t.name: t for t in self.tools}
+        for b in self.bindings:
+            floor = max(
+                (by_cap[b.capability].risk, by_tool[b.tool].risk), key=lambda r: RISK_ORDER[r]
+            )
+            if b.risk is not None and RISK_ORDER[b.risk] < RISK_ORDER[floor]:
+                raise DefinitionError(
+                    f"binding {b.capability!r}->{b.tool!r} declares risk {b.risk!r}, lower than "
+                    f"{floor!r}: a binding can raise protection but never lower it"
+                )
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")

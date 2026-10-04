@@ -42,6 +42,21 @@ class RecoverySpec(BaseModel):
     absent_codes: tuple[str, ...] = ()  # lookup error codes that prove the operation is absent
 
 
+class RetryPolicy(BaseModel):
+    """Technical retry of ONE operation (never a new semantic attempt).
+
+    `max_attempts > 1` on a write/irreversible tool is only valid with idempotency support and
+    `same_idempotency_key` (INV-021): a retry must be indistinguishable from the first request
+    to the external system. Ambiguous outcomes (`unknown`) are never retried here (INV-006).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_attempts: int = 1
+    mode: Literal["none", "same_idempotency_key"] = "none"
+    delay_seconds: float = 0.0
+
+
 class ToolDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -56,12 +71,31 @@ class ToolDefinition(BaseModel):
     connection: str | None = None
     http: HTTPRequestSpec | None = None
     idempotency_supported: bool = False
+    retry: RetryPolicy = RetryPolicy()
     recovery: RecoverySpec | None = None  # non-read tools default to human_handoff
 
     @model_validator(mode="after")
     def _http_requires_connection_and_spec(self) -> ToolDefinition:
         if self.provider == "http" and (self.http is None or self.connection is None):
             raise ValueError(f"http tool {self.name!r} requires `http` spec and `connection`")
+        return self
+
+    @model_validator(mode="after")
+    def _retry_rules(self) -> ToolDefinition:
+        """The "compiler" rules for retries, enforced when the definition is built."""
+        r = self.retry
+        if r.max_attempts < 1:
+            raise ValueError(f"{self.name!r}: retry.max_attempts must be >= 1")
+        if r.max_attempts > 1 and self.risk != "read":
+            if not self.idempotency_supported:
+                raise ValueError(
+                    f"{self.name!r}: a {self.risk} tool cannot retry without idempotency support"
+                )
+            if r.mode != "same_idempotency_key":
+                raise ValueError(
+                    f"{self.name!r}: a {self.risk} tool may only retry with the SAME "
+                    "idempotency key"
+                )
         return self
 
     @model_validator(mode="after")

@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from conftest import ApiHandle
-from conversation_agent.adapters.tools.http import HTTPConnection, HTTPToolProvider
+from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.definitions.tool import HTTPRequestSpec
 from conversation_agent.core.models.tooling import ToolResult
@@ -19,7 +19,7 @@ from .test_tool_provider_contract import CONTEXT, availability_binding, tool_arg
 
 
 def provider_for(base_url: str) -> HTTPToolProvider:
-    return HTTPToolProvider({CONNECTION: HTTPConnection(base_url=base_url)})
+    return HTTPToolProvider.static({CONNECTION: local_dev_connection(base_url)})
 
 
 def create_binding() -> ResolvedToolBinding:
@@ -155,12 +155,18 @@ async def test_missing_path_parameter_is_a_configuration_error(api: ApiHandle) -
     assert api.requests == []
 
 
+async def _loopback(host: str, port: int) -> list[str]:
+    return ["127.0.0.1"]
+
+
 async def test_does_not_follow_redirects() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(302, headers={"location": "http://evil.example/"})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler), follow_redirects=False)
-    provider = HTTPToolProvider({CONNECTION: HTTPConnection(base_url="http://x")}, client=client)
+    provider = HTTPToolProvider.static(
+        {CONNECTION: local_dev_connection("http://x")}, client=client, resolve_host=_loopback
+    )
     result: ToolResult = await provider.execute(availability_binding(), tool_args(), CONTEXT)
     assert result.status == "technical_error"
     assert result.error is not None and result.error.code == "EXTERNAL_UNEXPECTED_STATUS"

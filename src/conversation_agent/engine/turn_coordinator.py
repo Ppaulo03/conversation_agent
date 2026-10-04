@@ -42,6 +42,7 @@ from conversation_agent.core.models.runtime import (
     Ownership,
     ToolInvocation,
 )
+from conversation_agent.core.redaction import redact
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.turn_engine import TurnEngine
@@ -189,7 +190,7 @@ class TurnCoordinator:
                 inbound=opened.inbound,
             )
         except JournalDivergenceError as exc:
-            log.error("ALERT journal divergence, turn failed closed: %s", exc)
+            log.error("ALERT journal divergence, turn failed closed: %s", redact(str(exc)))
             await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
             return "completed"
         except ToolResultPendingError:
@@ -200,7 +201,10 @@ class TurnCoordinator:
                 await uow.commit()
             if failures >= self._max_attempts:
                 log.error(
-                    "ALERT turn %s failed after %s attempts: %s", opened.turn_id, failures, exc
+                    "ALERT turn %s failed after %s attempts: %s",
+                    opened.turn_id,
+                    failures,
+                    redact(str(exc)),
                 )
                 await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
                 return "completed"

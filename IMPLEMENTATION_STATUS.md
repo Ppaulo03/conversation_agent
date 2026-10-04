@@ -237,3 +237,57 @@ Status: **PASS** (todos os achados verificados contra o código; os 3 P0 corrigi
 Débitos remanescentes: `AgentRegistry`/versão histórica por invocation (hoje o fingerprint falha fechado em vez de resolver a
 versão antiga); uma `session_id` por conversa (o modelo conceitual admite várias); `blocked_on_invocation_id`/wake explícito
 em vez de polling do turno em espera; autoridade de tempo do `LeaseHandle` local ainda usa o `Clock` da aplicação.
+
+
+## Phase 3 — Protected actions, confirmation e security
+
+Status: **PASS**. DoD verificado contra PostgreSQL 16 real e a API de referência real; 504 testes.
+
+DoD (`ROADMAP.md` Fase 3):
+
+- [✓] protected action nunca executa sem prompt elegível + confirmação válida — `test_a_yes_before_the_prompt_was_accepted_never_confirms`, `test_protected_action_has_persistent_action_id_and_scoped_confirmation`
+- [✓] "sim" anterior ao prompt ou ambíguo não confirma — `test_a_yes_that_predates_the_prompt_*`, `test_inside_the_skew_window_*`, `test_C13_confirm_while_prompt_ambiguous` (SENDING/QUEUED/UNKNOWN)
+- [✓] "sim, mas..." invalida a ação anterior — `test_changed_protected_args_invalidate_confirmation` (INV-010)
+- [✓] CONFIRMED nunca existe sem PREPARED após commit — `C02`, `C03`, `test_confirmed_never_exists_without_a_prepared_invocation` (INV-005)
+- [✓] FAILED terminal exige nova tentativa semântica (novo `action_id`) — `test_a_failed_attempt_needs_a_new_action_never_a_retry_of_the_same` (INV-015)
+- [✓] timeout/5xx de write ambíguo vira UNKNOWN, nunca retry cego — `test_ambiguous_write_in_a_confirmed_action_becomes_unknown_then_reconciles`, `test_unknown_is_never_retried_*`
+- [✓] retry de write sem idempotência é rejeitado pelo compiler — `ToolDefinition` (`RetryPolicy`) + `test_a_write_cannot_retry_without_idempotency_support` (INV-021)
+- [✓] chaos **C01, C02, C03, C13** passam (meta-teste exige os 15 casos das Fases 2 e 3)
+
+Implementado: `PendingAction`/`ActionConfirmation` (migration 0005, `pending_actions` com UNIQUE `(tenant, action_id)` e no
+máximo uma ação aguardando por conversa); evidência de canal no inbox (`reply_to_provider_message_id`, `provider_occurred_at`);
+interpretação por regras + fallback LLM validado; `assess_eligibility` (reply-to → domínio de tempo do canal + skew →
+ambíguo); `ConfirmationStage` (confirm+prepare atômico, reject, modify, re-prompt limitado, expiração, execução pelo ledger,
+composição com fallback determinístico); `PolicyGate` com regras compostas (allowlist por tenant que só estreita, ownership,
+orçamento de chamadas, loop, limite numérico, janela de horário); guardrails (orçamento de tokens, truncamento de resultado,
+redaction); `RetryPolicy` + regras de compilação + retry seguro no `ToolRunner`; `ConnectionResolver`/`SecretProvider` e
+`HTTPToolProvider` hardened (HTTPS, allowlist de host, SSRF/redes privadas, pin de IP contra DNS rebinding, sem redirects,
+limites de request/response, timeout só pode ser reduzido, credencial injetada na chamada e nunca devolvida).
+
+### Decisões de arquitetura da Fase 3 (persistência/confirmação/retry/delivery)
+
+1. **PendingAction nasce na mesma transação do prompt** (outbox com `action_id`); `action_id` determinístico por turno.
+2. **A pergunta de confirmação é do runtime** (`ConfirmationTexts`), anexada à resposta do modelo; o modelo é instruído a não pedir.
+3. **Decisão + elegibilidade são journaladas** (`CONFIRMATION_DECISION`) e o `action_id` vai no payload: um turno retomado
+   volta ao mesmo estágio mesmo com a ação já `CONFIRMED` (bug real encontrado pelo `C03`).
+4. **Só `confirm` exige prompt elegível**; `reject`/`modify` não precisam de prova. `BEFORE_PROMPT`/`UNRELATED_REPLY`
+   seguem como mensagem normal; `AMBIGUOUS`/`PROMPT_NOT_ACCEPTED`/`unclear` re-perguntam (novo `outbox_id`, UNKNOWN → SUPERSEDED).
+5. **Confirmação por LLM nunca é suficiente sozinha**: confiança mínima (0,85), saída malformada = `unclear`, e ainda
+   exige prompt elegível e `args_hash` inalterado dentro da transação.
+6. **`invocation_id` de ação protegida = `hash(tenant, conversa, action_id)`** (§9.1), independente do turno.
+7. **Depois do side effect o turno nunca falha por composição** (fallback determinístico).
+8. **Retry**: write só com idempotência + mesma chave, e só para falha que provadamente não chegou ao sistema; `unknown` nunca.
+9. **HTTP**: o IP validado é o IP usado (Host/SNI preservam o nome); qualquer resposta DNS mista/privada rejeita o destino;
+   `send(..., follow_redirects=False)` é forçado mesmo com client injetado (bug encontrado em teste).
+10. `PolicyGate.evaluate` aceita `PolicyContext` (tenant, ownership, contadores do turno); `refine` roda regras que precisam do
+    request validado e um DENY ali impede até a proposta.
+
+### Débitos conhecidos (Fase 3)
+
+- Rate limit por contato/tenant/conexão e circuit breakers/backpressure por provider (guardrails operacionais restantes) —
+  Fases 7/10. Expiração de `PendingAction` é verificada no uso (sem timer dedicado no scheduler ainda).
+- Reconciliação de prompt `UNKNOWN` por consulta ao canal (hoje: re-prompt + SUPERSEDED) depende do MessageSender real (Fase 6).
+- `confirmation_clock_skew_tolerance` é parâmetro do estágio (2 s); falta configuração por canal.
+- Uma única `PendingAction` aguardando por conversa (índice único); múltiplas ações simultâneas ficam para depois.
+- O resumo de confirmação mostra os argumentos como o modelo os deu (ISO com offset); formatação amigável por capability fica
+  para os Flows (Fase 4).

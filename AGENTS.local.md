@@ -43,3 +43,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - Cada caso de chaos exigido tem um `test_Cxx_*` nomeado; `tests/architecture/test_chaos_gates.py` falha se faltar algum.
 - PowerShell: `R` é alias de `Invoke-History` (não use como nome de função); `.Replace()` multilinha falha em arquivos
   CRLF — use a ferramenta Edit; `;` não interrompe um `git commit` após teste vermelho (encadeie com `if ($?)`).
+- Confirmação: `TRUNCATE` dos fixtures precisa listar toda tabela nova (uma `pending_actions` vazando entre testes sequestra o turno
+  seguinte). Um turno retomado deve voltar ao estágio já journalado (ver `find_step(CONFIRMATION_DECISION)` no coordinator).
+- `httpx.AsyncClient.send` herda `follow_redirects` do client injetado: sempre passe `follow_redirects=False` no provider.
+- PowerShell 5.1: `String.Replace` não aceita 3 argumentos e `"\n"` entre aspas duplas é literal; use `` `n `` ou a ferramenta Edit.

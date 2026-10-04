@@ -257,10 +257,10 @@ async def test_s5_unreachable_api_does_not_invent_success_or_availability(api: A
 
 async def test_s5_business_error_is_surfaced_with_its_code(api: ApiHandle) -> None:
     """API 404 SERVICE_NOT_FOUND -> binding error_map -> canonical business_error."""
-    from conversation_agent.adapters.tools.http import HTTPConnection, HTTPToolProvider
+    from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
     from vertical_slice.definitions import CONNECTION
 
-    provider = HTTPToolProvider({CONNECTION: HTTPConnection(base_url=api.base_url)})
+    provider = HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
     api.state.fault = None
     llm = FakeLLM([availability_call("haircut", "2026-10-06"), text_response("ok")])
     engine, _, _ = build_engine(

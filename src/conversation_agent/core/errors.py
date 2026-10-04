@@ -46,6 +46,14 @@ class ConfirmationConflictError(ConversationAgentError):
     nothing is confirmed and nothing is prepared."""
 
 
+class ConnectionNotFoundError(ConversationAgentError):
+    """The tenant has no connection with that id (a configuration problem)."""
+
+
+class SecretNotFoundError(ConversationAgentError):
+    """The secret reference could not be resolved (message never contains secret material)."""
+
+
 class FencingError(ConversationAgentError):
     """The conversation lease/epoch is no longer ours: no conversational mutation may commit
     (INV-009)."""

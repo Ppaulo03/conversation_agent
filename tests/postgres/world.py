@@ -20,7 +20,7 @@ from conversation_agent.adapters.postgres.scheduler import PostgresScheduler
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
 from conversation_agent.adapters.senders.fake import FakeMessageSender
 from conversation_agent.adapters.tools.fake import FakeToolProvider
-from conversation_agent.adapters.tools.http import HTTPConnection, HTTPToolProvider
+from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.runtime import ConversationKey, FenceToken, InboundEvent
 from conversation_agent.core.models.tooling import PolicyDecision, ToolResult
@@ -28,6 +28,7 @@ from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.confirmation_stage import ConfirmationStage
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
+from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.reconciliation import RECONCILE_EVENT, ReconciliationWorker
 from conversation_agent.engine.scheduler_worker import SchedulerWorker
 from conversation_agent.engine.side_effects import LedgerToolExecutor
@@ -51,9 +52,12 @@ class AllowWrites(PolicyGate):
     confirmation machinery so the Phase 2 side-effect protocol can be exercised end to end."""
 
     def evaluate(
-        self, capability_name: str, resolved: ResolvedToolBinding | None
+        self,
+        capability_name: str,
+        resolved: ResolvedToolBinding | None,
+        ctx: PolicyContext | None = None,
     ) -> PolicyDecision:
-        decision = super().evaluate(capability_name, resolved)
+        decision = super().evaluate(capability_name, resolved, ctx)
         if decision.outcome == "require_confirmation":
             return decision.model_copy(update={"outcome": "allow", "reason": "test_allow_write"})
         return decision
@@ -103,7 +107,7 @@ class World:
 
     @staticmethod
     def http_provider(base_url: str) -> HTTPToolProvider:
-        return HTTPToolProvider({CONNECTION: HTTPConnection(base_url=base_url)})
+        return HTTPToolProvider.static({CONNECTION: local_dev_connection(base_url)})
 
     def pipeline(
         self,

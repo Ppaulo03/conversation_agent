@@ -27,10 +27,20 @@ def build_system_prompt(persona: str, reference_time: datetime, timezone: str) -
     return f"{persona.strip()}\n\n{rules}"
 
 
-def render_result(result: CapabilityResult) -> str:
+MAX_RESULT_CHARS = 8000
+
+
+def render_result(result: CapabilityResult, max_chars: int = MAX_RESULT_CHARS) -> str:
+    """What the model sees of a tool result. Oversized data is replaced by a marker: tool output
+    is data, and unbounded data is a prompt-size and cost hazard (DESIGN §11.1)."""
     body: dict[str, object] = {"status": result.status}
     if result.data is not None:
-        body["data"] = result.data
+        encoded = json.dumps(result.data, ensure_ascii=False)
+        if len(encoded) > max_chars:
+            body["data_truncated"] = True
+            body["data_preview"] = encoded[:max_chars]
+        else:
+            body["data"] = result.data
     if result.error is not None:
         body["error"] = {
             "code": result.error.code,

@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 
 from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
-from conversation_agent.adapters.tools.http import HTTPConnection, HTTPToolProvider
+from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
@@ -30,7 +30,7 @@ def build_pipeline(
     agent = build_agent()
     http: HTTPToolProvider | None = None
     if providers is None:
-        http = HTTPToolProvider({CONNECTION: HTTPConnection(base_url=api_base_url)})
+        http = HTTPToolProvider.static({CONNECTION: local_dev_connection(api_base_url)})
         providers = {"http": http}
     gate = policy or PolicyGate(agent.allowed_capabilities)
     return CapabilityPipeline(agent, gate, ToolRunner(providers)), agent, http

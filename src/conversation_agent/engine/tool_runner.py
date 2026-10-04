@@ -11,6 +11,7 @@ Two phases, so that an operation can be frozen between them (INV-023):
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -86,6 +87,35 @@ class ToolRunner:
         return await self.run_frozen(resolved, intent, context)
 
     async def run_frozen(
+        self, resolved: ResolvedToolBinding, intent: ExecutionIntent, context: ToolContext
+    ) -> CapabilityResult:
+        """Run the frozen operation, retrying technically when (and only when) that is safe."""
+        retry = resolved.tool.retry
+        result = await self._run_once(resolved, intent, context)
+        attempt = 1
+        while attempt < retry.max_attempts and self._safe_to_retry(resolved, result):
+            attempt += 1
+            if retry.delay_seconds > 0:
+                await asyncio.sleep(retry.delay_seconds)
+            result = await self._run_once(resolved, intent, context)  # same intent, same key
+        return result
+
+    @staticmethod
+    def _safe_to_retry(resolved: ResolvedToolBinding, result: CapabilityResult) -> bool:
+        """`unknown` never; a write only for a failure that provably never reached the system
+        (technical_error, retryable) AND only with idempotency + same key (INV-006, INV-021)."""
+        if result.error is None or not result.error.retryable:
+            return False
+        if resolved.effective_risk == "read":
+            return result.status in ("technical_error", "timeout")
+        tool = resolved.tool
+        return (
+            result.status == "technical_error"
+            and tool.idempotency_supported
+            and tool.retry.mode == "same_idempotency_key"
+        )
+
+    async def _run_once(
         self, resolved: ResolvedToolBinding, intent: ExecutionIntent, context: ToolContext
     ) -> CapabilityResult:
         provider = self._providers.get(resolved.tool.provider)

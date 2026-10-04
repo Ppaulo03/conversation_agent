@@ -10,7 +10,7 @@ import pytest
 
 from conftest import ApiHandle
 from conversation_agent.adapters.tools.fake import FakeToolProvider
-from conversation_agent.adapters.tools.http import HTTPConnection, HTTPToolProvider
+from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.tooling import ToolContext, ToolError, ToolResult
 from conversation_agent.ports.tool_provider import ToolProvider
@@ -84,7 +84,7 @@ class HttpHarness:
         self._api = api
 
     def _provider(self, base_url: str) -> HTTPToolProvider:
-        return HTTPToolProvider({CONNECTION: HTTPConnection(base_url=base_url)})
+        return HTTPToolProvider.static({CONNECTION: local_dev_connection(base_url)})
 
     def success(self) -> Case:
         return Case(self._provider(self._api.base_url), tool_args())

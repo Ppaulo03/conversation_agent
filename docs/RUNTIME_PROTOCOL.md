@@ -205,6 +205,32 @@ occurred > accepted + tolerance -> elegível
 
 `SENDING`, `QUEUED` e `UNKNOWN` nunca autorizam protected action.
 
+### Implementação da confirmação (Fase 3)
+
+- **Criação.** Um `REQUIRE_CONFIRMATION` do PolicyGate vira `PendingAction` na **mesma** transação que
+  persiste o prompt na Outbox (`outbox.action_id`, `latest_prompt_outbox_id`). `action_id` é determinístico
+  (`hash(tenant, conversa, turno, capability, args_hash)`), logo estável no replay. Uma proposta equivalente
+  (mesma capability + `args_hash`) reaproveita a ação; uma proposta diferente **invalida** a anterior (INV-010).
+  A pergunta de confirmação é do runtime (`ConfirmationTexts.prompt`), não do texto do modelo.
+- **Interpretação.** Regras determinísticas e conservadoras primeiro (`sim` confirma; `sim, mas às 16h` é
+  `modify`, nunca `confirm`); só então o fallback LLM com saída estruturada, validado pelo runtime
+  (confiança mínima para `confirm`; saída malformada = `unclear`). A decisão e a elegibilidade são
+  **journaladas** (`CONFIRMATION_DECISION`), então o replay não reavalia contra um estado de storage diferente.
+- **Elegibilidade (INV-022).** `reply_to_provider_message_id` do prompt → ordenação do mesmo domínio do canal
+  com tolerância de skew (`< accepted - tol` inelegível, dentro de `±tol` ambíguo, `> accepted + tol` elegível)
+  → sem evidência comparável = ambíguo. Apenas prompt `ACCEPTED` é elegível. A rajada só é elegível se
+  **todas** as mensagens forem.
+- **Confirmar.** Uma transação: `ActionConfirmation` + `PendingAction CONFIRMED` + `ToolInvocation PREPARED`
+  (`invocation_id = hash(tenant, conversa, action_id)`) + journal. Pontos de falha `C01` (antes), `C02`
+  (dentro, rollback total) e `C03` (depois). Em seguida B/C1/C2 pelo ledger. Um turno retomado continua no
+  estágio que já journalou, mesmo que a ação já esteja `CONFIRMED`.
+- **Não elegível / ambíguo / `unclear`** → re-prompt com **novo** `outbox_id`, `confirmation_attempts+1`
+  (limite configurável), prompt `UNKNOWN` anterior vira `SUPERSEDED` (C13). `BEFORE_PROMPT`/`UNRELATED_REPLY`
+  não são resposta ao prompt: a mensagem segue como turno normal. Ação expirada (`expires_at` vs
+  `turn_reference_time`) → `EXPIRED`.
+- **Depois do side effect** o turno nunca falha por causa da composição: se o LLM falhar, a resposta é a
+  mensagem determinística `executed_fallback`.
+
 ## 8. Outbox / RelayPlane
 
 Mapeamento mínimo:

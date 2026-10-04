@@ -30,7 +30,7 @@ from conversation_agent.core.models.llm import (
     ToolResultPart,
     llm_request_hash,
 )
-from conversation_agent.core.models.runtime import InboundRef
+from conversation_agent.core.models.runtime import InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
 from conversation_agent.engine.capability_pipeline import (
     CapabilityOutcome,
@@ -39,6 +39,7 @@ from conversation_agent.engine.capability_pipeline import (
 )
 from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
 from conversation_agent.engine.journal_steps import TurnJournalCursor
+from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
 from conversation_agent.ports.clock import Clock
@@ -139,13 +140,20 @@ class TurnEngine:
         proposed: list[ProposedAction] = []
         llm_calls = 0
         reply: str | None = None
-        halted: Literal["step_limit", "llm_truncated"] | None = None
+        halted: Literal["step_limit", "llm_truncated", "token_budget"] | None = None
+        tokens_used = 0
+        policy_state = _PolicyTurnState()
 
         for _ in range(self._max_steps):
             if guard is not None:
                 guard()  # safe boundary: a stale worker starts no new step
             response = await self.llm_step(cursor, turn_id, system, working)
             llm_calls += 1
+            tokens_used += response.usage.input_tokens + response.usage.output_tokens
+            budget = self._agent.max_tokens_per_turn
+            if budget is not None and tokens_used > budget:
+                halted = "token_budget"  # guardrail: no more tool calls on an exhausted budget
+                break
             if response.stop_reason is LLMStopReason.MAX_TOKENS:
                 # Truncated output (possibly cut-off tool arguments): never treat as a final answer.
                 halted = "llm_truncated"
@@ -169,6 +177,8 @@ class TurnEngine:
                     proposals,
                     proposed,
                     guard,
+                    policy_state,
+                    reference_time,
                 )
                 result_parts.append(part)
             working.append(LLMMessage(role="user", parts=tuple(result_parts)))
@@ -206,7 +216,7 @@ class TurnEngine:
         proposals: dict[str, CapabilityRequest],
         proposed: tuple[ProposedAction, ...],
         llm_calls: int,
-        halted: Literal["step_limit", "llm_truncated"] | None,
+        halted: Literal["step_limit", "llm_truncated", "token_budget"] | None,
         reprompt_action_id: str | None,
     ) -> TurnOutcome:
         await cursor.step(
@@ -281,6 +291,8 @@ class TurnEngine:
         proposals: dict[str, CapabilityRequest],
         proposed: list[ProposedAction],
         guard: Callable[[], None] | None,
+        policy_state: _PolicyTurnState,
+        reference_time: datetime,
     ) -> ToolResultPart:
         capability = self._pipeline.capability_name_for(tool_name)
         # tool_call_id is ephemeral and deliberately excluded from every identity (§9.1).
@@ -295,11 +307,22 @@ class TurnEngine:
         )
 
         async def decide() -> dict[str, Any]:
-            return self._pipeline.evaluate(capability, arguments).model_dump(mode="json")
+            # Runtime-known facts only; the counters are rebuilt identically on replay.
+            ctx = PolicyContext(
+                tenant_id=identity.tenant_id,
+                ownership=Ownership.BOT,
+                tool_calls_this_turn=policy_state.calls,
+                recent_args_hashes=tuple(policy_state.hashes),
+                now=reference_time,
+            )
+            return self._pipeline.evaluate(capability, arguments, ctx).model_dump(mode="json")
 
         evaluation = Evaluation.model_validate(
             await cursor.step(JournalStepType.POLICY_DECISION, request_hash, decide)
         )
+        policy_state.calls += 1
+        if evaluation.request is not None:
+            policy_state.hashes.append(evaluation.request.args_hash)
 
         context = self._tool_context(identity, turn_id, logical_step_id, evaluation)
         if evaluation.decision.outcome == "allow" and evaluation.request is not None:
@@ -370,6 +393,14 @@ class TurnEngine:
             )[:32],
             trace_id=f"trace-{turn_id}",
         )
+
+
+class _PolicyTurnState:
+    """Per-turn counters feeding the PolicyGate (tool-call budget, loop detection)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+        self.hashes: list[str] = []
 
 
 def _const(payload: dict[str, Any]) -> Callable[[], Awaitable[dict[str, Any]]]:

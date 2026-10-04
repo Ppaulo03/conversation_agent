@@ -22,6 +22,7 @@ from conversation_agent.core.models.tooling import (
     ToolError,
 )
 from conversation_agent.engine.policy_gate import PolicyGate
+from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.tools.intent import binding_fingerprint
 from conversation_agent.tools.requests import RequestRejected, build_capability_request
@@ -145,15 +146,20 @@ class CapabilityPipeline:
         """Unknown names are passed through so the PolicyGate denies them."""
         return self._by_tool_name.get(llm_tool_name_, llm_tool_name_)
 
-    def evaluate(self, capability_name: str, raw_args: dict[str, Any]) -> Evaluation:
+    def evaluate(
+        self, capability_name: str, raw_args: dict[str, Any], ctx: PolicyContext | None = None
+    ) -> Evaluation:
         resolved = self._agent.resolve(capability_name)
-        decision = self._policy.evaluate(capability_name, resolved)
+        decision = self._policy.evaluate(capability_name, resolved, ctx)
         if decision.outcome == "deny" or resolved is None:
             return Evaluation(capability=capability_name, decision=decision)
         try:
             request = build_capability_request(resolved.capability, raw_args)
         except RequestRejected as exc:
             return Evaluation(capability=capability_name, decision=decision, rejection=exc.error)
+        decision = self._policy.refine(decision, request, resolved, ctx)  # needs the request
+        if decision.outcome == "deny":
+            return Evaluation(capability=capability_name, decision=decision)
         return Evaluation(capability=capability_name, decision=decision, request=request)
 
     async def execute(self, evaluation: Evaluation, context: ToolContext) -> CapabilityOutcome:

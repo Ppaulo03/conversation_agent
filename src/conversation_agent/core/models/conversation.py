@@ -45,7 +45,7 @@ class TurnOutcome(_Frozen):
     reply: str
     state: ConversationState
     llm_calls: int
-    halted: Literal["step_limit", "llm_truncated"] | None = None
+    halted: Literal["step_limit", "llm_truncated", "token_budget"] | None = None
     # Protected actions proposed this turn (-> PendingAction + prompt) / re-asked this turn.
     proposed: tuple[ProposedAction, ...] = ()
     reprompt_action_id: str | None = None
