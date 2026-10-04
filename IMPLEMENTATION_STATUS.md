@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5.3 — Fase 5 encerrada (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 5.4 — Fase 5 fechada, pronta para a borda (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -495,3 +495,26 @@ Status: **PASS** (achados reproduzidos antes de corrigir). 792 testes. **Fase 5 
 | Média/baixa: `manifest_digest` não persistido | coluna `manifest_digest` (migration 0010, tabela recriada) conferida no load: metadado alterado com semântica igual é detectado | `test_changed_manifest_metadata_is_detected_even_when_the_semantics_match` |
 
 Limpeza de artefato (`archive.zip`, `__pycache__`, `.pytest_cache`): o repositório já os ignora via `.gitignore`; o zip é gerado fora do git.
+
+
+## Phase 5.4 — autoridade de tempo, headers/URL do HTTP e fechamento do type system do compiler
+
+Status: **PASS** (achados reproduzidos antes de corrigir). Novas invariantes **INV-032** e **INV-033**.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| Alta: o default efetivo da coordenação era o relógio local do worker (`coordination or CoordinationTime(db, clock)`) | `CoordinationTime(db)` é só `clock_timestamp()` e é o default de lease/UoW/ledger/outbox/scheduler; `FixedCoordinationTime(clock)` é o stand-in de teste, injetado explicitamente; `ports/coordination.py` define o contrato | `test_stores_default_to_the_database_clock_not_the_workers_clock` |
+| Alta: `LeaseHandle.ensure_active` comparava `clock.now()` local com `expires_at` do banco | o lease carrega `observed_at` (hora da autoridade); a checagem estima o tempo da autoridade = leitura + tempo monotônico decorrido | `test_a_workers_skewed_wall_clock_*`, `test_a_lease_expires_by_elapsed_authority_time_*` |
+| (achado adicional da mesma classe) backoff da reconciliation usava o relógio da aplicação para `due_at` consumido por quem lê o relógio do banco | `ReconciliationWorker` recebe `coordination` e agenda com ele | `test_reconciliation_backoff_is_a_coordination_timestamp` |
+| P0 `AuthSpec.header` podia sobrescrever `Idempotency-Key`, `Host`, `X-*` | `RUNTIME_OWNED_HEADERS` + validação de nome; defesa em profundidade no adapter (`INVALID_AUTH_CONFIGURATION`, nada enviado) | `test_auth_cannot_name_a_runtime_owned_header`, `test_even_a_forged_auth_spec_never_overwrites_the_idempotency_key` |
+| P0 `base_url` aceitava userinfo/query/fragment (fora do fingerprint) | só scheme+host+porta+path; credenciais vêm do `SecretProvider`, query do spec da tool | `test_base_url_is_only_scheme_host_port_and_path` |
+| Alta: type checker perdia nulabilidade e uniões (`ANY`) | lattice com `nullable`, `union` e `null`: `str|null` não preenche campo não-nulo; valores heterogêneos viram união; caminho por objeto opcional é anulável; enum map/transform sobre origem anulável exigem `default`; **o runtime agora aplica `default` também a `null`** (um model dump escreve opcionais como null) | `test_an_optional_tool_field_cannot_fill_*`, `test_a_default_makes_a_nullable_source_safe`, `test_null_only_fits_a_nullable_target`, `test_values_of_different_types_are_a_union_*`, `test_a_transform_or_enum_map_cannot_read_a_nullable_source_*`, `test_the_runtime_falls_back_to_the_default_for_null_*` |
+| Alta: `HTTPRequestSpec` não era conferido contra o input da tool (um argumento obrigatório podia nunca ser enviado) | `HTTP_UNKNOWN_ARGUMENT` e `TOOL_ARG_NOT_SENT` | `test_the_http_spec_must_send_every_required_tool_argument`, `test_the_http_spec_cannot_reference_arguments_*` |
+| Média: `recovery.result_map` sem validação estática | checado como um binding (lookup output → output original) | `test_recovery_result_map_is_checked_like_a_binding` |
+| Média: semântica `required × nullable × default` | documentada e testada: independentes; `required:false` sem default ⇒ ausente vira None (null aceito); com default e `nullable:false` ⇒ `{}`→default, null rejeitado | `test_a_required_field_with_a_default_rejects_an_explicit_null` |
+| P2 descrição de campo contava como breaking no SemVer | `schema_fingerprint(docs=False)` (fingerprint de compatibilidade) | `test_documentation_changes_are_not_breaking_but_type_changes_are` |
+| P2 versão corrompida no registry escapava como `DefinitionError` | `RegistryIntegrityError` | `test_a_corrupt_stored_version_label_is_an_integrity_error` |
+| Limpeza do archive | `.gitignore` já cobre `__pycache__`, `.pytest_cache` e `archive*.zip` | — |
+
+Nota de teste: o teste que prova que o runtime recusa um `result_map` inválido (`LOOKUP_RESULT_UNUSABLE`) agora constrói o pipeline com
+`make_pipeline(..., unchecked=True)`, porque o compiler passou a recusar essa definição antes (defesa em profundidade, não substituição).

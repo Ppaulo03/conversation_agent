@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import time
 from datetime import timedelta
 
 from conversation_agent.core.errors import StaleWorkerError
 from conversation_agent.core.models.runtime import FenceToken, Lease
-from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.lease import ConversationLeaseStore
 
 
@@ -22,7 +23,7 @@ class LeaseHandle:
         self,
         lease: Lease,
         store: ConversationLeaseStore,
-        clock: Clock,
+        coordination: CoordinationClock,
         *,
         ttl: timedelta,
         interval_seconds: float,
@@ -31,7 +32,8 @@ class LeaseHandle:
             raise ValueError("heartbeat interval must be shorter than the lease TTL")
         self._lease = lease
         self._store = store
-        self._clock = clock
+        self._coordination = coordination
+        self._seen_at = time.monotonic()  # local monotonic instant of the last authority reading
         self._ttl = ttl
         self._interval = interval_seconds
         self._stale = False
@@ -70,9 +72,17 @@ class LeaseHandle:
 
     def ensure_active(self) -> None:
         """Called at safe boundaries (before each new step)."""
-        if self._stale or self._clock.now() >= self._lease.expires_at:
+        if self._stale or self._expired():
             self._stale = True
             raise StaleWorkerError(f"lease lost for {self._lease.key.conversation_id}")
+
+    def _expired(self) -> bool:
+        """Compared in the AUTHORITY's domain: the lease's own observed time plus the local
+        monotonic time elapsed since, never this worker's wall clock against the database's."""
+        lease = self._lease
+        if lease.observed_at is None:
+            return False  # no authority reading to extrapolate from: the heartbeat decides
+        return self._coordination.estimate(lease.observed_at, self._seen_at) >= lease.expires_at
 
     async def _beat(self) -> None:
         while True:
@@ -85,3 +95,4 @@ class LeaseHandle:
                 self._stale = True  # lost for good: someone else owns the conversation
                 return
             self._lease = renewed  # also carries the latest cancel_requested
+            self._seen_at = time.monotonic()

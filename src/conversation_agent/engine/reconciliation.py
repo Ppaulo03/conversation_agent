@@ -37,7 +37,7 @@ from conversation_agent.core.models.runtime import (
 from conversation_agent.core.models.tooling import ToolError, ToolResult
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.side_effects import to_tool_result
-from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.ledger import ToolInvocationStore
 from conversation_agent.ports.registry import AgentRegistry
@@ -58,7 +58,7 @@ class ReconciliationWorker:
         ledger: ToolInvocationStore,
         scheduler: Scheduler,
         faults: FaultInjector,
-        clock: Clock,
+        coordination: CoordinationClock,
         owner: str,
         claim_ttl: timedelta = timedelta(seconds=60),
         retry_backoff: timedelta = timedelta(seconds=30),
@@ -81,7 +81,7 @@ class ReconciliationWorker:
         self._pipelines: dict[str, CapabilityPipeline] = {}
         self._scheduler = scheduler
         self._faults = faults
-        self._clock = clock
+        self._coordination = coordination  # backoff is a coordination timestamp (INV-032)
         self._owner = owner
         self._ttl = claim_ttl
         self._backoff = retry_backoff
@@ -111,7 +111,7 @@ class ReconciliationWorker:
                 tenant_id=invocation.tenant_id,
                 scheduler_key=reconcile_key(invocation.invocation_id),
                 event_type=RECONCILE_EVENT,
-                due_at=self._clock.now() + self._backoff,
+                due_at=(await self._coordination.now()) + self._backoff,
                 payload={"invocation_id": invocation.invocation_id},
             )
         )

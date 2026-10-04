@@ -44,6 +44,7 @@ from conversation_agent.core.models.runtime import (
 )
 from conversation_agent.core.models.tooling import CapabilityRequest
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.uow import StoredConversation
 
 _JOURNAL_COLUMNS = "turn_id, step_index, step_type, request_hash, logical_step_id, payload"
@@ -624,11 +625,11 @@ class PostgresUnitOfWork:
 
 class PostgresUnitOfWorkFactory:
     def __init__(
-        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationClock | None = None
     ) -> None:
         self._db = db
         self._clock = clock
-        self._time = coordination or CoordinationTime(db, clock)
+        self._time = coordination or CoordinationTime(db)
 
     @asynccontextmanager
     async def begin(self, fence: FenceToken) -> AsyncIterator[PostgresUnitOfWork]:

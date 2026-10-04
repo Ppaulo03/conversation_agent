@@ -22,6 +22,8 @@ from conversation_agent.core.definitions.mapping import TRANSFORM_SPECS, Const, 
 #   ("object", ((name, Tag, required), ...) | None, forbids_extra)   (None: untyped object)
 Tag = Any
 ANY = "any"
+NONE = ("none",)  # the type of the value null
+NEVER = "never"  # the non-null part of null
 _SEGMENT = re.compile(r"\.([A-Za-z_][\w-]*)|\[(\d+|\*)\]")
 
 
@@ -39,10 +41,23 @@ def unwrap(annotation: Any) -> Any:
         return annotation
 
 
+def is_optional(annotation: Any) -> bool:
+    ann = annotation
+    while get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
+    return get_origin(ann) in (Union, UnionType) and type(None) in get_args(ann)
+
+
 def tag_of_annotation(annotation: Any, depth: int = 0) -> Tag:
-    ann = unwrap(annotation)
+    ann = annotation
+    while get_origin(ann) is Annotated:
+        ann = get_args(ann)[0]
     if depth > 6:
         return ANY  # recursive models: stop checking, never loop
+    if get_origin(ann) in (Union, UnionType):
+        members = [a for a in get_args(ann) if a is not type(None)]
+        inner = unify([tag_of_annotation(a, depth + 1) for a in members])
+        return nullable(inner) if type(None) in get_args(ann) else inner
     if get_origin(ann) is Literal:
         return ("enum", frozenset(str(v) for v in get_args(ann)))
     if ann is bool:
@@ -70,6 +85,8 @@ def tag_of_annotation(annotation: Any, depth: int = 0) -> Tag:
 
 
 def tag_of_value(value: Any) -> Tag:
+    if value is None:
+        return NONE
     if isinstance(value, bool):
         return "boolean"
     if isinstance(value, int):
@@ -86,12 +103,59 @@ def tag_of_value(value: Any) -> Tag:
     return ANY
 
 
+# --- nullability and unions: a mix of types is a UNION, never "anything goes" ---
+def split_null(tag: Tag) -> tuple[bool, Tag]:
+    """(can it be null?, the non-null part). `None` itself is (True, NEVER)."""
+    if tag == NONE:
+        return True, NEVER
+    if isinstance(tag, tuple) and tag[0] == "nullable":
+        return True, split_null(tag[1])[1]
+    return False, tag
+
+
+def nullable(tag: Tag) -> Tag:
+    if tag == ANY:
+        return ANY
+    base = split_null(tag)[1]
+    return NONE if base == NEVER else ("nullable", base)
+
+
 def unify(tags: list[Tag]) -> Tag:
-    return tags[0] if tags and all(t == tags[0] for t in tags) else ANY
+    """The type of a value that may be any of `tags`: one type when they agree, a union when
+    they do not (NOT `any`), nullable when any member can be null."""
+    can_be_null, bases = False, set()
+    for tag in tags:
+        null, base = split_null(tag)
+        can_be_null = can_be_null or null
+        for member in base[1] if isinstance(base, tuple) and base[0] == "union" else [base]:
+            if member == ANY:
+                return ANY
+            if member != NEVER:
+                bases.add(member)
+    if not bases:
+        return NONE if can_be_null else ANY
+    merged: Tag = next(iter(bases)) if len(bases) == 1 else ("union", frozenset(bases))
+    return nullable(merged) if can_be_null else merged
 
 
 def compatible(source: Tag, target: Tag) -> bool:
-    if ANY in (source, target) or source == target:
+    if ANY in (source, target):
+        return True
+    source_null, source_base = split_null(source)
+    target_null, target_base = split_null(target)
+    if source_null and not target_null:
+        return False  # a value that can be null cannot fill a field that cannot
+    if source_base == NEVER or ANY in (source_base, target_base):
+        return True
+    return _base_compatible(source_base, target_base)
+
+
+def _base_compatible(source: Tag, target: Tag) -> bool:
+    if isinstance(source, tuple) and source[0] == "union":
+        return all(_base_compatible(m, target) for m in source[1])
+    if isinstance(target, tuple) and target[0] == "union":
+        return any(_base_compatible(source, m) for m in target[1])
+    if source == target:
         return True
     if isinstance(source, tuple) and isinstance(target, tuple):
         if source[0] != target[0]:
@@ -116,31 +180,41 @@ def compatible(source: Tag, target: Tag) -> bool:
 
 
 def _object_compatible(source: Tag, target: Tag) -> bool:
-    """Assignable when every required target field is provided with a compatible type, optional
-    ones that are provided are compatible, and a strict target gets no field it does not know."""
+    """Assignable when every required target field is provided with a compatible type (null
+    included), optional ones that are provided are compatible, and a strict target gets no field
+    it does not know. Keys are always present: a dumped model writes optional fields as null."""
     if source[1] is None or target[1] is None:
         return True  # untyped on either side: nothing to verify
-    have = {name: (tag, required) for name, tag, required in source[1]}
+    have = {name: tag for name, tag, _ in source[1]}
     wanted = {name: (tag, required) for name, tag, required in target[1]}
     for name, (tag, required) in wanted.items():
         if name not in have:
             if required:
                 return False
             continue
-        provided, provided_required = have[name]
-        if required and not provided_required:
-            return False
-        if not compatible(provided, tag):
+        if not compatible(have[name], tag):
             return False
     return not (target[2] and set(have) - set(wanted))
 
 
+def list_element(tag: Tag) -> Tag | None:
+    """The element type when `tag` is a (possibly nullable) list."""
+    base = split_null(tag)[1]
+    return base[1] if isinstance(base, tuple) and base[0] == "list" else None
+
+
 def is_list(tag: Tag) -> bool:
-    return isinstance(tag, tuple) and tag[0] == "list"
+    return list_element(tag) is not None
 
 
 def show(tag: Tag) -> str:
+    if tag == NONE:
+        return "null"
     if isinstance(tag, tuple):
+        if tag[0] == "nullable":
+            return f"{show(tag[1])}|null"
+        if tag[0] == "union":
+            return " | ".join(sorted(show(m) for m in tag[1]))
         if tag[0] == "enum":
             return f"enum{sorted(tag[1])}"
         if tag[0] == "list":
@@ -161,12 +235,14 @@ def resolve_path(model: type[BaseModel], expr: str) -> tuple[Any, str | None]:
         return None, f"{expr!r} must start with '$'"
     rest, pos = expr[1:], 0
     fanned = False
+    through_null = False  # an optional object on the way: the value may be absent (null)
     current: Any = model
     while pos < len(rest):
         m = _SEGMENT.match(rest, pos)
         if m is None:
             return None, f"bad path syntax {expr!r}"
         pos = m.end()
+        through_null = through_null or is_optional(current)
         node = unwrap(current)
         if m.group(1) is not None:
             key = m.group(1)
@@ -190,7 +266,9 @@ def resolve_path(model: type[BaseModel], expr: str) -> tuple[Any, str | None]:
             else:
                 return None, f"{expr!r}: cannot index a {show(tag_of_annotation(node))}"
     if fanned and current is not None:
-        return list[current], None  # `[*]` yields a LIST of whatever follows (runtime fan-out)
+        current = list[current]  # `[*]` yields a LIST of whatever follows (runtime fan-out)
+    if through_null and current is not None:
+        current = current | None
     return current, None
 
 
@@ -221,15 +299,29 @@ def infer(expr: MapExpr, source: type[BaseModel]) -> tuple[Tag, list[str]]:
     if err:
         problems.append(err)
     tag: Tag = tag_of_annotation(ann) if ann is not None else ANY
+    has_default = "default" in expr.model_fields_set
+    is_null, base = split_null(tag)
+    if (expr.enum is not None or expr.transform is not None) and is_null and not has_default:
+        problems.append(
+            f"the source can be null ({show(tag)}) and nothing handles it: give the mapping a "
+            "`default` (a null makes enum maps and transforms fail)"
+        )
     if expr.enum is not None:
-        if tag != ANY and tag != "string" and not (isinstance(tag, tuple) and tag[0] == "enum"):
-            problems.append(f"an enum map needs a string/enum source, got {show(tag)}")
+        if base != ANY and base != "string" and not (isinstance(base, tuple) and base[0] == "enum"):
+            problems.append(f"an enum map needs a string/enum source, got {show(base)}")
         tag = unify([tag_of_value(v) for v in expr.enum.values()])
     if expr.transform is not None and expr.transform in TRANSFORM_SPECS:
         accepted, produced = TRANSFORM_SPECS[expr.transform]
-        if tag != ANY and tag not in accepted:
+        if base != ANY and base not in accepted:
             problems.append(
-                f"transform {expr.transform!r} takes {sorted(accepted)}, got {show(tag)}"
+                f"transform {expr.transform!r} takes {sorted(accepted)}, got {show(base)}"
             )
         tag = produced
+    if has_default:
+        # the default REPLACES an absent or null value: what comes out is "the mapped value,
+        # or the default"
+        fallback = tag_of_value(expr.default)
+        tag = unify([split_null(tag)[1], fallback])
+        if fallback != NONE:
+            tag = unify([tag])
     return tag, problems

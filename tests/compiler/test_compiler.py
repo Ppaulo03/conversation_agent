@@ -547,7 +547,7 @@ def test_a_constant_must_have_the_right_structure_not_just_the_right_category() 
 def test_a_ref_default_must_fit_the_target_because_it_replaces_the_value() -> None:
     m = raw()
     binding(m, "scheduling.create")["output_map"]["status"] = {"from": "$.state", "default": 123}
-    with pytest.raises(CompileError, match="default 123"):
+    with pytest.raises(CompileError, match=r"integer \| string"):
         compile_manifest(m)
     binding(m, "scheduling.create")["output_map"]["status"] = {"from": "$.state", "default": "ok"}
     assert compile_manifest(m).digest
@@ -588,3 +588,113 @@ def test_each_cannot_fill_a_list_of_scalars() -> None:
         "items": {"type": "string"},
     }
     assert "MAPPING_TYPE_MISMATCH" in codes_of(m)
+
+
+# --- Phase 5.4: nullability, unions, transport, recovery.result_map ---
+
+
+def make_state_optional(m: dict[str, Any]) -> None:
+    tool(m, "erp_create_reservation")["output"]["state"] = {"type": "string", "required": False}
+
+
+def test_an_optional_tool_field_cannot_fill_a_required_capability_field() -> None:
+    m = raw()
+    make_state_optional(m)
+    with pytest.raises(CompileError, match="string\\|null but the target takes string"):
+        compile_manifest(m)  # a missing `state` would fail the mapping AFTER the write
+
+
+def test_a_default_makes_a_nullable_source_safe() -> None:
+    m = raw()
+    make_state_optional(m)
+    binding(m, "scheduling.create")["output_map"]["status"] = {"from": "$.state", "default": "n/a"}
+    assert compile_manifest(m).digest  # absent or null falls back to "n/a"
+
+
+def test_null_only_fits_a_nullable_target() -> None:
+    m = raw()
+    binding(m, "scheduling.create")["output_map"]["status"] = {"const": None}
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = {"const": None}
+    assert compile_manifest(m).digest  # next_cursor is nullable
+
+
+def test_values_of_different_types_are_a_union_not_anything() -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["input_map"]["service_code"]["enum"]["consultation"] = 123
+    with pytest.raises(CompileError, match="integer \\| string"):
+        compile_manifest(m)
+
+
+def test_a_transform_or_enum_map_cannot_read_a_nullable_source_without_a_default() -> None:
+    m = raw()
+    capability(m, "scheduling.create")["input"]["duration_minutes"] = {
+        "type": "integer",
+        "required": False,
+    }
+    with pytest.raises(CompileError, match="can be null"):
+        compile_manifest(m)
+    binding(m, "scheduling.create")["input_map"]["hours"]["default"] = 0.5
+    assert compile_manifest(m).digest
+
+
+def test_a_path_through_an_optional_object_may_be_absent() -> None:
+    m = raw()
+    tool(m, "erp_get_available_slots")["output"]["pagination"]["required"] = False
+    capability(m, "scheduling.availability")["output"]["next_cursor"] = {"type": "string"}
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)  # pagination may be missing -> null
+
+
+def test_the_runtime_falls_back_to_the_default_for_null_as_the_compiler_assumes() -> None:
+    from conversation_agent.core.definitions.mapping import Ref
+    from conversation_agent.tools.mapping import apply_mapping
+
+    spec = {"x": Ref.model_validate({"from": "$.a", "default": "d"})}
+    assert apply_mapping(spec, {"a": None}) == {"x": "d"}
+    assert apply_mapping(spec, {}) == {"x": "d"}
+    assert apply_mapping(spec, {"a": "v"}) == {"x": "v"}
+
+
+def test_the_http_spec_must_send_every_required_tool_argument() -> None:
+    m = raw()
+    tool(m, "erp_create_reservation")["http"]["body"] = ["service_code", "starts_at"]  # no hours
+    with pytest.raises(CompileError, match=r"required input .hours."):
+        compile_manifest(m)
+
+
+def test_the_http_spec_cannot_reference_arguments_the_tool_does_not_have() -> None:
+    m = raw()
+    tool(m, "erp_find_reservation")["http"]["path"] = "/bookings/by-idempotency-key/{missing}"
+    tool(m, "erp_get_available_slots")["http"]["query"].append("nonexistent")
+    with pytest.raises(CompileError) as caught:
+        compile_manifest(m)
+    assert {"HTTP_UNKNOWN_ARGUMENT", "TOOL_ARG_NOT_SENT"} <= caught.value.codes
+
+
+def lookup_with_result_map(m: dict[str, Any], result_map: dict[str, Any]) -> None:
+    tool(m, "erp_create_reservation")["recovery"]["result_map"] = result_map
+
+
+def test_a_valid_recovery_result_map_compiles() -> None:
+    m = raw()
+    lookup_with_result_map(m, {"booking_id": "$.booking_id", "status": "$.status"})
+    assert compile_manifest(m).digest
+
+
+def test_recovery_result_map_is_checked_like_a_binding() -> None:
+    m = raw()
+    lookup_with_result_map(m, {"booking_id": "$.does_not_exist", "status": {"const": 123}})
+    with pytest.raises(CompileError) as caught:
+        compile_manifest(m)
+    assert {"MAPPING_UNKNOWN_SOURCE", "MAPPING_TYPE_MISMATCH"} <= caught.value.codes
+    lookup_with_result_map(m, {"booking_id": "$.booking_id"})  # `status` is required
+    assert "MAPPING_MISSING_REQUIRED" in codes_of(m)
+
+
+def test_a_required_field_with_a_default_rejects_an_explicit_null() -> None:
+    model = build_model("P", {"x": FieldSpec(type="string", required=False, default="abc")})
+    assert model.model_validate({}).model_dump() == {"x": "abc"}
+    assert model.model_validate({"x": "foo"}).model_dump() == {"x": "foo"}
+    with pytest.raises(ValueError):
+        model.model_validate({"x": None})

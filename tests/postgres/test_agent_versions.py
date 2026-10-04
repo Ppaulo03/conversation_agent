@@ -549,3 +549,26 @@ async def test_a_corrupt_stored_manifest_stops_that_conversation_not_the_worker(
     llm = FakeLLM([])
     run = await say(world, api, fresh, "outra coisa", llm, 2)
     assert run.status == "retry_later" and llm.calls == 0
+
+
+async def test_documentation_changes_are_not_breaking_but_type_changes_are() -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(TENANT, compiled("1.0.0"))
+    reworded = manifest("1.0.1")
+    cap = next(c for c in reworded["capabilities"] if c["name"] == "scheduling.availability")
+    cap["input"]["service_id"]["description"] = "A completely reworded description"
+    cap["input"]["from_date"]["description"] = "Another wording"
+    assert (await registry.publish(TENANT, compile_manifest(reworded))).created  # no MAJOR needed
+    retyped = manifest("1.0.2")
+    cap = next(c for c in retyped["capabilities"] if c["name"] == "scheduling.availability")
+    cap["input"]["cursor"] = {"type": "integer", "required": False}
+    tool_ = next(t for t in retyped["tools"] if t["name"] == "erp_get_available_slots")
+    tool_["input"]["cursor"] = {"type": "integer", "required": False}
+    with pytest.raises(IncompatibleUpgradeError, match="input schema"):
+        await registry.publish(TENANT, compile_manifest(retyped))
+
+
+async def test_a_corrupt_stored_version_label_is_an_integrity_error(world: World) -> None:
+    await insert_row(world, version="banana")
+    with pytest.raises(RegistryIntegrityError, match="not a valid version"):
+        await PostgresAgentRegistry(world.db).versions(TENANT, AGENT_ID)

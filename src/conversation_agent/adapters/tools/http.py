@@ -330,6 +330,12 @@ class HTTPToolProvider:
             raise _Rejected(
                 _configuration_error("SECRET_NOT_AVAILABLE", "Credential not available.")
             ) from None
+        if auth.header.casefold() in {h.casefold() for h in headers}:
+            # defence in depth: AuthSpec already refuses runtime-owned names, but a credential
+            # can never replace a header the runtime has already set
+            raise _Rejected(
+                _configuration_error("INVALID_AUTH_CONFIGURATION", "Auth header is runtime-owned.")
+            )
         headers[auth.header] = (
             f"{auth.scheme} {secret.reveal()}" if auth.scheme else secret.reveal()
         )

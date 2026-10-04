@@ -33,9 +33,15 @@ FieldType = Literal[
 
 
 class FieldSpec(BaseModel):
-    """One field. `required: false` means the key may be absent AND, when present, null (an
-    absent optional value is None); `nullable: true` additionally lets a REQUIRED key be null.
-    A `default` is checked against the spec itself when the manifest is parsed."""
+    """One field. Three independent things:
+
+      required  the key must be present
+      nullable  the value may be null
+      default   what an ABSENT key becomes (checked against the spec when the manifest parses)
+
+    `required: false` WITHOUT a default means an absent key becomes None, so null is accepted;
+    `required: false` WITH a default and `nullable: false` accepts {} (-> the default) and a real
+    value, but rejects an explicit null."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -256,8 +262,22 @@ def _inline(node: Any, defs: dict[str, Any]) -> Any:
     return node
 
 
-def schema_fingerprint(model: type[BaseModel]) -> dict[str, Any]:
-    """Comparable JSON Schema: no titles/class names, references inlined, sorted keys."""
+def _strip_docs(node: Any) -> Any:
+    if isinstance(node, dict):
+        return {k: _strip_docs(v) for k, v in node.items() if k not in ("description", "examples")}
+    if isinstance(node, list):
+        return [_strip_docs(v) for v in node]
+    return node
+
+
+def schema_fingerprint(model: type[BaseModel], *, docs: bool = True) -> dict[str, Any]:
+    """Comparable JSON Schema: no titles/class names, references inlined, sorted keys.
+
+    `docs=False` also drops descriptions/examples: the COMPATIBILITY fingerprint, which changes
+    only when names, types, nullability, enums or constraints change (rewording a description
+    is not a breaking change)."""
     schema = model.model_json_schema(mode="validation")
     inlined = _inline(schema, schema.get("$defs", {}))
+    if not docs:
+        inlined = _strip_docs(inlined)
     return cast(dict[str, Any], canonicalize(inlined))

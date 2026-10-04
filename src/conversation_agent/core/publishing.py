@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from conversation_agent.core.compiler import CompiledAgent, agent_document
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER
+from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.errors import (
     IncompatibleUpgradeError,
     VersionConflictError,
@@ -34,16 +35,23 @@ def breaking_changes(old: CompiledAgent, new: CompiledAgent) -> tuple[str, ...]:
     old_caps = {c["name"]: c for c in before["capabilities"]}
     new_caps = {c["name"]: c for c in after["capabilities"]}
     found: list[str] = []
-    for name, cap in sorted(old_caps.items()):
+    for name in sorted(old_caps):
         current = new_caps.get(name)
         if current is None:
             found.append(f"capability {name!r} was removed")
             continue
         found += _protection_changes(name, old.agent.resolve(name), new.agent.resolve(name))
-        if current["input"] != cap["input"]:
-            found.append(f"capability {name!r} changed its input schema")
-        if current["output"] != cap["output"]:
-            found.append(f"capability {name!r} changed its output schema")
+        old_cap, new_cap = old.agent.resolve(name), new.agent.resolve(name)
+        if old_cap is not None and new_cap is not None:
+            # documentation is not part of the contract: only the COMPATIBILITY fingerprint counts
+            for label, before_model, after_model in (
+                ("input", old_cap.capability.input_model, new_cap.capability.input_model),
+                ("output", old_cap.capability.output_model, new_cap.capability.output_model),
+            ):
+                if schema_fingerprint(before_model, docs=False) != schema_fingerprint(
+                    after_model, docs=False
+                ):
+                    found.append(f"capability {name!r} changed its {label} schema")
     for name in sorted(set(before["allowed_capabilities"]) - set(after["allowed_capabilities"])):
         found.append(f"capability {name!r} is no longer allowed for the agent")
     old_flows = {f["name"] for f in before["flows"]}

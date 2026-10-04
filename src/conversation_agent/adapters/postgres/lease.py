@@ -12,13 +12,14 @@ from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.models.runtime import ConversationKey, Lease
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 
 
 class PostgresLeaseStore:
     def __init__(
-        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationClock | None = None
     ) -> None:
-        self._time = coordination or CoordinationTime(db, clock)
+        self._time = coordination or CoordinationTime(db)
         self._db = db
         self._clock = clock
 
@@ -43,7 +44,13 @@ class PostgresLeaseStore:
         )
         if row is None:
             return None
-        return Lease(key=key, owner=owner, epoch=row["conversation_epoch"], expires_at=expires)
+        return Lease(
+            key=key,
+            owner=owner,
+            epoch=row["conversation_epoch"],
+            expires_at=expires,
+            observed_at=now,
+        )
 
     async def heartbeat(self, lease: Lease, ttl: timedelta) -> Lease | None:
         now = await self._time.now()
@@ -67,7 +74,11 @@ class PostgresLeaseStore:
         if row is None:
             return None
         return lease.model_copy(
-            update={"expires_at": expires, "cancel_requested": row["cancel_requested"]}
+            update={
+                "expires_at": expires,
+                "observed_at": now,
+                "cancel_requested": row["cancel_requested"],
+            }
         )
 
     async def release(self, lease: Lease) -> None:

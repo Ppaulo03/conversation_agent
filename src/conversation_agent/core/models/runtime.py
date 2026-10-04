@@ -44,6 +44,7 @@ class Lease(_Frozen):
     owner: str
     epoch: int
     expires_at: AwareDatetime
+    observed_at: AwareDatetime | None = None  # authority time when this lease was granted/renewed
     cancel_requested: bool = False  # a newer message asked to restart (read with the heartbeat)
 
     @property

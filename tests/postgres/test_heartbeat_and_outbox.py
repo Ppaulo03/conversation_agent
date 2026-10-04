@@ -26,7 +26,7 @@ async def new_handle(world: World, interval: float) -> LeaseHandle:
     await world.inbox.insert_if_absent(event("e0", clock=world.clock))  # first contact
     lease = await world.leases.acquire(KEY, "w1", TTL)
     assert lease is not None
-    return LeaseHandle(lease, world.leases, world.clock, ttl=TTL, interval_seconds=interval)
+    return LeaseHandle(lease, world.leases, world.coord, ttl=TTL, interval_seconds=interval)
 
 
 # --- heartbeat ------------------------------------------------------------------------------
@@ -76,7 +76,7 @@ async def test_heartbeat_interval_must_be_shorter_than_the_ttl(world: World) -> 
     lease = await world.leases.acquire(KEY, "w1", TTL)
     assert lease is not None
     with pytest.raises(ValueError):
-        LeaseHandle(lease, world.leases, world.clock, ttl=TTL, interval_seconds=30)
+        LeaseHandle(lease, world.leases, world.coord, ttl=TTL, interval_seconds=30)
 
 
 async def test_a_stale_worker_starts_no_new_step(world: World) -> None:

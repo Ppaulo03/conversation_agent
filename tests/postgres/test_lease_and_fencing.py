@@ -8,6 +8,7 @@ from datetime import timedelta
 import pytest
 
 from conversation_agent.adapters.clock import FixedClock
+from conversation_agent.adapters.postgres.coordination import FixedCoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
 from conversation_agent.adapters.postgres.uow import PostgresUnitOfWorkFactory
@@ -48,7 +49,7 @@ async def test_acquire_increments_the_epoch_and_excludes_other_owners(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
     first = await leases.acquire(key, "worker-a", TTL)
     assert first is not None and first.epoch == 1
     assert await leases.acquire(key, "worker-b", TTL) is None  # held and unexpired
@@ -62,7 +63,10 @@ async def test_unknown_conversation_cannot_be_leased(
     db: PostgresDatabase, clock: FixedClock
 ) -> None:
     ghost = ConversationKey(tenant_id="t", conversation_id="never-seen")
-    assert await PostgresLeaseStore(db, clock).acquire(ghost, "w", TTL) is None
+    assert (
+        await PostgresLeaseStore(db, clock, FixedCoordinationTime(clock)).acquire(ghost, "w", TTL)
+        is None
+    )
 
 
 async def test_heartbeat_extends_only_for_the_current_owner_and_epoch(
@@ -71,7 +75,7 @@ async def test_heartbeat_extends_only_for_the_current_owner_and_epoch(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
     a = await leases.acquire(key, "worker-a", TTL)
     assert a is not None
     clock.set(clock.now() + timedelta(seconds=20))
@@ -92,7 +96,7 @@ async def test_release_frees_the_lease_and_the_next_acquire_bumps_the_epoch(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
     a = await leases.acquire(key, "worker-a", TTL)
     assert a is not None
     await leases.release(a)
@@ -108,8 +112,8 @@ async def test_C09_worker_zombie_cannot_commit_conversation_state(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
-    uows = PostgresUnitOfWorkFactory(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
+    uows = PostgresUnitOfWorkFactory(db, clock, FixedCoordinationTime(clock))
     zombie = await leases.acquire(key, "worker-a", TTL)
     assert zombie is not None
     clock.set(clock.now() + TTL + timedelta(seconds=1))
@@ -138,8 +142,8 @@ async def test_uow_is_atomic_and_never_persists_without_commit(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
-    uows = PostgresUnitOfWorkFactory(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
+    uows = PostgresUnitOfWorkFactory(db, clock, FixedCoordinationTime(clock))
     lease = await leases.acquire(key, "w", TTL)
     assert lease is not None
 
@@ -164,8 +168,8 @@ async def test_takeover_waits_for_an_in_flight_fenced_transaction(
 ) -> None:
     """Fencing is race-free: a takeover cannot interleave with a transaction that already
     passed the fence check; it serialises after it."""
-    leases = PostgresLeaseStore(db, clock)
-    uows = PostgresUnitOfWorkFactory(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
+    uows = PostgresUnitOfWorkFactory(db, clock, FixedCoordinationTime(clock))
     a = await leases.acquire(key, "worker-a", TTL)
     assert a is not None
 
@@ -192,8 +196,8 @@ async def test_an_expired_lease_cannot_open_a_unit_of_work_even_before_any_takeo
     key: ConversationKey,
 ) -> None:
     """Expiry itself makes the holder stale; it does not need a rival to notice first."""
-    leases = PostgresLeaseStore(db, clock)
-    uows = PostgresUnitOfWorkFactory(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
+    uows = PostgresUnitOfWorkFactory(db, clock, FixedCoordinationTime(clock))
     lease = await leases.acquire(key, "worker-a", TTL)
     assert lease is not None
     async with uows.begin(lease.fence) as uow:  # fine while the lease is valid
@@ -214,7 +218,7 @@ async def test_a_heartbeat_cannot_resurrect_an_expired_lease(
     conversation: ConversationIdentity,
     key: ConversationKey,
 ) -> None:
-    leases = PostgresLeaseStore(db, clock)
+    leases = PostgresLeaseStore(db, clock, FixedCoordinationTime(clock))
     lease = await leases.acquire(key, "worker-a", TTL)
     assert lease is not None
     clock.set(clock.now() + TTL + timedelta(seconds=1))
@@ -231,10 +235,10 @@ async def test_coordination_time_defaults_to_the_database_clock_not_the_app_cloc
     from conversation_agent.adapters.postgres.coordination import CoordinationTime
 
     skewed = FixedClock(clock_far_behind())  # this worker believes it is 2020
-    leases = PostgresLeaseStore(db, skewed, CoordinationTime(db, None))
+    leases = PostgresLeaseStore(db, skewed, CoordinationTime(db))
     lease = await leases.acquire(key, "worker-a", TTL)
     assert lease is not None
-    other = PostgresLeaseStore(db, FixedClock(clock_far_behind()), CoordinationTime(db, None))
+    other = PostgresLeaseStore(db, FixedClock(clock_far_behind()), CoordinationTime(db))
     assert (
         await other.acquire(key, "worker-b", TTL) is None
     )  # valid for everyone, whatever their clock

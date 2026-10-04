@@ -12,6 +12,7 @@ import pytest
 
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response
+from conversation_agent.adapters.postgres.coordination import FixedCoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
@@ -44,10 +45,12 @@ class Worker:
         self.tools = FakeToolProvider({"erp_get_available_slots": SLOTS})
 
     async def start(self) -> Worker:
-        lease = await PostgresLeaseStore(self.db, self.clock).acquire(KEY, self.name, TTL)
+        lease = await PostgresLeaseStore(
+            self.db, self.clock, FixedCoordinationTime(self.clock)
+        ).acquire(KEY, self.name, TTL)
         assert lease is not None, "lease not acquired"
         self.lease = lease
-        factory = PostgresUnitOfWorkFactory(self.db, self.clock)
+        factory = PostgresUnitOfWorkFactory(self.db, self.clock, FixedCoordinationTime(self.clock))
         self.journal = PostgresTurnJournal(factory, self.db, lease.fence)
         return self
 

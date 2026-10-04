@@ -38,6 +38,8 @@ INV-028  uma versão publicada de agente é imutável (mesmo conteúdo = no-op, 
 INV-029  um agente só roda depois de compilado (o runtime só aceita CompiledAgent, que só o compiler produz): referências, risco, mapeamentos, schemas, error_map e versões inválidos são rejeitados antes do runtime, e o conteúdo carregado deve bater com o digest publicado.
 INV-030  o grafo de runtime tem exatamente um CompiledAgent como raiz de definição: engine, pipeline, estágio de confirmação e reconciliation derivam do mesmo agente compilado (versão + digest conferidos); uma protected action nunca existe sem a pergunta de confirmação do runtime (`confirmation_prompt_enabled=false` é rejeitado quando há capability protegida; os templates de confirmação precisam conter `{summary}`).
 INV-031  o registry de agentes é tenant-scoped: `(tenant_id, agent_id, version)` é a identidade; um tenant nunca lê nem sombreia agentes de outro.
+INV-032  nenhuma comparação de lease/claim/backoff mistura o relógio do worker com a autoridade de coordenação: o default de todo adapter PostgreSQL é o relógio do banco (`clock_timestamp()`); o `Clock` da aplicação só governa tempo conversacional. A checagem síncrona de lease estima o tempo da autoridade (leitura do banco + tempo monotônico decorrido).
+INV-033  uma credencial nunca sobrescreve um header do runtime (`Idempotency-Key`, `Host`, `X-*` de identidade); e `base_url` é só scheme+host+porta+path (sem userinfo, query ou fragment), de modo que o destino congelado cobre tudo que define a URL.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -79,6 +81,8 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-029 | `tests/compiler/test_compiler.py` (refs, schemas, risco, bindings, versões), `test_a_stored_agent_that_no_longer_matches_its_digest_is_refused`, `test_only_the_compiler_can_produce_a_compiled_agent`, `test_a_mapping_cannot_feed_a_value_of_the_wrong_type` |
 | INV-030 | `test_the_engine_refuses_a_pipeline_built_from_another_compiled_agent`, `test_a_protected_agent_cannot_turn_the_confirmation_question_off`, `test_confirmation_texts_must_be_formattable_and_say_what_is_confirmed` |
 | INV-031 | `test_the_registry_is_tenant_scoped` |
+| INV-032 | `test_stores_default_to_the_database_clock_not_the_workers_clock`, `test_a_workers_skewed_wall_clock_does_not_make_its_lease_look_expired`, `test_a_lease_expires_by_elapsed_authority_time_not_by_wall_clock`, `test_reconciliation_backoff_is_a_coordination_timestamp` |
+| INV-033 | `test_auth_cannot_name_a_runtime_owned_header`, `test_even_a_forged_auth_spec_never_overwrites_the_idempotency_key`, `test_base_url_is_only_scheme_host_port_and_path` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

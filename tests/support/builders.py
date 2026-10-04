@@ -8,7 +8,12 @@ from zoneinfo import ZoneInfo
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.llm.fake import tool_call_response
-from conversation_agent.core.compiler import compile_agent
+from conversation_agent.core.compiler import (
+    _SEAL,
+    CompiledAgent,
+    agent_digest,
+    compile_agent,
+)
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.core.models.llm import LLMRequest, LLMResponse, ToolResultPart
@@ -63,7 +68,15 @@ def availability_call(service: str, day_from: str, day_to: str | None = None) ->
 
 
 def make_pipeline(
-    agent: AgentDefinition, gate: PolicyGate, runner: ToolRunner
+    agent: AgentDefinition, gate: PolicyGate, runner: ToolRunner, *, unchecked: bool = False
 ) -> CapabilityPipeline:
-    """A pipeline for a (possibly hand-modified) agent: it is compiled first, like in production."""
+    """A pipeline for a (possibly hand-modified) agent: it is compiled first, like in production.
+
+    `unchecked=True` skips the compiler ON PURPOSE, to prove a runtime defence still holds for a
+    definition the compiler would have refused (defence in depth)."""
+    if unchecked:
+        compiled = CompiledAgent(
+            agent=agent, digest=agent_digest(agent), manifest=None, _seal=_SEAL
+        )
+        return CapabilityPipeline(compiled, gate, runner)
     return CapabilityPipeline(compile_agent(agent), gate, runner)

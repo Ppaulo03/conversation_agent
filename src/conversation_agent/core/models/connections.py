@@ -6,9 +6,10 @@ definition ever supplies a URL, a host, a credential or a header.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit
 
-from pydantic import BaseModel, ConfigDict, SecretStr
+from pydantic import BaseModel, ConfigDict, SecretStr, field_validator
 
 from conversation_agent.core.canonical import stable_hash
 
@@ -17,12 +18,40 @@ class _Frozen(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
+# Headers the RUNTIME owns: a credential must never overwrite them (a shared secret in
+# `Idempotency-Key` would break INV-021; in `Host`/`X-*` it would forge identity or routing).
+RUNTIME_OWNED_HEADERS: frozenset[str] = frozenset(
+    {
+        "host",
+        "content-type",
+        "content-length",
+        "transfer-encoding",
+        "connection",
+        "idempotency-key",
+        "x-tenant-id",
+        "x-conversation-id",
+        "x-trace-id",
+        "x-invocation-id",
+    }
+)
+_HEADER_NAME = re.compile(r"^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
+
+
 class AuthSpec(_Frozen):
     """How to authenticate: the *reference* to a secret, never the secret itself."""
 
     secret_ref: str
     header: str = "Authorization"
     scheme: str | None = "Bearer"  # None -> the raw secret is the header value
+
+    @field_validator("header")
+    @classmethod
+    def _header_is_not_runtime_owned(cls, value: str) -> str:
+        if not _HEADER_NAME.fullmatch(value):
+            raise ValueError(f"{value!r} is not a valid HTTP header name")
+        if value.casefold() in RUNTIME_OWNED_HEADERS:
+            raise ValueError(f"auth cannot use the runtime-owned header {value!r}")
+        return value
 
 
 class ResolvedConnection(_Frozen):
@@ -37,6 +66,23 @@ class ResolvedConnection(_Frozen):
     max_request_bytes: int = 256 * 1024
     max_response_bytes: int = 1024 * 1024
     auth: AuthSpec | None = None
+
+    @field_validator("base_url")
+    @classmethod
+    def _base_url_is_only_where(cls, value: str) -> str:
+        """scheme + host + port + base path, nothing else: userinfo, query and fragment are not
+        part of the frozen destination (INV-027), so they cannot exist. Credentials come from the
+        SecretProvider; query parameters from the tool's HTTP spec."""
+        parts = urlsplit(value)
+        if parts.scheme not in ("http", "https") or not parts.hostname:
+            raise ValueError(f"base_url {value!r} must be an absolute http(s) URL with a host")
+        if parts.username is not None or parts.password is not None or "@" in parts.netloc:
+            raise ValueError("base_url cannot carry credentials (use auth/secret_ref)")
+        if parts.query or "?" in value:
+            raise ValueError("base_url cannot carry a query string (use the tool's query spec)")
+        if parts.fragment or "#" in value:
+            raise ValueError("base_url cannot carry a fragment")
+        return value
 
     def fingerprint(self) -> str:
         """Identity of WHERE requests go and under which network/TLS policy (INV-027).

@@ -51,9 +51,14 @@ def posts(api: ApiHandle) -> list[dict[str, object]]:
 
 
 def pipeline_for(
-    provider: HTTPToolProvider, agent: AgentDefinition | None = None
+    provider: HTTPToolProvider, agent: AgentDefinition | None = None, *, unchecked: bool = False
 ) -> CapabilityPipeline:
-    return make_pipeline(agent or build_agent(), AllowWrites(ALLOW), ToolRunner({"http": provider}))
+    return make_pipeline(
+        agent or build_agent(),
+        AllowWrites(ALLOW),
+        ToolRunner({"http": provider}),
+        unchecked=unchecked,
+    )
 
 
 def provider_at(base_url: str) -> HTTPToolProvider:
@@ -285,7 +290,8 @@ async def test_a_lookup_result_that_cannot_become_the_original_result_is_refused
     world: World, api: ApiHandle
 ) -> None:
     agent = agent_with_v2_lookup({"booking_id": "$.external_reference"})  # `status` is missing
-    pipeline = pipeline_for(provider_at(api.base_url), agent)
+    # the compiler refuses this map (MAPPING_MISSING_REQUIRED); the runtime must still refuse it
+    pipeline = pipeline_for(provider_at(api.base_url), agent, unchecked=True)
     await world.inbox.insert_if_absent(event("e1", "terça 10h", clock=world.clock))
     api.state.fault = {"status_after_effect": 503}
     await world.coordinator(

@@ -21,6 +21,7 @@ from conversation_agent.core.errors import ExecutionFencingError
 from conversation_agent.core.models.runtime import ExecutionClaim, ToolInvocation
 from conversation_agent.core.models.tooling import ToolResult
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 
 _SELECT = f"SELECT {INVOCATION_COLUMNS} FROM tool_invocations"
 _RETURNING = f"RETURNING {INVOCATION_COLUMNS}"
@@ -38,9 +39,9 @@ def _ledger_status(result: ToolResult) -> str:
 
 class PostgresToolInvocationStore:
     def __init__(
-        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationClock | None = None
     ) -> None:
-        self._time = coordination or CoordinationTime(db, clock)
+        self._time = coordination or CoordinationTime(db)
         self._db = db
         self._clock = clock
 

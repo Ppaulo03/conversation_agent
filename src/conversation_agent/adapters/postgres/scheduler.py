@@ -6,15 +6,16 @@ from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.models.runtime import ScheduledEvent
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 
 
 class PostgresScheduler:
     """Durable timers: due events live in PostgreSQL, so they survive any restart."""
 
     def __init__(
-        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationTime | None = None
+        self, db: PostgresDatabase, clock: Clock, coordination: CoordinationClock | None = None
     ) -> None:
-        self._time = coordination or CoordinationTime(db, clock)
+        self._time = coordination or CoordinationTime(db)
         self._db = db
         self._clock = clock
 

@@ -7,6 +7,7 @@ from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.rows import OUTBOX_COLUMNS, outbox_from_row
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 
 _O_COLUMNS = ", ".join(f"o.{c.strip()}" for c in OUTBOX_COLUMNS.split(","))
 
@@ -18,9 +19,9 @@ class PostgresOutboxStore:
         clock: Clock,
         *,
         max_attempts: int = 5,
-        coordination: CoordinationTime | None = None,
+        coordination: CoordinationClock | None = None,
     ) -> None:
-        self._time = coordination or CoordinationTime(db, clock)
+        self._time = coordination or CoordinationTime(db)
         self._db = db
         self._clock = clock
         self._max_attempts = max_attempts

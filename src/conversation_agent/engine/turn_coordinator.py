@@ -53,6 +53,7 @@ from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.journal import TurnJournal
@@ -98,6 +99,7 @@ class TurnCoordinator:
         journal_factory: Callable[[FenceToken], TurnJournal],
         engine_factory: Callable[[FenceToken, TurnJournal], TurnEngine],
         clock: Clock,
+        coordination: CoordinationClock,
         faults: FaultInjector,
         lease_ttl: timedelta = timedelta(seconds=30),
         heartbeat_interval_seconds: float = 10.0,
@@ -124,7 +126,8 @@ class TurnCoordinator:
         self._inbox = inbox
         self._journal_factory = journal_factory
         self._engine_factory = engine_factory
-        self._clock = clock
+        self._clock = clock  # conversational time only (turn reference time, confirmation TTL)
+        self._coordination = coordination  # the ONLY clock for leases/claims (INV-032)
         self._faults = faults
         self._ttl = lease_ttl
         self._interval = heartbeat_interval_seconds
@@ -141,7 +144,7 @@ class TurnCoordinator:
         if lease is None:
             return ConversationRun("busy")  # nothing is claimed by the losing worker
         handle = LeaseHandle(
-            lease, self._leases, self._clock, ttl=self._ttl, interval_seconds=self._interval
+            lease, self._leases, self._coordination, ttl=self._ttl, interval_seconds=self._interval
         )
         await handle.start()
         completed = 0

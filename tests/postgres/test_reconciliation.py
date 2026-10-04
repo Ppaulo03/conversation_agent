@@ -380,7 +380,7 @@ async def test_timers_survive_a_restart_and_an_abandoned_claim_is_reclaimed(
 
     reborn = await PostgresDatabase.connect(pg_dsn)
     try:
-        scheduler = PostgresScheduler(reborn, world.clock)
+        scheduler = PostgresScheduler(reborn, world.clock, world.coord)
         advance(world, 6)
         (first,) = await scheduler.claim_due("dead-worker", 5, TTL)  # claimed, never completed
         assert await scheduler.claim_due("other", 5, TTL) == []  # hands off while the claim lives

@@ -11,6 +11,7 @@ from typing import Any
 
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.faults import NoFaults
+from conversation_agent.adapters.postgres.coordination import FixedCoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.inbox import PostgresInboxStore
 from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
@@ -99,12 +100,13 @@ class World:
     def __init__(self, db: PostgresDatabase, clock: FixedClock) -> None:
         self.db = db
         self.clock = clock
+        self.coord = FixedCoordinationTime(clock)  # the test authority for coordination time
         self.inbox = PostgresInboxStore(db, clock)
-        self.leases = PostgresLeaseStore(db, clock)
-        self.uows = PostgresUnitOfWorkFactory(db, clock)
-        self.ledger = PostgresToolInvocationStore(db, clock)
-        self.outbox = PostgresOutboxStore(db, clock)
-        self.scheduler = PostgresScheduler(db, clock)
+        self.leases = PostgresLeaseStore(db, clock, self.coord)
+        self.uows = PostgresUnitOfWorkFactory(db, clock, self.coord)
+        self.ledger = PostgresToolInvocationStore(db, clock, self.coord)
+        self.outbox = PostgresOutboxStore(db, clock, coordination=self.coord)
+        self.scheduler = PostgresScheduler(db, clock, self.coord)
         # the simulated channel shares the test clock unless a test skews it on purpose
         self.channel_skew = timedelta(0)
         self.sender = FakeMessageSender(provider_clock=lambda: clock.now() + self.channel_skew)
@@ -197,6 +199,7 @@ class World:
             journal_factory=journal_factory,
             engine_factory=engine_factory,
             clock=self.clock,
+            coordination=self.coord,
             faults=injector,
             lease_ttl=TTL,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
@@ -263,6 +266,7 @@ class World:
                 AssertionError("unversioned")
             ),
             clock=self.clock,
+            coordination=self.coord,
             faults=injector,
             lease_ttl=TTL,
             registry=registry,
@@ -283,7 +287,7 @@ class World:
             ledger=self.ledger,
             scheduler=self.scheduler,
             faults=NoFaults(),
-            clock=self.clock,
+            coordination=self.coord,
             owner=owner,
             registry=registry,
             agent_id=agent_id,
@@ -308,7 +312,7 @@ class World:
             pipeline=pipeline or self.pipeline(providers, None),
             scheduler=self.scheduler,
             faults=faults or NoFaults(),
-            clock=self.clock,
+            coordination=self.coord,
             owner=owner,
             **kwargs,
         )

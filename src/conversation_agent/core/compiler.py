@@ -25,8 +25,10 @@ from conversation_agent.core.compiler_types import (
     element_model,
     infer,
     is_list,
+    list_element,
     resolve_path,
     show,
+    split_null,
     tag_of_annotation,
     tag_of_value,
     unify,
@@ -53,6 +55,7 @@ from conversation_agent.core.definitions.mapping import (
     Ref,
 )
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
+from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.versioning import (
     COMPILER_VERSION,
@@ -338,9 +341,66 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
         if resolved is None:  # pragma: no cover - AgentDefinition guarantees it
             continue
         found += _check_binding(resolved, binding)
+    for tool in agent.tools:
+        found += _check_transport(tool)
+        found += _check_result_map(agent, tool)
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
     found += _check_flow_inputs(agent)
+    return found
+
+
+_PATH_VAR = re.compile(r"\{(\w+)\}")
+
+
+def _check_transport(tool: ToolDefinition) -> list[Diagnostic]:
+    """The HTTP spec must carry the tool arguments: a required argument that is never sent
+    leaves the external system to apply ITS default (a 2-hour request becomes 1 hour)."""
+    spec = tool.http
+    if spec is None:
+        return []
+    where = f"tools.{tool.name}.http"
+    fields = tool.input_model.model_fields
+    path_vars = set(_PATH_VAR.findall(spec.path))
+    found = [
+        Diagnostic("HTTP_UNKNOWN_ARGUMENT", where, f"{part} {name!r} is not an input of the tool")
+        for part, names in (("path", path_vars), ("query", spec.query), ("body", spec.body))
+        for name in sorted(names)
+        if name not in fields
+    ]
+    sent = path_vars | set(spec.query) | set(spec.body)
+    found += [
+        Diagnostic(
+            "TOOL_ARG_NOT_SENT",
+            where,
+            f"required input {name!r} is in neither the path, the query nor the body",
+        )
+        for name, field in fields.items()
+        if field.is_required() and name not in sent
+    ]
+    return found
+
+
+def _check_result_map(agent: AgentDefinition, tool: ToolDefinition) -> list[Diagnostic]:
+    """`recovery.result_map` turns the lookup capability's output into the original one: it is a
+    binding like any other and is checked like one."""
+    recovery = tool.recovery
+    if recovery is None or recovery.result_map is None or recovery.lookup_capability is None:
+        return []
+    lookup = agent.resolve(recovery.lookup_capability)
+    if lookup is None:
+        return []
+    found: list[Diagnostic] = []
+    for binding in agent.bindings:
+        if binding.tool != tool.name:
+            continue
+        resolved = agent.resolve(binding.capability)
+        if resolved is None:
+            continue
+        where = f"tools.{tool.name}.recovery.result_map"
+        original = resolved.capability.output_model
+        found += _check_targets(where, recovery.result_map, original)
+        found += _check_map(where, recovery.result_map, lookup.capability.output_model, original)
     return found
 
 
@@ -451,19 +511,6 @@ def _check_expr(
             )
         if expr.enum is not None:
             found += _check_enum_map(path, expr, source)
-        if "default" in expr.model_fields_set and target_annotation is not None:
-            # the default REPLACES the mapped value when the path is absent, so it must fit the
-            # target as it is (a finished write must never fail on a fallback of the wrong type)
-            fallback, wanted = tag_of_value(expr.default), tag_of_annotation(target_annotation)
-            if expr.default is not None and not compatible(fallback, wanted):
-                found.append(
-                    Diagnostic(
-                        "MAPPING_TYPE_MISMATCH",
-                        path,
-                        f"default {expr.default!r} is {show(fallback)} but the target takes "
-                        f"{show(wanted)}",
-                    )
-                )
     if isinstance(expr, Each):
         ann, err = resolve_path(source, expr.from_each)
         if err:
@@ -471,7 +518,8 @@ def _check_expr(
         item = element_model(ann) if ann is not None else None
         if ann is not None and err is None and item is None:
             source_tag = tag_of_annotation(ann)
-            element = source_tag[1] if is_list(source_tag) else source_tag
+            element = list_element(source_tag)
+            element = source_tag if element is None else element
             if element != ANY:  # `map` reads fields of each item: items must be objects
                 found.append(
                     Diagnostic(
@@ -508,18 +556,14 @@ def _check_expr(
             )
     elif target_annotation is not None:
         wanted = tag_of_annotation(target_annotation)
-        element = wanted[1] if is_list(wanted) else None
+        element = list_element(wanted)
         if not (is_list(wanted) or wanted == ANY):
             found.append(
                 Diagnostic(
                     "MAPPING_TYPE_MISMATCH", path, f"a list mapping cannot fill a {show(wanted)}"
                 )
             )
-        elif (
-            element is not None
-            and element != ANY
-            and not (isinstance(element, tuple) and element[0] == "object")
-        ):
+        elif element is not None and element != ANY and not _is_object(element):
             found.append(
                 Diagnostic(
                     "MAPPING_TYPE_MISMATCH",
@@ -528,6 +572,11 @@ def _check_expr(
                 )
             )
     return found
+
+
+def _is_object(tag: Any) -> bool:
+    base = split_null(tag)[1]
+    return isinstance(base, tuple) and base[0] == "object"
 
 
 def _path_code(message: str) -> str:

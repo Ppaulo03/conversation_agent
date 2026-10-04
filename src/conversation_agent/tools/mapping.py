@@ -66,9 +66,9 @@ def _eval(expr: MapExpr, data: Any, transforms: Mapping[str, Callable[[Any], Any
         return expr.const
     if isinstance(expr, Ref):
         value = _select(data, expr.from_)
+        if (value is _MISSING or value is None) and "default" in expr.model_fields_set:
+            return expr.default  # an absent OR null value falls back (a dumped model has nulls)
         if value is _MISSING:
-            if "default" in expr.model_fields_set:
-                return expr.default
             raise MappingError(f"path not found: {expr.from_!r}")
         if expr.enum is not None:
             if not isinstance(value, str) or value not in expr.enum:

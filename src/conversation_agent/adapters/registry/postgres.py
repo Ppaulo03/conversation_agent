@@ -14,6 +14,7 @@ from typing import Any
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.compiler import COMPILERS, CompiledAgent, CompileError
 from conversation_agent.core.errors import (
+    DefinitionError,
     PublishError,
     RegistryCompatibilityError,
     RegistryIntegrityError,
@@ -92,7 +93,12 @@ class PostgresAgentRegistry:
             tenant_id,
             agent_id,
         )
-        return sorted((r["version"] for r in rows), key=Version)
+        try:
+            return sorted((r["version"] for r in rows), key=Version)
+        except DefinitionError as exc:  # a stored version label that is not MAJOR.MINOR.PATCH
+            raise RegistryIntegrityError(
+                f"{agent_id} has a stored version that is not a valid version: {exc}"
+            ) from exc
 
     async def _load(
         self, tenant_id: str, agent_id: str, version: str, conn: Any
