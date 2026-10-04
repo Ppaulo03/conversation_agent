@@ -161,12 +161,13 @@ class TurnEngine:
                 ),
             )
             if staged.reply is not None:  # handled by the confirmation protocol
-                stage_reply, stage_flows = staged.reply, state.flows
+                stage_reply, stage_flows, stage_handoff = staged.reply, state.flows, False
                 if self._flows is not None and staged.closed is not None:
                     followed = self._flows.after_action(
                         state.flows, staged.closed, staged.status, staged.reply
                     )
                     stage_reply, stage_flows = followed.reply, followed.flows
+                    stage_handoff = followed.handoff  # "I will call a person" must really happen
                 return await self._finish(
                     cursor,
                     turn_id,
@@ -179,6 +180,7 @@ class TurnEngine:
                     None,
                     staged.reprompt_action_id,
                     flows=stage_flows,
+                    handoff=stage_handoff,
                 )
             # modify / not-a-reply: fall through and treat the message as a normal turn
 
