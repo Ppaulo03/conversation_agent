@@ -151,9 +151,14 @@ class ToolRunner:
                 status=result.status, error=result.error, provider_metadata=result.provider_metadata
             )
         try:
+            source: Any = result.data
             if resolved.tool.output_model is not None:
-                resolved.tool.output_model.model_validate(result.data)
-            mapped = apply_mapping(resolved.binding.output_map, result.data, self._transforms)
+                # The mapping reads what the Tool schema ACCEPTED (coerced, defaults applied,
+                # unknown fields dropped), never the raw JSON the compiler never reasoned about.
+                source = resolved.tool.output_model.model_validate(result.data).model_dump(
+                    mode="json"
+                )
+            mapped = apply_mapping(resolved.binding.output_map, source, self._transforms)
             data = resolved.capability.output_model.model_validate(mapped).model_dump(mode="json")
         except (MappingError, ValidationError):
             failure = _failure_after_possible_io(

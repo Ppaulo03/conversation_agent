@@ -527,3 +527,64 @@ def test_a_strict_target_object_rejects_fields_the_source_would_add() -> None:
     assert "MAPPING_TYPE_MISMATCH" in codes_of(
         m
     )  # the extra field would fail validation at runtime
+
+
+# --- Phase 5.3: the compiler accepts exactly the mapping language the runtime executes ---
+
+
+def test_a_constant_must_have_the_right_structure_not_just_the_right_category() -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["slots"] = {"const": ["oops"]}
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)  # list[string] is not list[Slot]
+    m = raw()
+    binding(m, "scheduling.create")["output_map"]["status"] = {"const": {"x": "bad"}}
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)  # an object is not a string
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["slots"] = {"const": []}
+    assert compile_manifest(m).digest  # an empty list fits any list
+
+
+def test_a_ref_default_must_fit_the_target_because_it_replaces_the_value() -> None:
+    m = raw()
+    binding(m, "scheduling.create")["output_map"]["status"] = {"from": "$.state", "default": 123}
+    with pytest.raises(CompileError, match="default 123"):
+        compile_manifest(m)
+    binding(m, "scheduling.create")["output_map"]["status"] = {"from": "$.state", "default": "ok"}
+    assert compile_manifest(m).digest
+
+
+@pytest.mark.parametrize("source", ["$.pagination", "$.items"])
+def test_an_enum_map_only_reads_strings(source: str) -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = {
+        "from": source,
+        "enum": {"x": "y"},
+    }
+    assert "MAPPING_ENUM_SOURCE" in codes_of(m)  # the runtime raises on a non-string value
+
+
+def test_a_wildcard_yields_a_list_exactly_like_the_runtime() -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = "$.items[*].start"
+    with pytest.raises(CompileError, match="list\\[string\\]"):
+        compile_manifest(m)  # runtime would return ["...", "..."] for a string field
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = "$.items[0].start"
+    assert compile_manifest(m).digest  # a single index is one string
+
+
+def test_each_needs_a_list_of_objects() -> None:
+    m = raw()
+    tool(m, "erp_get_available_slots")["output"]["items"] = {
+        "type": "list",
+        "items": {"type": "string"},
+    }
+    assert "MAPPING_EACH_NEEDS_OBJECTS" in codes_of(m)
+
+
+def test_each_cannot_fill_a_list_of_scalars() -> None:
+    m = raw()
+    capability(m, "scheduling.availability")["output"]["slots"] = {
+        "type": "list",
+        "items": {"type": "string"},
+    }
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)

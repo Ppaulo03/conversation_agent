@@ -79,9 +79,10 @@ def tag_of_value(value: Any) -> Tag:
     if isinstance(value, str):
         return "string"
     if isinstance(value, list):
-        return ("list", ANY)
+        return ("list", unify([tag_of_value(v) for v in value]))
     if isinstance(value, dict):
-        return ("object", None, False)
+        fields = tuple((str(k), tag_of_value(v), True) for k, v in sorted(value.items()))
+        return ("object", fields, False)
     return ANY
 
 
@@ -159,6 +160,7 @@ def resolve_path(model: type[BaseModel], expr: str) -> tuple[Any, str | None]:
     if not expr.startswith("$"):
         return None, f"{expr!r} must start with '$'"
     rest, pos = expr[1:], 0
+    fanned = False
     current: Any = model
     while pos < len(rest):
         m = _SEGMENT.match(rest, pos)
@@ -178,6 +180,8 @@ def resolve_path(model: type[BaseModel], expr: str) -> tuple[Any, str | None]:
             else:
                 return None, f"{expr!r}: cannot read .{key} of a {show(tag_of_annotation(node))}"
         else:
+            if m.group(2) == "*":
+                fanned = True
             if get_origin(node) is list:
                 args = get_args(node)
                 current = args[0] if args else Any
@@ -185,6 +189,8 @@ def resolve_path(model: type[BaseModel], expr: str) -> tuple[Any, str | None]:
                 return None, None
             else:
                 return None, f"{expr!r}: cannot index a {show(tag_of_annotation(node))}"
+    if fanned and current is not None:
+        return list[current], None  # `[*]` yields a LIST of whatever follows (runtime fan-out)
     return current, None
 
 
@@ -216,7 +222,7 @@ def infer(expr: MapExpr, source: type[BaseModel]) -> tuple[Tag, list[str]]:
         problems.append(err)
     tag: Tag = tag_of_annotation(ann) if ann is not None else ANY
     if expr.enum is not None:
-        if tag != ANY and tag != "string" and not isinstance(tag, tuple):
+        if tag != ANY and tag != "string" and not (isinstance(tag, tuple) and tag[0] == "enum"):
             problems.append(f"an enum map needs a string/enum source, got {show(tag)}")
         tag = unify([tag_of_value(v) for v in expr.enum.values()])
     if expr.transform is not None and expr.transform in TRANSFORM_SPECS:

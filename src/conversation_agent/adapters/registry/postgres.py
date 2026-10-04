@@ -12,7 +12,7 @@ from __future__ import annotations
 from typing import Any
 
 from conversation_agent.adapters.postgres.db import PostgresDatabase
-from conversation_agent.core.compiler import COMPILERS, CompiledAgent
+from conversation_agent.core.compiler import COMPILERS, CompiledAgent, CompileError
 from conversation_agent.core.errors import (
     PublishError,
     RegistryCompatibilityError,
@@ -53,12 +53,13 @@ class PostgresAgentRegistry:
             if plan.action == "new":
                 await conn.execute(
                     "INSERT INTO published_agents (tenant_id, agent_id, version, digest, "
-                    "manifest_json, schema_version, compiler_version) "
-                    "VALUES ($1,$2,$3,$4,$5,$6,$7)",
+                    "manifest_digest, manifest_json, schema_version, compiler_version) "
+                    "VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
                     tenant_id,
                     compiled.agent_id,
                     compiled.version,
                     compiled.digest,
+                    compiled.manifest_digest,
                     # exclude_unset: a default never written must not become an explicit one
                     compiled.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
                     compiled.schema_version,
@@ -100,7 +101,8 @@ class PostgresAgentRegistry:
         if cached is not None:
             return cached
         row = await conn.fetchrow(
-            "SELECT digest, manifest_json, schema_version, compiler_version FROM published_agents "
+            "SELECT digest, manifest_digest, manifest_json, schema_version, compiler_version "
+            "FROM published_agents "
             "WHERE tenant_id=$1 AND agent_id=$2 AND version=$3",
             tenant_id,
             agent_id,
@@ -114,7 +116,12 @@ class PostgresAgentRegistry:
                 f"{agent_id} {version} was published with compiler {row['compiler_version']}; "
                 f"this build has loaders for {sorted(COMPILERS)}"
             )
-        compiled = loader(row["manifest_json"])
+        try:
+            compiled = loader(row["manifest_json"])
+        except CompileError as exc:  # a stored manifest that no longer compiles is corruption
+            raise RegistryIntegrityError(
+                f"{agent_id} {version} holds a manifest that does not compile: {exc.codes}"
+            ) from exc
         if (compiled.agent_id, compiled.version, compiled.schema_version) != (
             agent_id,
             version,
@@ -123,6 +130,11 @@ class PostgresAgentRegistry:
             raise RegistryIntegrityError(
                 f"row {agent_id} {version} holds a manifest for {compiled.agent_id} "
                 f"{compiled.version} (format {compiled.schema_version}): not what was published"
+            )
+        if compiled.manifest_digest != row["manifest_digest"]:
+            raise RegistryIntegrityError(
+                f"{agent_id} {version} is not byte-for-byte the manifest that was published "
+                "(metadata changed)"
             )
         if compiled.digest != row["digest"]:
             raise RegistryIntegrityError(

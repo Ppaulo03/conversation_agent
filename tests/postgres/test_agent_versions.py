@@ -143,12 +143,13 @@ async def test_a_stored_agent_that_no_longer_matches_its_digest_is_refused(world
     good = compiled("1.0.0")
     assert good.manifest is not None
     await world.db.pool.execute(
-        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_json, "
-        "schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,1,'1')",
+        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_digest, "
+        "manifest_json, schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,$6,1,'1')",
         TENANT,
         AGENT_ID,
         "1.0.0",
         "0" * 64,  # not what this manifest compiles to
+        good.manifest_digest,
         good.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
     )
     with pytest.raises(RegistryIntegrityError):
@@ -406,13 +407,14 @@ async def insert_row(world: World, **overrides: Any) -> None:
         "agent_id": AGENT_ID,
         "version": "1.0.0",
         "digest": good.digest,
+        "manifest_digest": good.manifest_digest,
         "manifest_json": good.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
         "schema_version": 1,
         "compiler_version": "1",
     } | overrides
     await world.db.pool.execute(
-        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_json, "
-        "schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_digest, "
+        "manifest_json, schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
         *values.values(),
     )
 
@@ -512,3 +514,38 @@ async def test_a_corrupt_definition_hands_that_invocation_to_a_human_and_the_bat
     ).run_once()
     assert resolved.status is InvocationStatus.HUMAN_HANDOFF
     assert resolved.error is not None and resolved.error["code"] == "AGENT_VERSION_UNAVAILABLE"
+
+
+async def test_a_stored_manifest_that_does_not_compile_is_an_integrity_error(world: World) -> None:
+    # corruption / a bad restore: this must be the error the coordinator and reconciler contain
+    await insert_row(world, manifest_json={"bad": 1})
+    with pytest.raises(RegistryIntegrityError, match="does not compile"):
+        await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")
+
+
+async def test_changed_manifest_metadata_is_detected_even_when_the_semantics_match(
+    world: World,
+) -> None:
+    other = compiled("1.0.0", min_framework="0.5.0")  # same behaviour, other artifact
+    assert other.manifest is not None
+    await insert_row(
+        world,
+        manifest_json=other.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
+    )  # digest and manifest_digest are those of the ORIGINAL publication
+    with pytest.raises(RegistryIntegrityError, match="byte-for-byte"):
+        await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")
+
+
+async def test_a_corrupt_stored_manifest_stops_that_conversation_not_the_worker(
+    world: World, api: ApiHandle
+) -> None:
+    registry = PostgresAgentRegistry(world.db)
+    await registry.publish(TENANT, compiled("0.1.0"))
+    await say(world, api, registry, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
+    await world.db.pool.execute("ALTER TABLE published_agents DISABLE TRIGGER USER")
+    await world.db.pool.execute("UPDATE published_agents SET manifest_json = '{\"bad\": 1}'")
+    await world.db.pool.execute("ALTER TABLE published_agents ENABLE TRIGGER USER")
+    fresh = PostgresAgentRegistry(world.db)  # nothing cached: it must read the broken row
+    llm = FakeLLM([])
+    run = await say(world, api, fresh, "outra coisa", llm, 2)
+    assert run.status == "retry_later" and llm.calls == 0

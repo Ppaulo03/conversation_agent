@@ -451,11 +451,35 @@ def _check_expr(
             )
         if expr.enum is not None:
             found += _check_enum_map(path, expr, source)
+        if "default" in expr.model_fields_set and target_annotation is not None:
+            # the default REPLACES the mapped value when the path is absent, so it must fit the
+            # target as it is (a finished write must never fail on a fallback of the wrong type)
+            fallback, wanted = tag_of_value(expr.default), tag_of_annotation(target_annotation)
+            if expr.default is not None and not compatible(fallback, wanted):
+                found.append(
+                    Diagnostic(
+                        "MAPPING_TYPE_MISMATCH",
+                        path,
+                        f"default {expr.default!r} is {show(fallback)} but the target takes "
+                        f"{show(wanted)}",
+                    )
+                )
     if isinstance(expr, Each):
         ann, err = resolve_path(source, expr.from_each)
         if err:
             found.append(Diagnostic(_path_code(err), path, err))
         item = element_model(ann) if ann is not None else None
+        if ann is not None and err is None and item is None:
+            source_tag = tag_of_annotation(ann)
+            element = source_tag[1] if is_list(source_tag) else source_tag
+            if element != ANY:  # `map` reads fields of each item: items must be objects
+                found.append(
+                    Diagnostic(
+                        "MAPPING_EACH_NEEDS_OBJECTS",
+                        path,
+                        f"from_each needs a list of objects, got {show(source_tag)}",
+                    )
+                )
         target_item = element_model(target_annotation) if target_annotation is not None else None
         if item is not None and target_item is not None:
             found += _check_map(path, expr.map, item, target_item)
@@ -465,7 +489,11 @@ def _check_expr(
     else:
         _, problems = infer(expr, source)
         for problem in problems:
-            code = "MAPPING_TRANSFORM_INPUT" if "takes" in problem else _path_code(problem)
+            code = _path_code(problem)
+            if "takes" in problem:
+                code = "MAPPING_TRANSFORM_INPUT"
+            elif "enum map needs" in problem:
+                code = "MAPPING_ENUM_SOURCE"
             found.append(Diagnostic(code, path, problem))
     if target_annotation is not None and not isinstance(expr, Each):
         produced, _ = infer(expr, source)
@@ -478,16 +506,27 @@ def _check_expr(
                     f"produces {show(produced)} but the target takes {show(wanted)}",
                 )
             )
-    elif target_annotation is not None and not (
-        is_list(tag_of_annotation(target_annotation)) or tag_of_annotation(target_annotation) == ANY
-    ):
-        found.append(
-            Diagnostic(
-                "MAPPING_TYPE_MISMATCH",
-                path,
-                f"a list mapping cannot fill a {show(tag_of_annotation(target_annotation))}",
+    elif target_annotation is not None:
+        wanted = tag_of_annotation(target_annotation)
+        element = wanted[1] if is_list(wanted) else None
+        if not (is_list(wanted) or wanted == ANY):
+            found.append(
+                Diagnostic(
+                    "MAPPING_TYPE_MISMATCH", path, f"a list mapping cannot fill a {show(wanted)}"
+                )
             )
-        )
+        elif (
+            element is not None
+            and element != ANY
+            and not (isinstance(element, tuple) and element[0] == "object")
+        ):
+            found.append(
+                Diagnostic(
+                    "MAPPING_TYPE_MISMATCH",
+                    path,
+                    f"each item becomes an object but the target list holds {show(element)}",
+                )
+            )
     return found
 
 

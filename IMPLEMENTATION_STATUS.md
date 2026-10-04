@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5.2 — hardening da Fase 5 concluído (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 5.3 — Fase 5 encerrada (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -477,3 +477,21 @@ Status: **PASS** (achados verificados no código antes de corrigir). Novas invar
 
 Aceito: o compiler ainda reporta por estágio (já documentado na 5.1). Requisito explícito do primeiro bump de compiler: adicionar o
 loader novo em `COMPILERS` mantendo o anterior (ou republicar o histórico).
+
+
+## Phase 5.3 — a linguagem de mapping que o compiler aceita é a que o runtime executa
+
+Status: **PASS** (achados reproduzidos antes de corrigir). 792 testes. **Fase 5 encerrada.**
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| Alta: `ToolRunner` validava a resposta da Tool e mapeava o JSON cru (valor coercível virava `BINDING_OUTPUT_MAPPING_FAILED`/`UNKNOWN` depois do side effect) | o output mapping lê `output_model.model_validate(...).model_dump(mode="json")`: coerção, defaults e descarte de campos não declarados valem também no runtime | `test_output_mapping_uses_the_validated_tool_response`, `test_a_coercible_valid_write_response_never_becomes_unknown`, `test_fields_the_tool_did_not_declare_never_reach_the_mapping` |
+| Alta (A) `Const` perdia a estrutura (lista/objeto só por categoria) | `tag_of_value` recursivo | `test_a_constant_must_have_the_right_structure_*` |
+| Alta (B) `Ref.default` ignorado | o default substitui o valor quando o path falta, então precisa caber no alvo (`MAPPING_TYPE_MISMATCH`) | `test_a_ref_default_must_fit_the_target_*` |
+| Alta (C) enum map aceitava objeto/lista (todos eram `tuple`) | origem precisa ser `string` ou enum (`MAPPING_ENUM_SOURCE`) | `test_an_enum_map_only_reads_strings` |
+| Alta (D) `[*]` tinha tipo diferente no compiler e no runtime | `resolve_path` carrega cardinalidade: `$.items[*].x` é `list[X]`, `[0]` é `X` | `test_a_wildcard_yields_a_list_exactly_like_the_runtime` |
+| Alta (E) `Each` sobre lista de escalares pulava a validação | `Each` exige `list[object]` (`MAPPING_EACH_NEEDS_OBJECTS`); `Each` não preenche lista de escalares | `test_each_needs_a_list_of_objects`, `test_each_cannot_fill_a_list_of_scalars` |
+| Média: manifest armazenado inválido lançava `CompileError` fora do contrato do registry | o adapter converte em `RegistryIntegrityError` (contido por conversa/invocação) | `test_a_stored_manifest_that_does_not_compile_is_an_integrity_error`, `test_a_corrupt_stored_manifest_stops_that_conversation_not_the_worker` (linha real no Postgres) |
+| Média/baixa: `manifest_digest` não persistido | coluna `manifest_digest` (migration 0010, tabela recriada) conferida no load: metadado alterado com semântica igual é detectado | `test_changed_manifest_metadata_is_detected_even_when_the_semantics_match` |
+
+Limpeza de artefato (`archive.zip`, `__pycache__`, `.pytest_cache`): o repositório já os ignora via `.gitignore`; o zip é gerado fora do git.
