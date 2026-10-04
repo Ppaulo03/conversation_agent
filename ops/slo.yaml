@@ -1,0 +1,85 @@
+# Service level objectives of the runtime, as data. Each entry is an alert that fires when its
+# objective is VIOLATED. Generate the alert rules and the dashboard with
+#   uv run python -m conversation_agent.app.ops render
+# and keep them in sync with `... ops check` (CI). Every `runbook` is a section of
+# docs/OPERATIONS.md that says what to do.
+slos:
+  - name: InboxLatencyHigh
+    description: Inbound messages wait more than 60 s for a turn (workers are behind).
+    expr: conversation_agent_inbox_oldest_ready_age_seconds > 60
+    for: 5m
+    severity: warning
+    runbook: inbox-latency
+    unit: s
+
+  - name: InboxLatencyCritical
+    description: Inbound messages wait more than 5 min for a turn.
+    expr: conversation_agent_inbox_oldest_ready_age_seconds > 300
+    for: 5m
+    severity: critical
+    runbook: inbox-latency
+    unit: s
+
+  - name: TurnStuck
+    description: A turn has been open for more than 5 min (a worker is stuck or died holding it).
+    expr: conversation_agent_turns_oldest_processing_age_seconds > 300
+    for: 5m
+    severity: critical
+    runbook: stuck-turn
+    unit: s
+
+  - name: OutboxDelay
+    description: A reply has waited more than 2 min to be sent.
+    expr: conversation_agent_outbox_oldest_pending_age_seconds > 120
+    for: 5m
+    severity: warning
+    runbook: outbox-delay
+    unit: s
+
+  - name: DeliveryUnsettled
+    description: A reply has been unconfirmed for more than 1 h, approaching the gateway's idempotency window.
+    expr: conversation_agent_outbox_oldest_unsettled_age_seconds > 3600
+    for: 5m
+    severity: critical
+    runbook: unsettled-delivery
+    unit: s
+
+  - name: UnknownWriteStale
+    description: An external write has had an unknown outcome for more than 15 min.
+    expr: conversation_agent_invocations_oldest_unresolved_age_seconds > 900
+    for: 10m
+    severity: critical
+    runbook: unknown-write
+    unit: s
+
+  - name: HumanHandoffBacklog
+    description: A conversation has waited more than 10 min for a person to take it.
+    expr: conversation_agent_handoffs_oldest_pending_age_seconds > 600
+    for: 5m
+    severity: warning
+    runbook: handoff-backlog
+    unit: s
+
+  - name: TimersOverdue
+    description: Timers (proactive messages, reconciliation) are more than 2 min overdue.
+    expr: conversation_agent_scheduled_oldest_overdue_age_seconds > 120
+    for: 5m
+    severity: warning
+    runbook: overdue-timers
+    unit: s
+
+  - name: CircuitOpened
+    description: A circuit breaker for an external system opened in the last 10 min.
+    expr: increase(conversation_agent_circuit_transitions_total{state="open"}[10m]) > 0
+    for: 1m
+    severity: warning
+    runbook: circuit-open
+
+  - name: ToolFailureRateHigh
+    description: More than 20 % of outbound tool calls fail for a provider over 10 min.
+    expr: >-
+      sum by (provider) (rate(conversation_agent_tool_calls_total{status!~"success|business_error|validation_error"}[10m]))
+      / sum by (provider) (rate(conversation_agent_tool_calls_total[10m])) > 0.2
+    for: 10m
+    severity: warning
+    runbook: tool-failures

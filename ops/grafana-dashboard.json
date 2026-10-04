@@ -1,0 +1,255 @@
+{
+  "title": "conversation_agent: runtime health",
+  "uid": "conversation-agent-health",
+  "schemaVersion": 39,
+  "version": 1,
+  "tags": [
+    "conversation-agent"
+  ],
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "InboxLatencyHigh",
+      "description": "Inbound messages wait more than 60 s for a turn (workers are behind).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_inbox_oldest_ready_age_seconds > 60",
+          "legendFormat": "InboxLatencyHigh",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "InboxLatencyCritical",
+      "description": "Inbound messages wait more than 5 min for a turn.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_inbox_oldest_ready_age_seconds > 300",
+          "legendFormat": "InboxLatencyCritical",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "TurnStuck",
+      "description": "A turn has been open for more than 5 min (a worker is stuck or died holding it).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_turns_oldest_processing_age_seconds > 300",
+          "legendFormat": "TurnStuck",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "type": "timeseries",
+      "title": "OutboxDelay",
+      "description": "A reply has waited more than 2 min to be sent.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 7
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_outbox_oldest_pending_age_seconds > 120",
+          "legendFormat": "OutboxDelay",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "type": "timeseries",
+      "title": "DeliveryUnsettled",
+      "description": "A reply has been unconfirmed for more than 1 h, approaching the gateway's idempotency window.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_outbox_oldest_unsettled_age_seconds > 3600",
+          "legendFormat": "DeliveryUnsettled",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "type": "timeseries",
+      "title": "UnknownWriteStale",
+      "description": "An external write has had an unknown outcome for more than 15 min.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_invocations_oldest_unresolved_age_seconds > 900",
+          "legendFormat": "UnknownWriteStale",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "HumanHandoffBacklog",
+      "description": "A conversation has waited more than 10 min for a person to take it.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_handoffs_oldest_pending_age_seconds > 600",
+          "legendFormat": "HumanHandoffBacklog",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "type": "timeseries",
+      "title": "TimersOverdue",
+      "description": "Timers (proactive messages, reconciliation) are more than 2 min overdue.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 21
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_scheduled_oldest_overdue_age_seconds > 120",
+          "legendFormat": "TimersOverdue",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 9,
+      "type": "timeseries",
+      "title": "CircuitOpened",
+      "description": "A circuit breaker for an external system opened in the last 10 min.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(conversation_agent_circuit_transitions_total{state=\"open\"}[10m]) > 0",
+          "legendFormat": "CircuitOpened",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 10,
+      "type": "timeseries",
+      "title": "ToolFailureRateHigh",
+      "description": "More than 20 % of outbound tool calls fail for a provider over 10 min.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 28
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(conversation_agent_tool_calls_total{status!~\"success|business_error|validation_error\"}[10m])) / sum by (provider) (rate(conversation_agent_tool_calls_total[10m])) > 0.2",
+          "legendFormat": "ToolFailureRateHigh",
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}

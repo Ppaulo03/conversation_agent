@@ -1,0 +1,85 @@
+# GENERATED from ops/slo.yaml by `python -m conversation_agent.app.ops render`.
+groups:
+- name: conversation_agent.slo
+  rules:
+  - alert: ConversationAgentInboxLatencyHigh
+    expr: conversation_agent_inbox_oldest_ready_age_seconds > 60
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: Inbound messages wait more than 60 s for a turn (workers are behind).
+      runbook: docs/OPERATIONS.md#inbox-latency
+  - alert: ConversationAgentInboxLatencyCritical
+    expr: conversation_agent_inbox_oldest_ready_age_seconds > 300
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: Inbound messages wait more than 5 min for a turn.
+      runbook: docs/OPERATIONS.md#inbox-latency
+  - alert: ConversationAgentTurnStuck
+    expr: conversation_agent_turns_oldest_processing_age_seconds > 300
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: A turn has been open for more than 5 min (a worker is stuck or died holding it).
+      runbook: docs/OPERATIONS.md#stuck-turn
+  - alert: ConversationAgentOutboxDelay
+    expr: conversation_agent_outbox_oldest_pending_age_seconds > 120
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: A reply has waited more than 2 min to be sent.
+      runbook: docs/OPERATIONS.md#outbox-delay
+  - alert: ConversationAgentDeliveryUnsettled
+    expr: conversation_agent_outbox_oldest_unsettled_age_seconds > 3600
+    for: 5m
+    labels:
+      severity: critical
+    annotations:
+      summary: A reply has been unconfirmed for more than 1 h, approaching the gateway's idempotency window.
+      runbook: docs/OPERATIONS.md#unsettled-delivery
+  - alert: ConversationAgentUnknownWriteStale
+    expr: conversation_agent_invocations_oldest_unresolved_age_seconds > 900
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: An external write has had an unknown outcome for more than 15 min.
+      runbook: docs/OPERATIONS.md#unknown-write
+  - alert: ConversationAgentHumanHandoffBacklog
+    expr: conversation_agent_handoffs_oldest_pending_age_seconds > 600
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: A conversation has waited more than 10 min for a person to take it.
+      runbook: docs/OPERATIONS.md#handoff-backlog
+  - alert: ConversationAgentTimersOverdue
+    expr: conversation_agent_scheduled_oldest_overdue_age_seconds > 120
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: Timers (proactive messages, reconciliation) are more than 2 min overdue.
+      runbook: docs/OPERATIONS.md#overdue-timers
+  - alert: ConversationAgentCircuitOpened
+    expr: increase(conversation_agent_circuit_transitions_total{state="open"}[10m]) > 0
+    for: 1m
+    labels:
+      severity: warning
+    annotations:
+      summary: A circuit breaker for an external system opened in the last 10 min.
+      runbook: docs/OPERATIONS.md#circuit-open
+  - alert: ConversationAgentToolFailureRateHigh
+    expr: sum by (provider) (rate(conversation_agent_tool_calls_total{status!~"success|business_error|validation_error"}[10m]))
+      / sum by (provider) (rate(conversation_agent_tool_calls_total[10m])) > 0.2
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: More than 20 % of outbound tool calls fail for a provider over 10 min.
+      runbook: docs/OPERATIONS.md#tool-failures
