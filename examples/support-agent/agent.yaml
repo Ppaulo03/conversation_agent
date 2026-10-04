@@ -21,6 +21,19 @@ persona: |
 
 allowed_capabilities: [support.search_faq, support.open_ticket]
 
+# Asking for a person is decided by rules (short messages, never negated): the conversation goes to
+# a human and the bot goes quiet until one returns it.
+human_request:
+  triggers:
+    - falar com atendente
+    - falar com um atendente
+    - falar com uma pessoa
+    - falar com um humano
+    - quero um humano
+    - quero uma pessoa
+    - atendente humano
+  reply: "Claro, vou chamar um atendente para falar com você. Em instantes alguém continua por aqui."
+
 confirmation:
   prompt: "Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar."
   reprompt: "Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar."
@@ -148,6 +161,7 @@ flows:
     slots:
       - name: subject
         type: text
+        question_check: model  # a question here is routed (FAQ), not taken as the subject
         prompt: "Qual é o assunto do chamado? Descreva o problema em uma frase."
       - name: priority
         type: enum

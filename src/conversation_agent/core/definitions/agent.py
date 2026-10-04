@@ -20,6 +20,36 @@ from conversation_agent.core.templates import check_template, placeholders
 from conversation_agent.core.temporal_ptbr import fold
 
 
+class HumanRequest(BaseModel):
+    """The contact asks for a person ("quero falar com um atendente"). Matched by RULES on short
+    messages (a long message that merely mentions an attendant is not a request), never negated
+    ("não quero falar com atendente"), and answered by handing the conversation over: the reply
+    below is said, the conversation moves to HANDOFF_PENDING, flows are closed and the bot goes
+    silent until a person returns it (INV-019). Nothing here is decided by a model.
+
+    Optional: an agent without the block treats such a message like any other."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    triggers: tuple[str, ...]
+    reply: str
+    max_words: int = 12
+    # False: this agent has NO person behind it. The same triggers still match, and `reply` is said
+    # (an honest "I cannot call anyone here"), but the conversation does NOT change owner and open
+    # flows are left alone: the model never improvises a promise the system cannot keep.
+    available: bool = True
+
+    @model_validator(mode="after")
+    def _usable(self) -> HumanRequest:
+        if not self.triggers or any(len(fold(t).split()) < 2 for t in self.triggers):
+            raise ValueError("a human request needs triggers of at least two words each")
+        if not self.reply.strip():
+            raise ValueError("a human request needs a reply")
+        if self.max_words < 2:
+            raise ValueError("max_words must be at least 2")
+        return self
+
+
 class ConfirmationTexts(BaseModel):
     """Deterministic, runtime-owned wording for the confirmation protocol (one language per
     agent). `{summary}` is the rendered action summary."""
@@ -70,6 +100,7 @@ class AgentDefinition(BaseModel):
         "vou cuidar do seu pedido agora."
     )
     flows: tuple[FlowDefinition, ...] = ()
+    human_request: HumanRequest | None = None
     max_flow_depth: int = 3  # active + suspended flows kept per conversation
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()

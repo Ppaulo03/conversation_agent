@@ -58,6 +58,8 @@ INV-048  observabilidade é canal lateral: falha de logger, tracer, métrica ou 
 INV-049  nenhum dado de conteúdo ou pessoa chega a logs, spans, métricas ou ao ledger de uso: o contexto é um conjunto FECHADO de campos, texto livre é redigido e limitado, exceções saem como tipo + mensagem redigida, e a conversa é identificada só por referência não reversível.
 INV-050  o gasto de LLM é registrado uma vez por chamada REAL ao provider (um replay do journal nunca conta de novo; uma chamada repetida após crash conta de novo, pois foi cobrada), toda chamada tem dono (sem contexto: `_unattributed`), e um modelo sem preço é reportado como não precificado, nunca como gratuito; preços são dado aplicado na leitura, ao preço do dia da chamada.
 INV-051  um orçamento de LLM só recusa se a política do tenant pedir (`refuse_new`), recusa apenas mensagens NOVAS do usuário e antes de persistir ou reconhecer qualquer coisa; o padrão é alertar.
+INV-052  um pedido de atendente humano (agente com `human_request`) é decidido por regra, antes de qualquer Flow ou modelo: mensagem curta, sem negação; com atendimento disponível a conversa vai a HANDOFF_PENDING na mesma transação da resposta e o bot silencia; sem atendimento disponível (`available: false`) diz a resposta fixa e NÃO muda o dono da conversa.
+INV-053  um slot de texto livre com `question_check: model` nunca toma como valor uma mensagem com cara de pergunta sem que o modelo (journalado) decida que é a resposta; sem o opt-in o comportamento e o digest do agente são os de sempre.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -119,6 +121,8 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-049 | `test_personal_data_is_scrubbed_and_text_is_capped`, `test_the_ledger_holds_no_prompt_or_answer_column`, `test_a_record_cannot_carry_negative_numbers_or_unknown_fields`, `test_attributes_are_scalars_scrubbed_and_capped`, `test_a_storage_failure_at_the_edge_is_logged_with_its_event_and_tenant`, `test_a_conversation_is_named_by_a_stable_reference_never_by_its_id` |
 | INV-050 | `test_a_replayed_turn_never_counts_a_call_twice_and_the_books_name_the_agent`, `test_a_call_outside_any_context_is_still_on_the_books_as_unattributed`, `test_a_model_without_a_price_is_counted_as_unpriced_not_free`, `test_cost_is_tokens_times_the_price_in_force_on_the_day_of_the_call` |
 | INV-051 | `test_only_a_tenant_over_a_refuse_new_budget_is_refused`, `test_the_edge_refuses_a_budget_exceeded_tenant_before_persisting_anything`, `test_only_a_budget_that_asks_for_it_refuses` |
+| INV-052 | `test_asking_for_a_person_hands_the_conversation_over_without_a_model`, `test_asking_for_a_person_hands_over_and_the_bot_stays_quiet`, `test_a_negation_or_a_long_message_is_not_a_request_for_a_person`, `test_an_agent_with_nobody_behind_it_answers_honestly_and_keeps_the_conversation`, `test_an_agent_without_the_block_treats_the_message_like_any_other` |
+| INV-053 | `test_a_question_while_the_subject_is_awaited_goes_to_the_model_not_into_the_subject`, `test_a_question_that_really_is_the_subject_is_kept_whole`, `test_a_plain_subject_never_costs_a_model_call`, `test_without_the_opt_in_a_free_text_slot_still_takes_whatever_comes_next`, `test_agents_that_do_not_use_the_new_features_keep_the_digest_they_always_had` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

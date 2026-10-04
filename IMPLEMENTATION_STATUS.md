@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 11 — Observabilidade (implementada; aguardando revisão/merge). Fases 1–10 em `main`.
+**Fase atual:** 12 — Lacunas de conversa (implementada; aguardando revisão/merge). Fases 1–11 em `main`.
 
 ## Phase 1
 
@@ -771,3 +771,33 @@ SLOs/alertas e runbook novos: erro e latência de LLM, custo/hora, modelo sem pr
 - **Transcrição de áudio (STT) ainda não é medida** (a porta existe, o provider real não): quando houver, entra como outra finalidade com custo por segundo.
 - **Logs e spans de chamadas a APIs externas não carregam o trace para fora**: o `X-Trace-Id` das tools já usa o trace do turno, mas o envio ao RelayPlane não propaga (contrato do gateway não define).
 - **Cardinalidade:** labels de tenant só no gauge de orçamento (só tenants com orçamento); custo/uso por tenant vem do ledger (`app.usage`), não do Prometheus, de propósito.
+
+
+## Phase 12 — Lacunas de conversa (achados da Fase 9)
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos). Novas invariantes **INV-052, INV-053**.
+Fecha os dois achados que o segundo domínio (suporte) expôs: um slot de texto livre engolia perguntas, e o contato não conseguia pedir um atendente humano. Ambos são recursos OPCIONAIS: um agente que não os declara mantém exatamente o comportamento e o digest que tinha (o documento do agente só carrega `human_request` / `question_check` quando usados).
+
+| Achado | Solução | Prova |
+|---|---|---|
+| Slot de texto livre toma qualquer coisa (inclusive "quanto custa?") | `SlotDefinition.question_check: model` (só `text`): uma mensagem que parece pergunta NÃO é lida pelas regras; UMA chamada de modelo journalada decide se é a resposta ("Como recupero minha senha?" como assunto: guardada inteira) ou uma digressão (responde, volta a perguntar o assunto). Padrão `off` = comportamento antigo | `tests/domains/test_support_agent.py` (digressão, resposta que é pergunta, assunto simples sem chamada de modelo, padrão inalterado) |
+| Contato não consegue pedir uma pessoa | `AgentDefinition.human_request` (opcional): frases-gatilho de ≥2 palavras, resposta, `max_words`; decidido por REGRA no início do turno (antes de Flow e de modelo): mensagem curta, sem negação ("não quero falar com atendente"), sem acento/caixa; a conversa vai a `HANDOFF_PENDING` na mesma transação da resposta e os Flows abertos terminam; o bot silencia (INV-019) até uma pessoa devolver | `tests/engine/test_human_request.py`, `tests/postgres/test_human_request.py` |
+| Bot SEM ninguém atrás | `human_request.available: false`: os mesmos gatilhos casam e a resposta fixa e honesta é dita, mas a conversa NÃO muda de dono e os Flows ficam como estão; o modelo nunca improvisa uma promessa que o sistema não cumpre | idem |
+| Agente sem o bloco | trata o pedido como qualquer mensagem; digest idêntico ao de antes | `test_agents_that_do_not_use_the_new_features_keep_the_digest_they_always_had` |
+
+O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenários correspondentes (5/5).
+
+### Decisões da Fase 12
+
+1. **Pedido de humano por regra, não por modelo:** previsível, sem custo, e o modelo não pode ser convencido a não encaminhar. O preço é a cobertura: só as frases que o autor listou disparam.
+2. **Falso positivo evitado por três travas:** mensagem curta, negação nas três palavras anteriores, gatilho com ≥2 palavras. Um parágrafo que só menciona o atendente não encaminha.
+3. **`question_check` é opt-in por slot e usa o modelo só quando a regra desconfia** (parece pergunta); o texto sem cara de pergunta continua sem custo de modelo.
+4. **Compatibilidade de digest preservada** omitindo os campos novos do documento quando não usados (mesmo padrão de `mcp` e `tool_error`).
+
+### Débitos conhecidos (Fase 12)
+
+- Gatilhos e detecção de pergunta/negação são pt-BR; outro idioma pede outra lista (e outra heurística).
+- Negação mais distante que três palavras antes do gatilho não é vista; a lista de frases é do autor.
+- Uma confirmação pendente no momento do handoff não é cancelada: expira pelo TTL (a conversa está com uma pessoa).
+- Quando o modelo roteia uma pergunta como `other`, o fluxo reperguntará o slot (comportamento já existente de "não entendi").
+- `question_check` só existe para slots `text`; não há equivalente para `choose` (opções) nem para pedidos de humano durante uma confirmação.

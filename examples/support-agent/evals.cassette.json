@@ -16,5 +16,23 @@
         "provider_metadata": {}
       }
     ]
+  },
+  {
+    "tool": "mcp_search_faq",
+    "key": "fe2d9bc98c1a1a7047d9115edcdc80eb2562a4fb63fd16e1eba045ae6adc7c4a",
+    "results": [
+      {
+        "status": "success",
+        "data": {
+          "results": [
+            {
+              "answer": "A consulta custa R$ 150."
+            }
+          ]
+        },
+        "error": null,
+        "provider_metadata": {}
+      }
+    ]
   }
 ]

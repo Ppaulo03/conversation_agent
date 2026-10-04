@@ -45,6 +45,7 @@ from conversation_agent.engine.capability_pipeline import (
 )
 from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
 from conversation_agent.engine.flow_runner import FlowRunner, FlowTurn
+from conversation_agent.engine.flow_understanding import matches_request
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.media import MediaNormalizer
 from conversation_agent.engine.policy_rules import PolicyContext
@@ -238,6 +239,18 @@ class TurnEngine:
         proposals: dict[str, CapabilityRequest] = {}
         proposed: list[ProposedAction] = []
         policy_state = _PolicyTurnState(cancel)
+        human = self._agent.human_request
+        if human is not None and matches_request(user_text, human.triggers, human.max_words):
+            # A person was asked for: decided by rules, before any flow or model, so it cannot
+            # be argued out of. Open flows end; the conversation goes to HANDOFF_PENDING.
+            if not human.available:  # nobody to hand over to: say so, change nothing
+                return await self._finish(
+                    cursor, turn_id, state, user_text, human.reply, {}, (), 0, None, None
+                )
+            return await self._finish(
+                cursor, turn_id, state, user_text, human.reply, {}, (), 0, None, None,
+                flows=(), handoff=True,
+            )  # fmt: skip
         if self._flows is not None:
             flow_io = _EngineFlowIO(
                 self,

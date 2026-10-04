@@ -10,6 +10,10 @@ data and exists to prove the framework is not shaped by scheduling:
   and `reopen_ticket`; they are never imported (discovery is not exposure). A test checks that the
   tools in `agent.yaml`, with their pinned schemas, are exactly what this allowlist imports.
 
+Two conversation features are on: `human_request` (asking for a person hands the conversation over; rules, short and
+non-negated messages only) and `question_check: model` on the ticket subject (a question asked while the subject is awaited is
+answered from the FAQ, not taken as the subject).
+
 The tools are served by `examples/reference-mcp` (an external system). Nothing about FAQs or tickets
 exists in `src/conversation_agent` (the architecture test refuses that vocabulary there).
 

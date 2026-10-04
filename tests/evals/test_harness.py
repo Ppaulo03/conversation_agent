@@ -46,7 +46,7 @@ async def run(suite: EvalSuite, manifest: dict[str, Any] | None = None) -> Suite
 
 async def test_the_shipped_suite_passes_and_its_report_names_what_was_judged() -> None:
     report = await run(load_suite(SUITE))
-    assert report.passed and (report.passed_count, report.total) == (3, 3)
+    assert report.passed and (report.passed_count, report.total) == (5, 5)
     as_dict = report.to_dict()
     assert as_dict["agent"]["id"] == "support-demo" and len(as_dict["agent"]["digest"]) == 64
     assert as_dict["suite_digest"] == load_suite(SUITE).digest  # the evidence a release gate takes
@@ -73,7 +73,9 @@ async def test_a_regression_in_the_agent_fails_the_suite() -> None:
     report = await run(load_suite(SUITE), manifest)
     failed = [r for r in report.results if not r.passed]
     assert not report.passed and [r.scenario for r in failed] == [
-        "a-ticket-is-collected-then-only-proposed"
+        "a-ticket-is-collected-then-only-proposed",
+        "asking-for-a-person-is-a-handoff",
+        "a-question-while-the-subject-is-awaited-is-answered-not-taken-as-the-subject",
     ]
     assert failed[0].failures  # the Flow no longer answers, so the turn does not go as scripted
 
@@ -218,7 +220,7 @@ def test_the_cli_passes_prints_the_verdict_and_writes_the_report(
 ) -> None:
     out = tmp_path / "report.json"
     code = main([AGENT, SUITE, "--cassette", CASSETTE, "--json", str(out)])
-    assert code == 0 and "3/3 scenarios passed" in capsys.readouterr().out
+    assert code == 0 and "5/5 scenarios passed" in capsys.readouterr().out
     assert json.loads(out.read_text(encoding="utf-8"))["passed"] is True
 
 

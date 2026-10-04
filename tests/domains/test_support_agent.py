@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from typing import Any
 
+import pytest
+
 from conftest import McpHandle
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
@@ -152,14 +154,142 @@ async def test_a_digression_cannot_open_a_ticket(mcp: McpHandle) -> None:
     assert out.proposed == () and mcp.state.tickets == {} and mcp.calls == []
 
 
-async def test_known_limit_a_free_text_slot_takes_whatever_is_said_next(mcp: McpHandle) -> None:
-    """CHARACTERIZATION, not an endorsement: while the Flow awaits a free-text slot (the ticket
-    subject), a question is taken as the subject, because the rules read any text for the slot
-    being asked. Structured slots (the priority) do not have this problem. Recorded in
-    IMPLEMENTATION_STATUS as a finding for the framework; this phase changes nothing in it."""
-    chat = Chat(mcp, FakeLLM([]))
+async def test_a_question_while_the_subject_is_awaited_goes_to_the_model_not_into_the_subject(
+    mcp: McpHandle,
+) -> None:
+    llm = FakeLLM(
+        [
+            understood("digression"),
+            tool_call_response("support__search_faq", {"question": "preço"}),
+            answer_from_result,
+        ]
+    )
+    chat = Chat(mcp, llm)
     await chat.say("Quero abrir um chamado")
-    out = await chat.say("quanto custa a consulta?")
+    out = await chat.say("quanto custa a consulta?")  # the subject is awaited
+    assert out.reply.startswith("A consulta custa R$ 150.")
+    assert out.reply.endswith("Descreva o problema em uma frase.")  # back on the ticket
+    assert chat.state.active_flow is not None and "subject" not in chat.state.active_flow.slots
+    assert mcp.state.tickets == {}
+
+
+async def test_a_question_that_really_is_the_subject_is_kept_whole(mcp: McpHandle) -> None:
+    chat = Chat(mcp, FakeLLM([understood("answer")]))  # the model says: this IS the answer
+    await chat.say("Quero abrir um chamado")
+    out = await chat.say("Como recupero minha senha?")
+    assert chat.state.active_flow is not None
+    assert chat.state.active_flow.slots["subject"] == "Como recupero minha senha?"
+    assert "prioridade" in out.reply
+
+
+async def test_a_plain_subject_never_costs_a_model_call(mcp: McpHandle) -> None:
+    chat = Chat(mcp, FakeLLM([]))  # any model call would fail the test
+    await chat.say("Quero abrir um chamado")
+    out = await chat.say("Não consigo entrar no sistema")
+    assert "prioridade" in out.reply
+
+
+async def test_without_the_opt_in_a_free_text_slot_still_takes_whatever_comes_next(
+    mcp: McpHandle,
+) -> None:
+    """The default is unchanged: only a slot that asks for `question_check: model` is protected."""
+    from conversation_agent.core.compiler import compile_manifest
+
+    raw = manifest()
+    for slot in raw["flows"][0]["slots"]:
+        slot.pop("question_check", None)
+    from support.support_domain import Chat as BaseChat
+
+    chat = BaseChat(mcp, FakeLLM([]))
+    chat.engine = _engine_for(compile_manifest(raw), mcp)
+    await chat.say("Quero abrir um chamado")
+    await chat.say("quanto custa a consulta?")
     assert chat.state.active_flow is not None
     assert chat.state.active_flow.slots["subject"] == "quanto custa a consulta?"
-    assert "prioridade" in out.reply
+
+
+def _engine_for(compiled: Any, mcp: McpHandle) -> Any:
+    from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
+    from conversation_agent.engine.turn_engine import TurnEngine
+    from support.builders import new_clock
+    from support.support_domain import pipeline_for
+
+    return TurnEngine(
+        compiled, FakeLLM([]), pipeline_for(compiled, mcp), InMemoryTurnJournal(), new_clock()
+    )
+
+
+# --- asking for a person ---
+
+
+async def test_asking_for_a_person_hands_the_conversation_over_without_a_model(
+    mcp: McpHandle,
+) -> None:
+    chat = Chat(mcp, FakeLLM([]))
+    await chat.say("Quero abrir um chamado")  # a flow is open
+    out = await chat.say("Quero falar com um atendente")
+    assert out.handoff_requested and "chamar um atendente" in out.reply
+    assert out.llm_calls == 0 and out.state.flows == ()  # the open flow ended
+    assert mcp.calls == []
+
+
+@pytest.mark.parametrize(
+    "text",
+    ["QUERO FALAR COM UM ATENDENTE", "quero falar com uma pessoa, por favor", "atendente humano"],
+)
+async def test_the_request_is_matched_without_caring_for_case_or_accents(
+    mcp: McpHandle, text: str
+) -> None:
+    out = await Chat(mcp, FakeLLM([])).say(text)
+    assert out.handoff_requested
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "não quero falar com atendente",  # negated
+        "nunca quero falar com um humano",
+        "o atendente de ontem foi muito educado e resolveu tudo, quero falar com atendente de novo "
+        "quando precisar de algo mais",  # a paragraph, not a request
+    ],
+)
+async def test_a_negation_or_a_long_message_is_not_a_request_for_a_person(
+    mcp: McpHandle, text: str
+) -> None:
+    chat = Chat(mcp, FakeLLM([text_response("Entendi.")]))
+    out = await chat.say(text)
+    assert not out.handoff_requested
+
+
+async def test_an_agent_without_the_block_treats_the_message_like_any_other(
+    mcp: McpHandle,
+) -> None:
+    from conversation_agent.core.compiler import compile_manifest
+
+    raw = manifest()
+    raw.pop("human_request")
+    chat = Chat(mcp, FakeLLM([text_response("Não consigo chamar ninguém.")]))
+    chat.engine = _engine_for(compile_manifest(raw), mcp)
+    chat.engine._llm = chat.llm  # type: ignore[attr-defined]
+    out = await chat.say("quero falar com um atendente")
+    assert not out.handoff_requested and out.reply == "Não consigo chamar ninguém."
+
+
+async def test_an_agent_with_nobody_to_hand_over_to_says_so_and_changes_nothing(
+    mcp: McpHandle,
+) -> None:
+    from conversation_agent.core.compiler import compile_manifest
+
+    raw = manifest()
+    raw["human_request"] = {
+        **raw["human_request"],
+        "available": False,
+        "reply": "Aqui não consigo chamar um atendente, mas posso abrir um chamado.",
+    }
+    chat = Chat(mcp, FakeLLM([]))
+    chat.engine = _engine_for(compile_manifest(raw), mcp)
+    await chat.say("Quero abrir um chamado")
+    out = await chat.say("quero falar com um atendente")
+    assert out.reply == "Aqui não consigo chamar um atendente, mas posso abrir um chamado."
+    assert not out.handoff_requested  # the conversation does not change owner
+    assert out.state.active_flow is not None  # and the open ticket is still there

@@ -46,3 +46,28 @@ scenarios:
           - text: "Registrei a proposta do chamado."
         proposes: support.open_ticket  # a protected action waits for the customer's confirmation
         executes_nothing: true
+
+  - name: asking-for-a-person-is-a-handoff
+    turns:
+      - user: "Quero abrir um chamado"
+        flow: ticket
+      - user: "Quero falar com um atendente"
+        handoff: true
+        flow: none
+        executes_nothing: true
+        max_llm_calls: 0
+        reply_contains: ["atendente"]
+
+  - name: a-question-while-the-subject-is-awaited-is-answered-not-taken-as-the-subject
+    turns:
+      - user: "Quero abrir um chamado"
+        flow: ticket
+      - user: "quanto custa a consulta?"
+        llm:
+          - structured: {kind: digression}
+          - tool_call: {name: support__search_faq, arguments: {question: "preço"}}
+          - text: "A consulta custa R$ 150."
+        executes: [support.search_faq]
+        flow: ticket
+        proposes_nothing: true
+        reply_contains: ["A consulta custa", "assunto"]

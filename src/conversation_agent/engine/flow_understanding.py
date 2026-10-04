@@ -39,6 +39,45 @@ def is_cancel(text: str) -> bool:
     return len(folded.split()) <= _MAX_CANCEL_WORDS and _CANCEL.search(folded) is not None
 
 
+_QUESTION_WORDS = frozenset(
+    {"como", "qual", "quais", "quanto", "quantos", "quanta", "quantas", "onde", "quando", "quem",
+     "porque", "voces", "tem", "posso", "pode", "podem", "existe"}
+)  # fmt: skip
+_NEGATIONS = frozenset({"nao", "nunca", "jamais", "sem"})
+
+
+def looks_like_question(text: str) -> bool:
+    """A conservative sniff: a question mark, or an opening interrogative word. Used only to decide
+    when a free-text slot should NOT trust the rules (the model then decides)."""
+    stripped = text.strip()
+    if "?" in stripped:
+        return True
+    words = fold(stripped).split()
+    return bool(words) and (
+        words[0] in _QUESTION_WORDS or " ".join(words[:2]) in {"por que", "o que"}
+    )
+
+
+def matches_request(text: str, triggers: tuple[str, ...], max_words: int) -> bool:
+    """A SHORT message that asks for what a trigger phrase names, and does not negate it.
+    "quero falar com um atendente" matches; "nao quero falar com atendente" and a paragraph that
+    merely mentions an attendant do not."""
+    folded = fold(text)
+    words = folded.split()
+    if not words or len(words) > max_words:
+        return False
+    padded = f" {folded} "
+    for phrase in triggers:
+        needle = f" {fold(phrase)} "
+        at = padded.find(needle)
+        if at < 0:
+            continue
+        before = padded[:at].split()[-3:]  # the three words leading into the phrase
+        if not _NEGATIONS & set(before):
+            return True
+    return False
+
+
 def phrase_score(text: str, phrases: tuple[str, ...]) -> int:
     """Words in the longest trigger phrase found in `text` (0 = none): more words, more specific."""
     folded = f" {fold(text)} "

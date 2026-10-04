@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from conversation_agent.core.definitions.agent import (
     AgentDefinition,
     ConfirmationTexts,
+    HumanRequest,
     MediaTexts,
 )
 from conversation_agent.core.definitions.binding import CapabilityBinding
@@ -74,6 +75,7 @@ class AgentManifest(_Strict):
     bindings: tuple[CapabilityBinding, ...]
     allowed_capabilities: tuple[str, ...]
     flows: tuple[FlowDefinition, ...] = ()
+    human_request: HumanRequest | None = None
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
     max_tokens_per_turn: int | None = None
@@ -131,6 +133,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
     )
     tools = tuple(build_tool(t) for t in manifest.tools)
     extra: dict[str, Any] = {}
+    if manifest.human_request is not None:
+        extra["human_request"] = manifest.human_request
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply
     return AgentDefinition(

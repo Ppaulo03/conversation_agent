@@ -190,9 +190,17 @@ def _binding_document(binding: CapabilityBinding) -> dict[str, Any]:
     return document
 
 
+def _flow_document(flow: FlowDefinition) -> dict[str, Any]:
+    document = flow.model_dump(mode="json")
+    for slot in document["slots"]:
+        if slot.get("question_check") == "off":  # only flows that opt in carry it: others keep
+            slot.pop("question_check")  # the digest they always had
+    return document
+
+
 def agent_document(agent: AgentDefinition) -> dict[str, Any]:
     """Canonical JSON-able content of an agent, however it was written."""
-    return {
+    document: dict[str, Any] = {
         "agent_id": agent.agent_id,
         "persona": agent.persona,
         "timezone": agent.timezone,
@@ -224,7 +232,7 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
             _binding_document(b) for b in sorted(agent.bindings, key=lambda b: b.capability)
         ],
         "allowed_capabilities": sorted(agent.allowed_capabilities),
-        "flows": [f.model_dump(mode="json") for f in agent.flows],
+        "flows": [_flow_document(f) for f in agent.flows],
         "max_history_messages": agent.max_history_messages,
         "fallback_reply": agent.fallback_reply,
         "cancelled_after_effect_reply": agent.cancelled_after_effect_reply,
@@ -235,6 +243,9 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "media": agent.media.model_dump(mode="json"),
         "max_media_bytes": agent.max_media_bytes,
     }
+    if agent.human_request is not None:  # only agents that use it carry it (digests stay stable)
+        document["human_request"] = agent.human_request.model_dump(mode="json")
+    return document
 
 
 def agent_digest(agent: AgentDefinition) -> str:
