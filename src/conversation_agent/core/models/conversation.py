@@ -6,6 +6,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from conversation_agent.core.models.flow import FlowInstance
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction
 
 
@@ -38,6 +39,12 @@ class ConversationState(_Frozen):
 
     history: tuple[ConversationMessage, ...] = ()
     proposals: dict[str, CapabilityRequest] = Field(default_factory=dict)
+    # Flow stack: the LAST item is the active flow, earlier ones are suspended (DESIGN §23.3).
+    flows: tuple[FlowInstance, ...] = ()
+
+    @property
+    def active_flow(self) -> FlowInstance | None:
+        return self.flows[-1] if self.flows else None
 
 
 class TurnOutcome(_Frozen):

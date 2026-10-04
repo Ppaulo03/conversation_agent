@@ -9,6 +9,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
+from conversation_agent.core.definitions.flow import FlowDefinition, Invoke, Propose
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 
@@ -40,6 +41,7 @@ class AgentDefinition(BaseModel):
     allowed_capabilities: frozenset[str]
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
+    flows: tuple[FlowDefinition, ...] = ()
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()
     confirmation_prompt_enabled: bool = True
@@ -68,12 +70,47 @@ class AgentDefinition(BaseModel):
                     f"binding {b.capability!r}->{b.tool!r} declares risk {b.risk!r}, lower than "
                     f"{floor!r}: a binding can raise protection but never lower it"
                 )
+        self._check_flows(by_cap)
         self._check_retry_against_effective_risk(by_cap, by_tool)
         self._check_recovery_lookups(by_cap, by_tool)
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_flows(self, by_cap: dict[str, CapabilityDefinition]) -> None:
+        """A flow only ever talks to Capabilities this agent has: reads in `Invoke`, protected
+        ones in `Propose`, and digressions can use reads only."""
+        names = [f.name for f in self.flows]
+        if len(set(names)) != len(names):
+            raise DefinitionError("duplicate flow names")
+        for flow in self.flows:
+            for step in flow.steps:
+                if isinstance(step, Invoke | Propose):
+                    cap = by_cap.get(step.capability)
+                    if cap is None or step.capability not in self.allowed_capabilities:
+                        raise DefinitionError(
+                            f"flow {flow.name!r} step {step.id!r}: capability "
+                            f"{step.capability!r} is not defined and allowed"
+                        )
+                    protected = cap.risk != "read" or cap.confirmation_required
+                    if isinstance(step, Invoke) and protected:
+                        raise DefinitionError(
+                            f"flow {flow.name!r} step {step.id!r}: invoke is for reads; use "
+                            f"propose for the protected {step.capability!r}"
+                        )
+                    if isinstance(step, Propose) and not protected:
+                        raise DefinitionError(
+                            f"flow {flow.name!r} step {step.id!r}: propose is for protected "
+                            f"capabilities; {step.capability!r} is a plain read"
+                        )
+            for name in flow.digression_capabilities:
+                cap = by_cap.get(name)
+                if cap is None or cap.risk != "read" or cap.confirmation_required:
+                    raise DefinitionError(
+                        f"flow {flow.name!r}: a digression may only use read capabilities "
+                        f"({name!r} is not)"
+                    )
 
     def _check_retry_against_effective_risk(
         self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]
