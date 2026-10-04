@@ -12,6 +12,7 @@ from typing import Any, Literal
 
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.errors import TurnCancelledError
 from conversation_agent.core.models.actions import PendingAction
 from conversation_agent.core.models.conversation import (
     ConversationIdentity,
@@ -73,6 +74,14 @@ class TurnEngine:
         self._confirmation: ConfirmationStage | None = None
         self._flows = FlowRunner(agent) if agent.flows else None
 
+    @property
+    def pipeline(self) -> CapabilityPipeline:
+        return self._pipeline
+
+    @property
+    def agent(self) -> AgentDefinition:
+        return self._agent
+
     def attach_confirmation(self, stage: ConfirmationStage) -> None:
         """Enable the protected-action confirmation stage (needs the ledger executor)."""
         self._confirmation = stage
@@ -88,6 +97,7 @@ class TurnEngine:
         late_event_ids: tuple[str, ...] = (),
         pending: PendingAction | None = None,
         inbound: tuple[InboundRef, ...] = (),
+        cancel: Callable[[], bool] | None = None,
     ) -> TurnOutcome:
         """Process one turn. Re-running the same `turn_id` replays journaled steps (INV-014)."""
         cursor = TurnJournalCursor(self._journal, turn_id)
@@ -150,9 +160,53 @@ class TurnEngine:
                 )
             # modify / not-a-reply: fall through and treat the message as a normal turn
 
+        try:
+            return await self._converse(
+                cursor,
+                identity,
+                state,
+                user_text,
+                turn_id,
+                guard,
+                cancel,
+                system,
+                catalog,
+                reference_time,
+                working,
+            )
+        except _StopAfterEffect:
+            # A newer message asked to restart, but something irreversible already happened this
+            # turn: report it, never drop it (the newer message is handled by the next turn).
+            return await self._finish(
+                cursor,
+                turn_id,
+                state,
+                user_text,
+                self._agent.cancelled_after_effect_reply,
+                {},
+                (),
+                0,
+                None,
+                None,
+            )
+
+    async def _converse(
+        self,
+        cursor: TurnJournalCursor,
+        identity: ConversationIdentity,
+        state: ConversationState,
+        user_text: str,
+        turn_id: str,
+        guard: Callable[[], None] | None,
+        cancel: Callable[[], bool] | None,
+        system: str,
+        catalog: tuple[LLMToolDefinition, ...],
+        reference_time: datetime,
+        working: list[LLMMessage],
+    ) -> TurnOutcome:
         proposals: dict[str, CapabilityRequest] = {}
         proposed: list[ProposedAction] = []
-        policy_state = _PolicyTurnState()
+        policy_state = _PolicyTurnState(cancel)
         if self._flows is not None:
             flow_io = _EngineFlowIO(
                 self,
@@ -164,6 +218,10 @@ class TurnEngine:
                 guard,
                 policy_state,
                 reference_time,
+                system,
+                self._history_messages(state),
+                user_text,
+                catalog,
             )
             flow_turn = await self._flows.handle(
                 FlowTurn(
@@ -197,8 +255,7 @@ class TurnEngine:
         tokens_used = 0
 
         for _ in range(self._max_steps):
-            if guard is not None:
-                guard()  # safe boundary: a stale worker starts no new step
+            self.boundary(guard, policy_state)  # safe boundary: no new step if stale/cancelled
             response = await self.llm_step(cursor, turn_id, system, working, tools=catalog)
             llm_calls += 1
             tokens_used += response.usage.input_tokens + response.usage.output_tokens
@@ -217,9 +274,7 @@ class TurnEngine:
             working.append(LLMMessage(role="assistant", parts=response.parts))
             result_parts: list[ToolResultPart] = []
             for call in calls:
-                if guard is not None:
-                    guard()
-                part = await self._capability_step(
+                part = await self.capability_step(
                     cursor,
                     identity,
                     turn_id,
@@ -254,6 +309,16 @@ class TurnEngine:
             halted,
             None,
         )
+
+    def boundary(self, guard: Callable[[], None] | None, state: _PolicyTurnState) -> None:
+        """A safe step boundary (INV-012): a stale worker starts nothing; a restart request
+        abandons the turn if nothing irreversible happened, otherwise stops it after reporting."""
+        if guard is not None:
+            guard()
+        if state.cancel is not None and state.cancel():
+            if state.effects == 0:
+                raise TurnCancelledError("restart requested before any irreversible step")
+            raise _StopAfterEffect
 
     def _with_confirmation(self, reply: str, proposal: ProposedAction) -> str:
         line = self._agent.confirmation.prompt.format(
@@ -338,7 +403,7 @@ class TurnEngine:
         payload = await cursor.step(JournalStepType.LLM_RESPONSE, request_hash, call_llm)
         return LLMResponse.model_validate(payload)
 
-    async def _capability_step(
+    async def capability_step(
         self,
         cursor: TurnJournalCursor,
         identity: ConversationIdentity,
@@ -391,6 +456,7 @@ class TurnEngine:
     ) -> CapabilityOutcome:
         """The ONE path to a capability, used by the agent loop and by Flows alike: policy
         decision, journal, side-effect protocol, proposal capture. A Flow gets no shortcut."""
+        self.boundary(guard, policy_state)  # safe boundary: before PREPARE, never inside it
         # tool_call_id is ephemeral and deliberately excluded from every identity (§9.1).
         request_hash = stable_hash(capability, arguments)
         logical_step_id = f"{turn_id}:{cursor.next_index}"
@@ -448,6 +514,9 @@ class TurnEngine:
                     logical_step_id=logical_step_id,
                 )
             )
+        executed = evaluation.decision.outcome == "allow" and evaluation.request is not None
+        if executed and self._pipeline.resolve(capability).effective_risk != "read":
+            policy_state.effects += 1  # from here a restart can no longer abandon the turn
         if outcome.proposal is not None:
             proposals[outcome.proposal.capability] = outcome.proposal
             proposed.append(
@@ -497,14 +566,80 @@ class _EngineFlowIO:
         guard: Callable[[], None] | None,
         policy_state: _PolicyTurnState,
         reference_time: datetime,
+        system: str,
+        history: list[LLMMessage],
+        user_text: str,
+        catalog: tuple[LLMToolDefinition, ...],
     ) -> None:
         self._engine = engine
         self._args = (cursor, identity, turn_id)
         self._rest = (proposals, proposed, guard, policy_state, reference_time)
+        self._model = (system, history, user_text, catalog)
+
+    async def extract(
+        self, system: str, message: str, schema: LLMStructuredOutput
+    ) -> dict[str, Any]:
+        cursor, _, turn_id = self._args
+        self._engine.boundary(self._rest[2], self._rest[3])
+        response = await self._engine.llm_step(
+            cursor, turn_id, system, [LLMMessage.text("user", message)], tools=(), structured=schema
+        )
+        return response.structured or {}
+
+    async def digress(self, note: str, text: str, capabilities: tuple[str, ...]) -> str:
+        """A bounded agent loop that can only read: the tools offered are the flow's allowed
+        read capabilities, and anything else the model asks for is refused here too."""
+        engine = self._engine
+        cursor, identity, turn_id = self._args
+        proposals, proposed, guard, policy_state, reference_time = self._rest
+        system, history, user_text, catalog = self._model
+        allowed = {
+            tool.name
+            for tool in catalog
+            if engine.pipeline.capability_name_for(tool.name) in capabilities
+        }
+        tools = tuple(t for t in catalog if t.name in allowed)
+        working = [*history, LLMMessage.text("user", user_text)]
+        for _ in range(3):
+            engine.boundary(guard, policy_state)
+            response = await engine.llm_step(
+                cursor, turn_id, f"{system}\n\n{note}", working, tools=tools
+            )
+            if response.stop_reason is LLMStopReason.MAX_TOKENS:
+                break
+            if not response.tool_calls:
+                return response.text.strip() or engine.agent.fallback_reply
+            working.append(LLMMessage(role="assistant", parts=response.parts))
+            parts: list[ToolResultPart] = []
+            for call in response.tool_calls:
+                if call.name not in allowed:
+                    parts.append(
+                        ToolResultPart(
+                            tool_call_id=call.id,
+                            content='{"status": "policy_denied"}',
+                            is_error=True,
+                        )
+                    )
+                    continue
+                parts.append(
+                    await engine.capability_step(
+                        cursor,
+                        identity,
+                        turn_id,
+                        call.id,
+                        call.name,
+                        call.arguments,
+                        proposals,
+                        proposed,
+                        guard,
+                        policy_state,
+                        reference_time,
+                    )
+                )
+            working.append(LLMMessage(role="user", parts=tuple(parts)))
+        return engine.agent.fallback_reply
 
     async def invoke(self, capability: str, args: dict[str, Any]) -> CapabilityOutcome:
-        if self._rest[2] is not None:
-            self._rest[2]()  # safe boundary before every external step
         cursor, identity, turn_id = self._args
         proposals, proposed, guard, policy_state, reference_time = self._rest
         return await self._engine.run_capability(
@@ -513,12 +648,19 @@ class _EngineFlowIO:
         )  # fmt: skip
 
 
-class _PolicyTurnState:
-    """Per-turn counters feeding the PolicyGate (tool-call budget, loop detection)."""
+class _StopAfterEffect(Exception):
+    """Internal: cancellation was requested after an irreversible operation had happened."""
 
-    def __init__(self) -> None:
+
+class _PolicyTurnState:
+    """Per-turn counters feeding the PolicyGate (tool-call budget, loop detection) and the
+    cooperative-cancellation bookkeeping (effects performed so far)."""
+
+    def __init__(self, cancel: Callable[[], bool] | None = None) -> None:
         self.calls = 0
         self.hashes: list[str] = []
+        self.effects = 0
+        self.cancel = cancel
 
 
 def _const(payload: dict[str, Any]) -> Callable[[], Awaitable[dict[str, Any]]]:

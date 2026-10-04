@@ -10,9 +10,15 @@ from datetime import UTC, datetime
 from typing import Any
 
 from conftest import ApiHandle
-from conversation_agent.adapters.llm.fake import FakeLLM
+from conversation_agent.adapters.llm.fake import (
+    FakeLLM,
+    Script,
+    text_response,
+    tool_call_response,
+)
 from conversation_agent.core.definitions.flow import Collect, FlowDefinition, SlotDefinition
 from conversation_agent.core.models.conversation import ConversationState, TurnOutcome
+from conversation_agent.core.models.llm import LLMResponse, LLMStopReason, LLMUsage
 from conversation_agent.engine.turn_engine import TurnEngine
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.definitions import SCHEDULING_FLOW, build_agent
@@ -37,8 +43,11 @@ PRICES = FlowDefinition(
 class Chat:
     """One conversation: carries state across turns like the coordinator would."""
 
-    def __init__(self, api: ApiHandle, *, extra_flows: bool = False) -> None:
-        self.llm = FakeLLM([])  # any model call would fail: flows never need it here
+    def __init__(
+        self, api: ApiHandle, *, extra_flows: bool = False, script: list[Script] | None = None
+    ) -> None:
+        self.strict = script is None
+        self.llm = FakeLLM(script or [])  # strict chats fail on ANY model call
         self.state = ConversationState()
         self.journal = new_journal()
         self.n = 0
@@ -74,7 +83,8 @@ class Chat:
             IDENTITY, self.state, text, turn_id or f"turn-{self.n}"
         )
         self.state = outcome.state
-        assert self.llm.requests == []  # the Flow answered; the model was never involved
+        if self.strict:
+            assert self.llm.requests == []  # the Flow answered; the model was never involved
         return outcome
 
     @property
@@ -199,13 +209,14 @@ async def test_a_different_request_suspends_the_flow_and_resumes_it(api: ApiHand
 
 
 async def test_unintelligible_answers_are_bounded(api: ApiHandle) -> None:
-    chat = Chat(api)
+    chat = Chat(api, script=[understood("other")] * 4)
     await chat.say("Quero agendar um corte")
     for _ in range(3):
         out = await chat.say("hmmm blá")
         assert out.reply.startswith("Não entendi.") and "Para qual dia" in out.reply
     out = await chat.say("hmmm blá")
     assert "vou encerrar" in out.reply and chat.state.flows == ()
+    assert chat.llm.calls == 4  # one bounded model call per unintelligible message
 
 
 async def test_flow_turns_replay_from_the_journal_without_repeating_effects(
@@ -223,3 +234,62 @@ async def test_flow_turns_replay_from_the_journal_without_repeating_effects(
 
 async def test_agents_without_flows_keep_the_agent_loop() -> None:
     assert build_agent().flows == () and len(build_agent(flows=True).flows) == 1
+
+
+def understood(kind: str, **extra: Any) -> LLMResponse:
+    return LLMResponse(
+        parts=(),
+        stop_reason=LLMStopReason.END_TURN,
+        usage=LLMUsage(input_tokens=1, output_tokens=1),
+        structured={"kind": kind, **extra},
+    )
+
+
+async def test_model_only_spots_words_the_runtime_normalises_them(api: ApiHandle) -> None:
+    chat = Chat(api, script=[understood("answer", slots={"date": "depois de amanhã"})])
+    await chat.say("Quero agendar um corte")
+    out = await chat.say("melhor deixar para o dia posterior")  # rules do not parse it
+    assert chat.flow.slots["date"] == "2026-10-07"  # computed from the reference date
+    assert "Tenho estes horários para qua 07/10" in out.reply
+    assert chat.llm.calls == 1
+
+
+async def test_model_cannot_inject_a_value_the_parsers_reject(api: ApiHandle) -> None:
+    chat = Chat(api, script=[understood("answer", slots={"date": "2099-13-45", "service": "x"})])
+    await chat.say("Quero agendar um corte")
+    out = await chat.say("sei lá, depois vejo")
+    assert "date" not in chat.flow.slots
+    assert out.reply.startswith("Não entendi.")
+
+
+async def test_digression_is_answered_then_the_flow_resumes(api: ApiHandle) -> None:
+    chat = Chat(
+        api,
+        script=[understood("digression"), text_response("Abrimos das 9h às 18h.")],
+    )
+    await chat.say("Quero agendar um corte")
+    out = await chat.say("que horas vocês abrem?")
+    assert out.reply == "Abrimos das 9h às 18h.\n\nPara qual dia você quer agendar?"
+    assert chat.flow.slots == {"service": "haircut"} and chat.flow.digressions == 1
+    out = await chat.say("amanhã")
+    assert "Tenho estes horários" in out.reply  # back on track, nothing lost
+
+
+async def test_a_digression_can_only_use_read_tools(api: ApiHandle) -> None:
+    def forbidden(request: Any) -> LLMResponse:
+        assert {t.name for t in request.tools} == {"scheduling__availability"}  # no create
+        return tool_call_response(
+            "scheduling__create",
+            {
+                "service_id": "haircut",
+                "start_at": "2026-10-06T10:00:00-03:00",
+                "duration_minutes": 30,
+            },
+        )
+
+    chat = Chat(
+        api, script=[understood("digression"), forbidden, text_response("Não posso agendar aqui.")]
+    )
+    await chat.say("Quero agendar um corte")
+    out = await chat.say("agenda logo pra mim às 10")
+    assert not out.proposed and not any(r["path"] == "/bookings" for r in api.requests)

@@ -59,6 +59,15 @@ class LeaseHandle:
                 await self._task
             self._task = None
 
+    @property
+    def cancel_requested(self) -> bool:
+        """A newer message asked to restart this turn (cooperative: only a safe boundary may
+        act on it, and never inside PREPARED -> EXECUTING -> external call -> finalize)."""
+        return self._lease.cancel_requested
+
+    def acknowledge_cancel(self) -> None:
+        self._lease = self._lease.model_copy(update={"cancel_requested": False})
+
     def ensure_active(self) -> None:
         """Called at safe boundaries (before each new step)."""
         if self._stale or self._clock.now() >= self._lease.expires_at:
@@ -75,4 +84,4 @@ class LeaseHandle:
             if renewed is None:
                 self._stale = True  # lost for good: someone else owns the conversation
                 return
-            self._lease = renewed
+            self._lease = renewed  # also carries the latest cancel_requested

@@ -13,9 +13,9 @@ ROOT = Path(__file__).resolve().parents[2]
 REQUIRED_BY_PHASE = {
     2: ["C04", "C05", "C06", "C07", "C08", "C09", "C10", "C11", "C14", "C15", "C16"],
     3: ["C01", "C02", "C03", "C13"],
-    # 4: C12   (added when that phase is delivered)
+    4: ["C12"],
 }
-DELIVERED_PHASES = (2, 3)
+DELIVERED_PHASES = (2, 3, 4)
 
 
 def named_tests() -> set[str]:

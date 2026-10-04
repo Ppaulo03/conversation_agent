@@ -41,6 +41,12 @@ class AgentDefinition(BaseModel):
     allowed_capabilities: frozenset[str]
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
+    # Said when a newer message interrupts a turn AFTER something irreversible already happened:
+    # the real operation is reported as done, never silently dropped (DESIGN 20.2).
+    cancelled_after_effect_reply: str = (
+        "Recebi sua nova mensagem. O que já estava em andamento foi concluído; "
+        "vou cuidar do seu pedido agora."
+    )
     flows: tuple[FlowDefinition, ...] = ()
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()

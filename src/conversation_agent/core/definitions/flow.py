@@ -179,6 +179,7 @@ class FlowDefinition(_Frozen):
     max_unclear: int = 3
     resume_reply: str = "Voltando ao que estávamos fazendo: {question}"
     digressions_allowed: bool = True
+    max_digressions: int = 5
     digression_capabilities: tuple[str, ...] = ()  # read capabilities usable in a digression
 
     @model_validator(mode="after")

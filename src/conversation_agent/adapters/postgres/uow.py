@@ -171,7 +171,17 @@ class _TurnRepo(_Repo):
         late = [
             e["event_id"] for e in events if watermark is not None and e["occurred_at"] <= watermark
         ]
-        turn_id = stable_hash(f.tenant_id, f.conversation_id, event_ids)[:32]
+        # The same events can be reopened after a restart abandoned an earlier turn: salt the id
+        # with how many turns already existed for them (0 keeps the original, replay-stable id).
+        earlier = await self._c.fetchval(
+            "SELECT count(*) FROM turns WHERE tenant_id=$1 AND conversation_id=$2 "
+            "AND event_ids = $3",
+            f.tenant_id,
+            f.conversation_id,
+            event_ids,
+        )
+        parts: list[Any] = [f.tenant_id, f.conversation_id, event_ids]
+        turn_id = stable_hash(*parts, *([earlier] if earlier else []))[:32]
         text = "\n".join(e["text"] for e in events)
         await self._c.execute(
             "INSERT INTO turns (tenant_id, conversation_id, turn_id, status, event_ids, "
@@ -223,6 +233,36 @@ class _TurnRepo(_Repo):
             self._f.tenant_id,
             turn_id,
             self._clock.now(),
+        )
+        await self._clear_cancel()  # a restart request is answered by the next turn
+
+    async def cancel(self, turn_id: str) -> None:
+        """Abandon a turn that did nothing irreversible: its events go back to READY so the
+        next turn aggregates them with the newer message."""
+        f = self._f
+        await self._c.execute(
+            "UPDATE turns SET status='CANCELLED', completed_at=$3 "
+            "WHERE tenant_id=$1 AND turn_id=$2 AND status='PROCESSING'",
+            f.tenant_id,
+            turn_id,
+            self._clock.now(),
+        )
+        await self._c.execute(
+            "UPDATE inbox_events SET status='READY', claimed_by=NULL, claim_epoch=NULL, "
+            "turn_id=NULL WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 "
+            "AND status='CLAIMED'",
+            f.tenant_id,
+            f.conversation_id,
+            turn_id,
+        )
+        await self._clear_cancel()
+
+    async def _clear_cancel(self) -> None:
+        await self._c.execute(
+            "UPDATE conversation_states SET cancel_requested = false "
+            "WHERE tenant_id=$1 AND conversation_id=$2",
+            self._f.tenant_id,
+            self._f.conversation_id,
         )
 
     async def fail(self, turn_id: str, reason: str) -> None:

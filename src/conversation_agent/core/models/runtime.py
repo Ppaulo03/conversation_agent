@@ -44,6 +44,7 @@ class Lease(_Frozen):
     owner: str
     epoch: int
     expires_at: AwareDatetime
+    cancel_requested: bool = False  # a newer message asked to restart (read with the heartbeat)
 
     @property
     def fence(self) -> FenceToken:

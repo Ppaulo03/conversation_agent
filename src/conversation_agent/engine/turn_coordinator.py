@@ -24,6 +24,7 @@ from conversation_agent.core.errors import (
     LLMProviderError,
     StaleWorkerError,
     ToolResultPendingError,
+    TurnCancelledError,
 )
 from conversation_agent.core.models.actions import PendingAction
 from conversation_agent.core.models.conversation import (
@@ -139,6 +140,8 @@ class TurnCoordinator:
                     # next pass can resume this open turn from its journal.
                     await self._leases.release(handle.lease)
                     return ConversationRun("retry_later", completed)
+                if step == "cancelled":
+                    continue  # the turn was restarted: not completed, look at the inbox again
                 completed += 1
             await self._leases.release(handle.lease)
             return ConversationRun("done" if completed else "idle", completed)
@@ -151,7 +154,7 @@ class TurnCoordinator:
 
     async def _process_next_turn(
         self, handle: LeaseHandle
-    ) -> Literal["none", "completed", "retry", "waiting"]:
+    ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         fence = handle.fence
         async with self._uows.begin(fence) as uow:
             stored = await uow.state.load()
@@ -188,7 +191,16 @@ class TurnCoordinator:
                 late_event_ids=opened.late_event_ids,
                 pending=pending,
                 inbound=opened.inbound,
+                cancel=lambda: handle.cancel_requested,
             )
+        except TurnCancelledError:
+            # A newer message asked to restart and nothing irreversible had happened: abandon
+            # this turn at the safe boundary and let the next one aggregate the new message.
+            async with self._uows.begin(fence) as uow:
+                await uow.turns.cancel(opened.turn_id)
+                await uow.commit()
+            handle.acknowledge_cancel()
+            return "cancelled"
         except JournalDivergenceError as exc:
             log.error("ALERT journal divergence, turn failed closed: %s", redact(str(exc)))
             await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
@@ -217,6 +229,7 @@ class TurnCoordinator:
             await uow.turns.complete(opened.turn_id)
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()
+        handle.acknowledge_cancel()  # completing the turn answered any restart request
         return "completed"
 
     async def _persist_reply(

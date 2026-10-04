@@ -7,9 +7,14 @@ from conversation_agent.ports.clock import Clock
 
 
 class PostgresInboxStore:
-    def __init__(self, db: PostgresDatabase, clock: Clock) -> None:
+    def __init__(
+        self, db: PostgresDatabase, clock: Clock, *, restart_on_new_message: bool = False
+    ) -> None:
         self._db = db
         self._clock = clock
+        # Policy for a message that arrives while a turn is processing: `queue` (default) lets
+        # the turn finish; `restart` flags it so the worker stops at the next safe boundary.
+        self._restart = restart_on_new_message
 
     async def insert_if_absent(self, event: InboundEvent) -> bool:
         """One transaction: the conversation row (first contact) + the event. Dedupe is the
@@ -39,6 +44,13 @@ class PostgresInboxStore:
                 event.provider_occurred_at,
                 event.reply_to_provider_message_id,
             )
+            if row is not None and self._restart:
+                await conn.execute(
+                    "UPDATE conversation_states SET cancel_requested = true "
+                    "WHERE tenant_id=$1 AND conversation_id=$2 AND lease_owner IS NOT NULL",
+                    event.tenant_id,
+                    event.conversation_id,
+                )
         return row is not None
 
     async def list_ready_conversations(self, limit: int = 50) -> list[ConversationKey]:

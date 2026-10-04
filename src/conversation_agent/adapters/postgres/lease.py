@@ -29,7 +29,8 @@ class PostgresLeaseStore:
             """
             UPDATE conversation_states
                SET lease_owner = $3, lease_expires_at = $4,
-                   conversation_epoch = conversation_epoch + 1, updated_at = $5
+                   conversation_epoch = conversation_epoch + 1, updated_at = $5,
+                   cancel_requested = false
              WHERE tenant_id = $1 AND conversation_id = $2
                AND (lease_owner IS NULL OR lease_expires_at <= $5)
             RETURNING conversation_epoch
@@ -54,7 +55,7 @@ class PostgresLeaseStore:
              WHERE tenant_id = $1 AND conversation_id = $2
                AND lease_owner = $3 AND conversation_epoch = $4
                AND lease_expires_at > $6  -- an expired lease is gone: it cannot be resurrected
-            RETURNING 1
+            RETURNING cancel_requested
             """,
             lease.key.tenant_id,
             lease.key.conversation_id,
@@ -63,13 +64,18 @@ class PostgresLeaseStore:
             expires,
             now,
         )
-        return lease.model_copy(update={"expires_at": expires}) if row else None
+        if row is None:
+            return None
+        return lease.model_copy(
+            update={"expires_at": expires, "cancel_requested": row["cancel_requested"]}
+        )
 
     async def release(self, lease: Lease) -> None:
         await self._db.pool.execute(
             """
             UPDATE conversation_states
-               SET lease_owner = NULL, lease_expires_at = NULL, updated_at = $5
+               SET lease_owner = NULL, lease_expires_at = NULL, updated_at = $5,
+                   cancel_requested = false
              WHERE tenant_id = $1 AND conversation_id = $2
                AND lease_owner = $3 AND conversation_epoch = $4
             """,

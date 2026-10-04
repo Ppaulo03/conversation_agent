@@ -67,6 +67,11 @@ class StaleWorkerError(ConversationAgentError):
     """Heartbeat lost / lease expired locally: stop at the next safe boundary (no new steps)."""
 
 
+class TurnCancelledError(ConversationAgentError):
+    """A newer message asked to restart the turn and nothing irreversible had happened yet:
+    the turn is abandoned at a safe boundary and its events go back to READY (DESIGN 20.2)."""
+
+
 class ToolResultPendingError(ConversationAgentError):
     """The tool outcome is not known yet (executing elsewhere or under reconciliation).
     The turn stays open and is resumed later; nothing is re-executed."""

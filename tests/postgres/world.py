@@ -132,6 +132,7 @@ class World:
         pipeline: CapabilityPipeline | None = None,
         heartbeat_interval_seconds: float = 10.0,
         max_reprompts: int = 3,
+        flows: bool = False,
         **kwargs: Any,
     ) -> TurnCoordinator:
         injector = faults or NoFaults()
@@ -164,6 +165,7 @@ class World:
                 clock=self.clock,
                 pipeline=shared,
                 executor_factory=make_executor,
+                flows=flows,
             )
             engine.attach_confirmation(
                 ConfirmationStage(
