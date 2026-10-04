@@ -1,0 +1,170 @@
+# A clinic installing the generic-scheduling Pack over the first scheduling API.
+#
+# What the Pack brings: the capability contracts, the Flow, the scheduling rules, the evals.
+# What THIS agent brings: who it is, its services, and everything about reaching ITS system
+# (tools and bindings). Compare with `studio.yaml`: same Pack, another API, only these differ.
+schema_version: 1
+min_framework: "0.1.0"
+agent_id: clinic-demo
+version: "0.1.0"
+timezone: America/Sao_Paulo
+fallback_reply: "Desculpe, não consegui concluir agora. Pode tentar novamente?"
+
+persona: |
+  Você é a assistente virtual de agendamentos de uma clínica/salão. Responda sempre em português do Brasil, de forma curta, cordial e objetiva.
+
+  Serviços disponíveis: "haircut" (corte de cabelo, 30 min) e "consultation" (consulta, 60 min).
+
+packs:
+  - name: generic-scheduling
+    version: "1.0.0"
+    allow: [scheduling.availability, scheduling.create]
+    parameters:
+      services:
+        haircut:
+          keywords: [corte, cortar, cabelo, corte de cabelo]
+          duration_minutes: 30
+        consultation:
+          keywords: [consulta, consultar]
+          duration_minutes: 60
+      service_question: "Qual serviço você quer: corte de cabelo (30 min) ou consulta (60 min)?"
+      extra_triggers: [cortar cabelo, corte de cabelo, consulta]
+
+allowed_capabilities: []
+
+confirmation:
+  prompt: "Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  reprompt: "Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  rejected: "Tudo bem, cancelei o pedido."
+  expired: "Esse pedido expirou. Me diga de novo o que você gostaria de fazer."
+  gave_up: "Não consegui uma confirmação clara, então cancelei o pedido."
+  executed_fallback: "Seu pedido foi processado (situação: {status})."
+
+capabilities: []
+
+tools:
+  - name: erp_get_available_slots
+    description: GET /availability on the scheduling API.
+    risk: read
+    timeout_seconds: 5.0
+    provider: http
+    connection: scheduling_api
+    http:
+      method: GET
+      path: /availability
+      query: [service_code, start, end, cursor, limit]
+    input:
+      service_code: {type: string}
+      start: {type: date}
+      end: {type: date}
+      cursor: {type: string, required: false}
+      limit: {type: integer, required: false, default: 20}
+    output:
+      items:
+        type: list
+        items:
+          type: object
+          fields:
+            start: {type: string}
+            end: {type: string}
+      pagination:
+        type: object
+        fields:
+          next_cursor: {type: string, required: false}
+
+  - name: erp_create_reservation
+    description: POST /bookings on the scheduling API (idempotent by Idempotency-Key).
+    risk: irreversible
+    confirmation_required: true
+    timeout_seconds: 5.0
+    provider: http
+    connection: scheduling_api
+    http:
+      method: POST
+      path: /bookings
+      body: [service_code, starts_at, hours]
+    idempotency_supported: true
+    recovery:
+      strategy: status_lookup
+      lookup_capability: scheduling.lookup_booking
+      absent_codes: [BOOKING_NOT_FOUND]
+    input:
+      service_code: {type: string}
+      starts_at: {type: string}
+      hours: {type: number}
+    output:
+      id: {type: string}
+      state: {type: string}
+
+  - name: erp_find_reservation
+    description: GET /bookings/by-idempotency-key/{key} on the scheduling API.
+    risk: read
+    provider: http
+    connection: scheduling_api
+    http:
+      method: GET
+      path: /bookings/by-idempotency-key/{key}
+    input:
+      key: {type: string}
+    output:
+      id: {type: string}
+      state: {type: string}
+
+bindings:
+  - capability: scheduling.availability
+    tool: erp_get_available_slots
+    input_map:
+      service_code:
+        from: $.service_id
+        enum: {haircut: HC-01, consultation: CN-01}
+      start: $.from_date
+      end: $.to_date
+      cursor: $.cursor
+      limit: {const: 20}
+    output_map:
+      slots:
+        from_each: $.items[*]
+        map: {start_at: $.start, end_at: $.end}
+      next_cursor: $.pagination.next_cursor
+    error_map:
+      http_status:
+        404: {type: business_error, code: SERVICE_NOT_FOUND}
+        422: {type: validation_error}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}
+
+  - capability: scheduling.create
+    tool: erp_create_reservation
+    input_map:
+      service_code:
+        from: $.service_id
+        enum: {haircut: HC-01, consultation: CN-01}
+      starts_at: {from: $.start_at, transform: datetime_to_utc}
+      hours: {from: $.duration_minutes, transform: minutes_to_hours}
+    output_map:
+      booking_id: $.id
+      status: $.state
+    error_map:
+      http_status:
+        409: {type: business_error, code: SLOT_UNAVAILABLE}
+      default_5xx:
+        write: {type: unknown}
+      timeout:
+        write: {type: unknown}
+
+  - capability: scheduling.lookup_booking
+    tool: erp_find_reservation
+    input_map:
+      key: $.idempotency_key
+    output_map:
+      booking_id: $.id
+      status: $.state
+    error_map:
+      http_status:
+        404: {type: business_error, code: BOOKING_NOT_FOUND}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}

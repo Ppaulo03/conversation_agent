@@ -19,6 +19,7 @@ from conversation_agent.core.definitions.agent import (
 from conversation_agent.core.definitions.binding import CapabilityBinding
 from conversation_agent.core.definitions.capability import CapabilityDefinition, Risk
 from conversation_agent.core.definitions.flow import FlowDefinition
+from conversation_agent.core.definitions.pack import PackLock, PackUse
 from conversation_agent.core.definitions.schema_spec import ModelSpec, build_model
 from conversation_agent.core.definitions.tool import (
     HTTPRequestSpec,
@@ -82,6 +83,10 @@ class AgentManifest(_Strict):
     media: MediaTexts = Field(default_factory=MediaTexts)
     max_media_bytes: int = 25 * 1024 * 1024
     cancelled_after_effect_reply: str | None = None  # None: the framework default
+    # Packs to install (input) and what was installed (provenance, set by the compiler). The
+    # runtime never reads either: installation turns Pack content into ordinary definitions.
+    packs: tuple[PackUse, ...] = ()
+    pack_lock: tuple[PackLock, ...] = ()
 
 
 def _model_name(name: str, suffix: str) -> str:

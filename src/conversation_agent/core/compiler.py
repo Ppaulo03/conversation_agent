@@ -57,6 +57,7 @@ from conversation_agent.core.definitions.mapping import (
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
+from conversation_agent.core.packs import PackCatalog, expand_packs
 from conversation_agent.core.versioning import (
     COMPILER_VERSION,
     FRAMEWORK_VERSION,
@@ -130,8 +131,20 @@ class CompiledAgent:
 
 
 # --- public API ---
-def compile_manifest(raw: AgentManifest | dict[str, Any]) -> CompiledAgent:
+def compile_manifest(
+    raw: AgentManifest | dict[str, Any], packs: PackCatalog | None = None
+) -> CompiledAgent:
+    """`packs` is the catalog the manifest's `packs` are installed from (exact name + version).
+    The compiled agent is self-contained: it records what was installed in `pack_lock` and the
+    runtime never sees a Pack."""
     diagnostics: list[Diagnostic] = []
+    if isinstance(raw, AgentManifest) and raw.packs:
+        raw = raw.model_dump(mode="json", by_alias=True, exclude_unset=True)
+    if isinstance(raw, dict) and raw.get("packs"):
+        raw, problems = expand_packs(raw, packs or {})
+        diagnostics += [Diagnostic(p.code, p.where, p.message) for p in problems]
+        if diagnostics:
+            raise CompileError(diagnostics)
     manifest = raw if isinstance(raw, AgentManifest) else _parse(raw, diagnostics)
     if manifest is None:
         raise CompileError(diagnostics)

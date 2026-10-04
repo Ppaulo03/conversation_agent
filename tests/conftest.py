@@ -5,6 +5,7 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from agenda_api.main import create_app as create_agenda_app
 from reference_mcp.main import DEFAULT_TOOLS as MCP_DEFAULT_TOOLS
 from reference_mcp.main import PROTOCOL_VERSION as MCP_PROTOCOL_VERSION
 from reference_mcp.main import create_app as create_mcp_app
@@ -150,4 +151,41 @@ def mcp(_live_mcp: tuple[LiveServer, object]) -> McpHandle:
     state.require_session = True
     state.call_fault = None
     state.protocol_version = MCP_PROTOCOL_VERSION
+    return handle
+
+
+class AgendaHandle:
+    """Per-test view of the SECOND scheduling API (a different vocabulary, on purpose)."""
+
+    def __init__(self, server: LiveServer, app: object) -> None:
+        self.base_url = server.base_url
+        self.state = app.state  # type: ignore[attr-defined]
+
+    @property
+    def requests(self) -> list[dict[str, object]]:
+        return list(self.state.requests)
+
+    def horarios_requests(self) -> list[dict[str, object]]:
+        return [r for r in self.requests if r["path"] == "/v2/agenda/horarios"]
+
+
+@pytest.fixture(scope="session")
+def _live_agenda() -> Iterator[tuple[LiveServer, object]]:
+    app = create_agenda_app(now=lambda: NOW)
+    server = LiveServer(app)
+    server.start()
+    yield server, app
+    server.stop()
+
+
+@pytest.fixture
+def agenda(_live_agenda: tuple[LiveServer, object]) -> AgendaHandle:
+    server, app = _live_agenda
+    handle = AgendaHandle(server, app)
+    state = handle.state
+    state.requests.clear()
+    state.fault = None
+    state.taken_slots = set()
+    state.reservas.clear()
+    state.by_key.clear()
     return handle

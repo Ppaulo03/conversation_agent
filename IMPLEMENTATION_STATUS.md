@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 7 — Tool ecosystem (implementada; aguardando revisão/merge). Fase 6 mergeada em `main`. Próxima: Fase 8.
+**Fase atual:** 8 — Primeiro Pack (implementada; aguardando revisão/merge). Fases 1–7 em `main`. Próxima: Fase 9.
 
 ## Phase 1
 
@@ -622,3 +622,44 @@ classificação de erros), `core/definitions/json_schema.py` (JSON Schema → DS
 - Breaker e `MeteredToolProvider` não vêm ligados por padrão em nenhuma wiring (composição explícita pelo operador).
 - Sem CLI de discovery/import (as funções existem; falta um comando `tools import`).
 - Idempotência de MCP: o header `Idempotency-Key` e a declaração `idempotency_supported` são do operador; o MCP não padroniza isso.
+
+
+## Phase 8 — Primeiro Pack
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos, 9 contratos). Novas invariantes **INV-040, INV-041**.
+ROADMAP: extrair `generic-scheduling` do comportamento já provado; o mesmo Pack deve funcionar com uma segunda API usando bindings/mappings diferentes.
+
+DoD:
+
+- [✓] o Pack é o comportamento provado, extraído — `test_installing_the_pack_reproduces_the_agent_the_slice_proved` (mesmos contratos de capability, mesmo Flow, mesmas tools e bindings que o `agent.yaml` da Fase 5)
+- [✓] o mesmo Pack, uma segunda API de vocabulário/semântica diferentes (`examples/reference-agenda-api`: `servico/de/ate`, UTC, `duracao_min` em minutos, page tokens, 422 em vez de 409, outros códigos e outro fuso) — `examples/pack-hosts/{clinic,studio}.yaml`; nenhuma linha do Pack muda
+- [✓] evals do Pack passam nos dois hosts contra as APIs reais — `test_every_eval_of_the_pack_passes_on_each_host_against_its_real_api`
+- [✓] protocolo completo nos dois hosts (proposta → confirmação → escrita preparada → execução → reconciliação por lookup do próprio host) sobre PostgreSQL — `tests/postgres/test_pack_hosts.py`
+- [✓] depois da compilação o agente é autocontido: publica/recarrega no registry sem o Pack, com procedência em `pack_lock`
+- [✓] sem acesso privilegiado: o Pack não carrega tools/bindings/connections/secrets e não amplia o que o modelo pode chamar
+
+Implementado: `core/definitions/pack.py` (`PackManifest`, `PackUse`, `PackLock`, `ParameterSpec`, `BindingRequirement`, `EvalScenario`), `core/packs.py` (`expand_packs`, parâmetros,
+colisões, requisitos), `AgentManifest.packs`/`pack_lock`, `compile_manifest(raw, packs)`, `ports/pack_loader.py` + `adapters/manifest/pack_loader.py` (`DirectoryPackLoader`),
+`app.compile --packs DIR`, `engine/evals.py` (`run_scenario`), `packs/generic-scheduling/pack.yaml`, `examples/reference-agenda-api`, `examples/pack-hosts/`.
+
+### Decisões da Fase 8
+
+1. **Pack é dado, instalado antes do compilador (INV-040):** `expand_packs` transforma o manifest (puro, sem I/O) e o runtime nunca vê um Pack. Versão exata (`name` + `version`), `min_framework` verificado, duplicata/inexistente são erros.
+2. **Um Pack contribui definições, não acesso:** capabilities, flows, fragmentos de persona, requisitos e evals; `extra=forbid` não deixa lugar para tools/bindings/connections/secrets/allowlist.
+3. **O Pack nunca amplia o que o modelo chama:** suas capabilities só ficam expostas pelo `allow` explícito do agente (o Flow do Pack precisa delas liberadas, ou a compilação falha, em vez de abrir sozinho).
+4. **Nunca sombreia nem sobrescreve:** colisão de nome de capability ou flow (com o agente ou com outro Pack) é erro `PACK_NAME_COLLISION`; o risco/confirmação do Pack é piso (binding só sobe, o compilador recusa descer).
+5. **Requisitos checados na instalação:** capability ligada, tool idempotente, estratégia de recuperação aceita, lookup pelo capability certo (`PACK_REQUIREMENT_UNMET`) — o que a escrita idempotente e a reconciliação supõem deixa de ser convenção.
+6. **Parametrização mínima e tipada:** o que só o agente sabe (catálogo de serviços, pergunta de serviço, gatilhos extras) é `parameters` validado pelo mesmo DSL de schema e substituído por nós `{"$param": nome, "project": campo}` (`$keys` = chaves, `splice` = emenda em lista). Referências a parâmetros não declarados falham ao carregar o Pack.
+7. **Procedência separada de identidade:** o agente compilado guarda o manifest já instalado (`packs` vazio, `pack_lock` com nome/versão/digest); `digest` (o que o agente faz) não muda com o texto do Pack, `manifest_digest` (o artefato publicado) muda.
+8. **Evals são dados do Pack, o runner é do framework:** cenários com expectativas sobre resposta/proposta e captura de trechos da resposta; `eval_variables` são as palavras que só o agente conhece. Julgam a conversa, não o estado do sistema externo.
+
+### Bug encontrado pela segunda API (corrigido)
+
+O Flow só comparava o horário pedido ("às 16h") com as **5 opções exibidas**, não com tudo que a tool devolveu: com a API de estúdio (slots a partir das 08:00) "às 11h" respondia "não tenho exatamente esse horário" havendo 11:00 livre. Agora a preferência (e uma hora dita durante a escolha) casa com todas as opções reais; número/ordinal continuam referindo só ao que foi mostrado (`FlowInstance.unlisted`). Testes em `tests/engine/test_flows.py`.
+
+### Débitos conhecidos (Fase 8)
+
+- Pack em pt-BR, único idioma; `policies` do manifesto conceitual do DESIGN §33 não existem como definição no framework e por isso não estão no Pack.
+- Sem registry de Packs (só `DirectoryPackLoader`; "registry de Packs" segue em aberto no DESIGN), sem faixas de versão (versão exata) e sem assinatura/verificação de origem.
+- Evals não rodam o LLM (o Pack é determinístico via Flow); o harness completo é da Fase 10.
+- O texto de persona do Pack é anexado ao do agente sem checagem de contradição com a persona dele.

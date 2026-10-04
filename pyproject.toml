@@ -33,13 +33,14 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/conversation_agent"]
 # Editable installs also expose the examples (they are separate top-level packages,
-# never imported by src/conversation_agent — enforced by import-linter).
+# never imported by src/conversation_agent â€” enforced by import-linter).
 dev-mode-dirs = [
     "src",
     "examples/vertical-slice",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
+    "examples/reference-agenda-api",
 ]
 
 [tool.pytest.ini_options]
@@ -59,6 +60,7 @@ src = [
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
+    "examples/reference-agenda-api",
     "tests",
 ]
 
@@ -75,6 +77,7 @@ mypy_path = [
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
+    "examples/reference-agenda-api",
 ]
 explicit_package_bases = true
 
@@ -83,7 +86,7 @@ module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp"]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -140,7 +143,7 @@ forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
 name = "framework never imports example/external-system code (INV-008)"
 type = "forbidden"
 source_modules = ["conversation_agent"]
-forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp"]
+forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api"]
 
 [[tool.importlinter.contracts]]
 name = "reference API is an external system: no framework imports"
@@ -158,4 +161,10 @@ forbidden_modules = ["conversation_agent"]
 name = "reference MCP server is an external system: no framework imports"
 type = "forbidden"
 source_modules = ["reference_mcp"]
+forbidden_modules = ["conversation_agent"]
+
+[[tool.importlinter.contracts]]
+name = "agenda API is an external system: no framework imports"
+type = "forbidden"
+source_modules = ["agenda_api"]
 forbidden_modules = ["conversation_agent"]

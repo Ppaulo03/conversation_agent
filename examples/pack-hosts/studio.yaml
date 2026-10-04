@@ -1,0 +1,164 @@
+# A studio installing the SAME generic-scheduling Pack over a DIFFERENT scheduling API.
+#
+# Other services, other timezone, other tools, other bindings and mappings (minutes instead of
+# hours, UTC times, page tokens, other paths and error codes). Not one line of the Pack changes.
+schema_version: 1
+min_framework: "0.1.0"
+agent_id: studio-demo
+version: "0.1.0"
+timezone: America/Manaus
+fallback_reply: "Desculpe, não consegui concluir agora. Pode tentar novamente?"
+
+persona: |
+  Você é a assistente virtual de um estúdio de bem-estar. Responda sempre em português do Brasil, de forma curta, cordial e objetiva.
+
+  Serviços: "massage" (massagem, 45 min) e "pilates" (aula de pilates, 50 min).
+
+packs:
+  - name: generic-scheduling
+    version: "1.0.0"
+    allow: [scheduling.availability, scheduling.create]
+    parameters:
+      services:
+        massage:
+          keywords: [massagem, massagista]
+          duration_minutes: 45
+        pilates:
+          keywords: [pilates]
+          duration_minutes: 50
+      service_question: "Qual serviço você quer: massagem (45 min) ou pilates (50 min)?"
+      extra_triggers: [massagem, pilates]
+
+allowed_capabilities: []
+
+confirmation:
+  prompt: "Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  reprompt: "Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  rejected: "Tudo bem, cancelei o pedido."
+  expired: "Esse pedido expirou. Me diga de novo o que você gostaria de fazer."
+  gave_up: "Não consegui uma confirmação clara, então cancelei o pedido."
+  executed_fallback: "Seu pedido foi processado (situação: {status})."
+
+capabilities: []
+
+tools:
+  - name: agenda_listar_horarios
+    description: GET /v2/agenda/horarios on the agenda API.
+    risk: read
+    timeout_seconds: 5.0
+    provider: http
+    connection: agenda_api
+    http:
+      method: GET
+      path: /v2/agenda/horarios
+      query: [servico, de, ate, pagina]
+    input:
+      servico: {type: string}
+      de: {type: date}
+      ate: {type: date}
+      pagina: {type: string, required: false}
+    output:
+      horarios:
+        type: list
+        items:
+          type: object
+          fields:
+            inicio: {type: string}
+            fim: {type: string}
+      proxima_pagina: {type: string, required: false}
+
+  - name: agenda_reservar
+    description: POST /v2/agenda/reservas on the agenda API (idempotent by Idempotency-Key).
+    risk: irreversible
+    confirmation_required: true
+    timeout_seconds: 5.0
+    provider: http
+    connection: agenda_api
+    http:
+      method: POST
+      path: /v2/agenda/reservas
+      body: [servico, inicio, duracao_min]
+    idempotency_supported: true
+    recovery:
+      strategy: status_lookup
+      lookup_capability: scheduling.lookup_booking
+      absent_codes: [BOOKING_NOT_FOUND]
+    input:
+      servico: {type: string}
+      inicio: {type: string}
+      duracao_min: {type: integer}
+    output:
+      codigo: {type: string}
+      situacao: {type: string}
+
+  - name: agenda_buscar_reserva
+    description: GET /v2/agenda/reservas/por-chave/{chave} on the agenda API.
+    risk: read
+    provider: http
+    connection: agenda_api
+    http:
+      method: GET
+      path: /v2/agenda/reservas/por-chave/{chave}
+    input:
+      chave: {type: string}
+    output:
+      codigo: {type: string}
+      situacao: {type: string}
+
+bindings:
+  - capability: scheduling.availability
+    tool: agenda_listar_horarios
+    input_map:
+      servico:
+        from: $.service_id
+        enum: {massage: MSG, pilates: PIL}
+      de: $.from_date
+      ate: $.to_date
+      pagina: $.cursor
+    output_map:
+      slots:
+        from_each: $.horarios[*]
+        map: {start_at: $.inicio, end_at: $.fim}
+      next_cursor: $.proxima_pagina
+    error_map:
+      http_status:
+        404: {type: business_error, code: SERVICE_NOT_FOUND}
+        400: {type: validation_error}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}
+
+  - capability: scheduling.create
+    tool: agenda_reservar
+    input_map:
+      servico:
+        from: $.service_id
+        enum: {massage: MSG, pilates: PIL}
+      inicio: {from: $.start_at, transform: datetime_to_utc}
+      duracao_min: $.duration_minutes
+    output_map:
+      booking_id: $.codigo
+      status: $.situacao
+    error_map:
+      http_status:
+        422: {type: business_error, code: SLOT_UNAVAILABLE}
+      default_5xx:
+        write: {type: unknown}
+      timeout:
+        write: {type: unknown}
+
+  - capability: scheduling.lookup_booking
+    tool: agenda_buscar_reserva
+    input_map:
+      chave: $.idempotency_key
+    output_map:
+      booking_id: $.codigo
+      status: $.situacao
+    error_map:
+      http_status:
+        404: {type: business_error, code: BOOKING_NOT_FOUND}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}

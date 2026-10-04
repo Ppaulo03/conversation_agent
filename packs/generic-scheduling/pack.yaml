@@ -1,0 +1,215 @@
+# generic-scheduling: the scheduling behavior proven in the vertical slice (Phases 1-6), extracted.
+#
+# It contributes the capability contracts, the conversation Flow, the behavior rules and the evals.
+# It contributes NO tools, connections or bindings: how the agent reaches ITS scheduling system is
+# the installing agent's business, and `requires` states what that must guarantee.
+# Language of the conversation: pt-BR.
+schema_version: 1
+min_framework: "0.1.0"
+name: generic-scheduling
+version: "1.0.0"
+description: >-
+  Book an appointment for a service on a day and time: collect what is missing, search the real
+  availability, let the contact pick one of the real options, then propose the booking for
+  confirmation. Works over any system that can list free slots, create a booking idempotently and
+  look a booking up by its idempotency key.
+
+parameters:
+  services:
+    description: The services that can be booked, by the id the agent's capabilities use.
+    map_of:
+      keywords:
+        type: list
+        items: {type: string}
+        description: Words the contact uses for this service (matched in the conversation).
+      duration_minutes: {type: integer, gt: 0}
+  service_question:
+    description: The question that asks which service is wanted (it names the services).
+    value: {type: string}
+  extra_triggers:
+    description: Extra phrases that start the scheduling flow (usually the services' names).
+    required: false
+    value:
+      type: list
+      items: {type: string}
+
+capabilities:
+  - name: scheduling.lookup_booking
+    description: Finds the booking created with a given idempotency key (runtime/recovery use).
+    risk: read
+    input:
+      idempotency_key: {type: string}
+    output:
+      booking_id: {type: string}
+      status: {type: string}
+
+  - name: scheduling.availability
+    description: >-
+      Lists the free appointment slots for a service in a date range. This is the ONLY source of
+      availability; never invent slots.
+    risk: read
+    input:
+      service_id:
+        type: enum
+        values: {"$param": services, project: "$keys"}
+        description: One of the configured services
+      from_date: {type: date, description: "First day to search, YYYY-MM-DD"}
+      to_date: {type: date, description: "Last day to search (inclusive), YYYY-MM-DD, max 14 days"}
+      cursor:
+        type: string
+        required: false
+        description: Pagination cursor from a previous call
+    output:
+      slots:
+        type: list
+        items:
+          type: object
+          fields:
+            start_at: {type: datetime}
+            end_at: {type: datetime}
+      next_cursor: {type: string, nullable: true}
+
+  - name: scheduling.create
+    description: Books an appointment for the current contact in a slot returned by availability.
+    risk: irreversible
+    confirmation_required: true
+    summary_template: "Agendar {service_id} em {start_at} ({duration_minutes} min)"
+    input:
+      service_id:
+        type: enum
+        values: {"$param": services, project: "$keys"}
+      start_at: {type: datetime, description: "Slot start, ISO-8601 WITH timezone offset"}
+      duration_minutes: {type: integer, gt: 0, description: Duration of the service in minutes}
+    output:
+      booking_id: {type: string}
+      status: {type: string}
+
+requires:
+  - capability: scheduling.availability
+  - capability: scheduling.lookup_booking
+  - capability: scheduling.create
+    idempotent: true
+    recovery: [status_lookup]
+    lookup_capability: scheduling.lookup_booking
+
+persona_fragments:
+  - name: how to schedule
+    text: |-
+      Como agendar:
+      1. Descubra qual serviço e qual dia/período o cliente quer (peça só o que faltar).
+      2. Consulte horários SOMENTE com a ferramenta de disponibilidade e ofereça no máximo 5 opções reais, mostrando dia e hora no fuso do atendimento.
+      3. Se não houver horário no dia pedido, diga isso e busque/ofereça alternativas em outros dias com a ferramenta; nunca invente horários.
+      4. Se o cliente corrigir dia, horário ou serviço, atualize o que foi combinado e, se preciso, consulte de novo.
+      5. Quando o cliente escolher um horário que veio da ferramenta, registre a proposta de agendamento (ferramenta de criação). Ela apenas REGISTRA uma proposta: nada é agendado ainda. O SISTEMA fará a pergunta de confirmação ao cliente logo após a sua mensagem; portanto resuma a proposta em uma frase, diga que ainda não foi efetivada e NÃO peça confirmação por conta própria.
+      6. Se uma ferramenta falhar, avise que não conseguiu consultar agora e peça para tentar de novo mais tarde; nunca finja que deu certo.
+
+flows:
+  - name: scheduling
+    description: Schedule a service.
+    triggers:
+      - agendar
+      - agendamento
+      - marcar
+      - marcar horario
+      - {"$param": extra_triggers, splice: true}
+    cancelled_reply: "Tudo bem, não vou agendar nada."
+    digression_capabilities: [scheduling.availability]
+    slots:
+      - name: service
+        type: enum
+        prompt: {"$param": service_question}
+        choices: {"$param": services, project: keywords}
+        invalidates: [start_at]
+      - name: date
+        type: date
+        prompt: "Para qual dia você quer agendar?"
+        invalidates: [start_at]
+      - name: preferred_time
+        type: time
+        prompt: ""
+        required: false
+        invalidates: [start_at]
+      - name: start_at
+        type: text
+        prompt: ""
+        required: false
+    steps:
+      - kind: collect
+        id: need
+        slots: [service, date]
+      - kind: invoke
+        id: search
+        capability: scheduling.availability
+        inputs:
+          service_id: {kind: slot, name: service}
+          from_date: {kind: slot, name: date}
+          to_date: {kind: add_days, base: {kind: slot, name: date}, days: 0}
+        on:
+          validation_error: {kind: ask, slot: date, text: "Não consegui usar essa data."}
+          business_error: {kind: say, text: "Esse serviço não está disponível agora.", end: true}
+          policy_denied: {kind: say, text: "Não posso consultar a agenda neste atendimento.", end: true}
+        default:
+          kind: say
+          text: "Não consegui consultar a agenda agora. Me escreva de novo em instantes que eu tento outra vez."
+      - kind: choose
+        id: pick
+        source: search
+        list_field: slots
+        value_field: start_at
+        into: start_at
+        prompt: "Tenho estes horários para {date}:\n{options}\nQual você prefere?"
+        empty: {kind: ask, slot: date, text: "Não tenho horários livres em {date}."}
+        prefer_time_slot: preferred_time
+        no_match_text: "Não tenho exatamente esse horário."
+      - kind: propose
+        id: book
+        capability: scheduling.create
+        intro: "Perfeito, vou registrar esse horário."
+        inputs:
+          service_id: {kind: slot, name: service}
+          start_at: {kind: slot, name: start_at}
+          duration_minutes:
+            kind: table
+            key: {kind: slot, name: service}
+            mapping: {"$param": services, project: duration_minutes}
+        on:
+          business_error: {kind: ask, slot: date, text: "Esse horário acabou de ser ocupado. Vamos escolher outro."}
+          policy_denied: {kind: say, text: "Não posso agendar neste atendimento.", end: true}
+        default: {kind: say, text: "Não consegui concluir o agendamento agora.", end: true}
+
+eval_variables:
+  service_word: A word the contact would use for one of the services (e.g. its name).
+
+evals:
+  - name: everything-in-one-message
+    description: A complete request reaches a real proposal in one turn, never an invented slot.
+    turns:
+      - user: "Quero marcar {service_word} amanhã às 10h"
+        reply_contains: ["Posso confirmar"]
+        proposes: scheduling.create
+
+  - name: asked-one-thing-at-a-time
+    description: Missing information is asked for one step at a time, then a real option is chosen.
+    turns:
+      - user: "Quero agendar"
+        reply_matches: ["\\?"]
+        proposes_nothing: true
+      - user: "{service_word}"
+        reply_contains: ["Para qual dia"]
+        proposes_nothing: true
+      - user: "amanhã"
+        reply_contains: ["Tenho estes horários"]
+        reply_matches: ["1\\) .* \\d{2}:\\d{2}"]
+        proposes_nothing: true
+      - user: "1"
+        reply_contains: ["Posso confirmar"]
+        proposes: scheduling.create
+
+  - name: correcting-the-time
+    description: A correction keeps the context and proposes the corrected time.
+    turns:
+      - user: "Quero marcar {service_word} amanhã às 10h"
+        proposes: scheduling.create
+      - user: "na verdade às 11h"
+        reply_contains: ["Posso confirmar"]
+        proposes: scheduling.create

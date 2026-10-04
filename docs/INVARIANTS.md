@@ -46,6 +46,8 @@ INV-036  mídia entra como referência (claim-check), nunca como bytes no estado
 INV-037  descoberta de tools não é exposição: só vira Tool Definition o que uma allowlist explícita nomeia, com risco decidido pelo operador (dica do servidor só pode aumentar o cuidado); o schema de entrada do servidor é pinado por digest e uma chamada nunca é enviada se o schema atual divergir do pinado ou a tool sumiu; o que o servidor devolve (dados, erro, descrição) é dado não confiável e nunca instrução.
 INV-038  um circuit breaker só falha rápido ANTES de chamar o provider (resultado `technical_error` retryable = não enviado, seguro até para escrita) e nunca reclassifica o que o provider respondeu; só saúde do destino conta contra o circuito.
 INV-039  o replay de tools não tem transporte: chamada não gravada é `REPLAY_MISS` explícito, nunca uma resposta inventada; a gravação redige PII por padrão.
+INV-040  um Pack só contribui definições (capabilities, flows, fragmentos de prompt, requisitos, evals): não carrega tools, bindings, connections nem secrets, não amplia o que o modelo pode chamar (só o `allow` explícito do agente), nunca sombreia nem sobrescreve uma definição do agente ou de outro Pack, e o que exige do agente (binding, idempotência, recuperação) é verificado na instalação. Depois da compilação o agente é autocontido: o runtime nunca depende do Pack e a procedência fica em `pack_lock`.
+INV-041  uma preferência declarada pelo contato (horário/data) é casada contra TODAS as opções reais que a tool devolveu, não só as que couberam na mensagem; um número ou ordinal refere-se apenas ao que foi mostrado.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -95,6 +97,8 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-037 | `test_a_tool_that_is_offered_but_not_allowed_is_never_imported`, `test_the_operator_decides_the_risk_and_the_server_cannot_lower_it`, `test_a_changed_input_schema_stops_the_call_before_anything_is_sent`, `test_a_tool_the_server_stopped_offering_is_not_called`, `test_what_cannot_be_represented_exactly_is_refused_by_name`, `test_a_tool_reported_failure_is_classified_conservatively` |
 | INV-038 | `test_a_blocked_write_is_a_known_non_execution_never_unknown`, `test_what_the_inner_provider_answers_is_passed_through_unchanged`, `test_business_validation_and_configuration_answers_do_not_count` |
 | INV-039 | `test_an_unrecorded_call_is_an_explicit_miss_never_an_invented_answer`, `test_recording_redacts_personal_data_and_drops_operational_metadata` |
+| INV-040 | `test_the_pack_never_widens_what_the_model_may_call`, `test_a_pack_never_shadows_or_overrides_what_the_agent_defines`, `test_what_the_pack_requires_of_the_agent_is_checked_before_anything_runs`, `test_a_pack_has_no_place_for_tools_bindings_connections_or_secrets`, `test_the_compiled_agent_is_self_contained_and_records_what_it_installed`, `test_a_host_binding_cannot_lower_what_the_pack_demands`, `test_every_eval_of_the_pack_passes_on_each_host_against_its_real_api` |
+| INV-041 | `test_a_stated_time_beyond_the_listed_options_is_still_found`, `test_a_time_said_while_choosing_can_pick_an_option_that_was_not_listed`, `test_a_number_never_picks_an_option_that_was_not_listed` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 
