@@ -1,13 +1,12 @@
-"""Connection pool + forward-only SQL migrations."""
+"""Connection pool + forward-only SQL migrations (see `migrator`)."""
 
 from __future__ import annotations
 
 import json
-from importlib import resources
 
 import asyncpg
 
-_MIGRATIONS_PACKAGE = "conversation_agent.adapters.postgres.migrations"
+from conversation_agent.adapters.postgres.migrator import Migrator
 
 
 async def _init_connection(conn: asyncpg.Connection) -> None:
@@ -37,26 +36,5 @@ class PostgresDatabase:
         await self.pool.close()
 
     async def migrate(self) -> list[str]:
-        """Applies pending migrations in filename order; returns the versions applied."""
-        applied: list[str] = []
-        files = sorted(
-            (f for f in resources.files(_MIGRATIONS_PACKAGE).iterdir() if f.name.endswith(".sql")),
-            key=lambda f: f.name,
-        )
-        async with self.pool.acquire() as conn:
-            await conn.execute(
-                "CREATE TABLE IF NOT EXISTS schema_migrations ("
-                "version text PRIMARY KEY, applied_at timestamptz NOT NULL DEFAULT now())"
-            )
-            done = {r["version"] for r in await conn.fetch("SELECT version FROM schema_migrations")}
-            for f in files:
-                version = f.name.removesuffix(".sql")
-                if version in done:
-                    continue
-                async with conn.transaction():
-                    await conn.execute(f.read_text(encoding="utf-8"))
-                    await conn.execute(
-                        "INSERT INTO schema_migrations (version) VALUES ($1)", version
-                    )
-                applied.append(version)
-        return applied
+        """Applies pending migrations (checksummed, serialized); returns the versions applied."""
+        return await Migrator(self.pool).apply()
