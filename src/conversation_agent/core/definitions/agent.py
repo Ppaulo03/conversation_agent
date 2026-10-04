@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
 from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Invoke, Propose
+from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.temporal_ptbr import fold
@@ -231,7 +232,7 @@ class AgentDefinition(BaseModel):
                 if b.tool != tool.name or recovery.result_map is not None:
                     continue
                 original = by_cap[b.capability].output_model
-                if lookup.output_model.model_json_schema() != original.model_json_schema():
+                if schema_fingerprint(lookup.output_model) != schema_fingerprint(original):
                     raise DefinitionError(
                         f"lookup {name!r} returns a different schema than {b.capability!r}: "
                         "declare `recovery.result_map` to convert it"

@@ -39,3 +39,9 @@ MapExpr = Union[str, Ref, Const, Each]  # noqa: UP007  (recursive alias needs a 
 Each.model_rebuild()
 
 MappingSpec = dict[str, MapExpr]
+
+# Names the runtime implements (`tools.mapping.TRANSFORMS`; a test keeps both in sync). The
+# compiler rejects any other name before the agent can run.
+TRANSFORM_NAMES: frozenset[str] = frozenset(
+    {"minutes_to_hours", "hours_to_minutes", "datetime_to_utc"}
+)

@@ -1,0 +1,279 @@
+# The scheduling agent as a manifest. It must compile to the SAME agent as
+# `vertical_slice.definitions.build_agent(flows=True)` (a test compares their digests), so the
+# Python objects and this file are two spellings of one definition.
+schema_version: 1
+min_framework: "0.1.0"
+agent_id: scheduling-demo
+version: "0.1.0"
+timezone: America/Sao_Paulo
+fallback_reply: "Desculpe, não consegui concluir agora. Pode tentar novamente?"
+
+persona: |
+  Você é a assistente virtual de agendamentos de uma clínica/salão. Responda sempre em português do Brasil, de forma curta, cordial e objetiva.
+
+  Serviços disponíveis: "haircut" (corte de cabelo, 30 min) e "consultation" (consulta, 60 min).
+
+  Como trabalhar:
+  1. Descubra qual serviço e qual dia/período o cliente quer (peça só o que faltar).
+  2. Consulte horários SOMENTE com a ferramenta de disponibilidade e ofereça no máximo 5 opções reais, mostrando dia e hora no fuso America/Sao_Paulo.
+  3. Se não houver horário no dia pedido, diga isso e busque/ofereça alternativas em outros dias com a ferramenta; nunca invente horários.
+  4. Se o cliente corrigir dia, horário ou serviço, atualize o que foi combinado e, se preciso, consulte de novo.
+  5. Quando o cliente escolher um horário que veio da ferramenta, registre a proposta de agendamento (ferramenta de criação). Ela apenas REGISTRA uma proposta: nada é agendado ainda. O SISTEMA fará a pergunta de confirmação ao cliente logo após a sua mensagem; portanto resuma a proposta em uma frase, diga que ainda não foi efetivada e NÃO peça confirmação por conta própria.
+  6. Se uma ferramenta falhar, avise que não conseguiu consultar agora e peça para tentar de novo mais tarde; nunca finja que deu certo.
+
+allowed_capabilities: [scheduling.availability, scheduling.create]
+
+confirmation:
+  prompt: "Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  reprompt: "Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  rejected: "Tudo bem, cancelei o pedido."
+  expired: "Esse pedido expirou. Me diga de novo o que você gostaria de fazer."
+  gave_up: "Não consegui uma confirmação clara, então cancelei o pedido."
+  executed_fallback: "Seu pedido foi processado (situação: {status})."
+
+capabilities:
+  - name: scheduling.lookup_booking
+    description: Finds the booking created with a given idempotency key (runtime/recovery use).
+    risk: read
+    input:
+      idempotency_key: {type: string}
+    output:
+      booking_id: {type: string}
+      status: {type: string}
+
+  - name: scheduling.availability
+    description: >-
+      Lists the free appointment slots for a service in a date range. This is the ONLY source of
+      availability; never invent slots.
+    risk: read
+    input:
+      service_id:
+        type: enum
+        values: [haircut, consultation]
+        description: haircut (30 min) or consultation (60 min)
+      from_date: {type: date, description: "First day to search, YYYY-MM-DD"}
+      to_date: {type: date, description: "Last day to search (inclusive), YYYY-MM-DD, max 14 days"}
+      cursor:
+        type: string
+        required: false
+        description: Pagination cursor from a previous call
+    output:
+      slots:
+        type: list
+        items:
+          type: object
+          fields:
+            start_at: {type: datetime}
+            end_at: {type: datetime}
+      next_cursor: {type: string, nullable: true}
+
+  - name: scheduling.create
+    description: Books an appointment for the current contact in a slot returned by availability.
+    risk: irreversible
+    confirmation_required: true
+    summary_template: "Agendar {service_id} em {start_at} ({duration_minutes} min)"
+    input:
+      service_id: {type: enum, values: [haircut, consultation]}
+      start_at: {type: datetime, description: "Slot start, ISO-8601 WITH timezone offset"}
+      duration_minutes: {type: integer, gt: 0, description: Duration of the service in minutes}
+    output:
+      booking_id: {type: string}
+      status: {type: string}
+
+tools:
+  - name: erp_get_available_slots
+    description: GET /availability on the scheduling API.
+    risk: read
+    timeout_seconds: 5.0
+    provider: http
+    connection: scheduling_api
+    http:
+      method: GET
+      path: /availability
+      query: [service_code, start, end, cursor, limit]
+    input:
+      service_code: {type: string}
+      start: {type: date}
+      end: {type: date}
+      cursor: {type: string, required: false}
+      limit: {type: integer, required: false, default: 20}
+    output:
+      items:
+        type: list
+        items:
+          type: object
+          fields:
+            start: {type: string}
+            end: {type: string}
+      pagination:
+        type: object
+        fields:
+          next_cursor: {type: string, required: false}
+
+  - name: erp_create_reservation
+    description: POST /bookings on the scheduling API (idempotent by Idempotency-Key).
+    risk: irreversible
+    confirmation_required: true
+    timeout_seconds: 5.0
+    provider: http
+    connection: scheduling_api
+    http:
+      method: POST
+      path: /bookings
+      body: [service_code, starts_at, hours]
+    idempotency_supported: true
+    recovery:
+      strategy: status_lookup
+      lookup_capability: scheduling.lookup_booking
+      absent_codes: [BOOKING_NOT_FOUND]
+    input:
+      service_code: {type: string}
+      starts_at: {type: string}
+      hours: {type: number}
+    output:
+      id: {type: string}
+      state: {type: string}
+
+  - name: erp_find_reservation
+    description: GET /bookings/by-idempotency-key/{key} on the scheduling API.
+    risk: read
+    provider: http
+    connection: scheduling_api
+    http:
+      method: GET
+      path: /bookings/by-idempotency-key/{key}
+    input:
+      key: {type: string}
+    output:
+      id: {type: string}
+      state: {type: string}
+
+bindings:
+  - capability: scheduling.availability
+    tool: erp_get_available_slots
+    input_map:
+      service_code:
+        from: $.service_id
+        enum: {haircut: HC-01, consultation: CN-01}
+      start: $.from_date
+      end: $.to_date
+      cursor: $.cursor
+      limit: {const: 20}
+    output_map:
+      slots:
+        from_each: $.items[*]
+        map: {start_at: $.start, end_at: $.end}
+      next_cursor: $.pagination.next_cursor
+    error_map:
+      http_status:
+        404: {type: business_error, code: SERVICE_NOT_FOUND}
+        422: {type: validation_error}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}
+
+  - capability: scheduling.create
+    tool: erp_create_reservation
+    input_map:
+      service_code:
+        from: $.service_id
+        enum: {haircut: HC-01, consultation: CN-01}
+      starts_at: {from: $.start_at, transform: datetime_to_utc}
+      hours: {from: $.duration_minutes, transform: minutes_to_hours}
+    output_map:
+      booking_id: $.id
+      status: $.state
+    error_map:
+      http_status:
+        409: {type: business_error, code: SLOT_UNAVAILABLE}
+      default_5xx:
+        write: {type: unknown}
+      timeout:
+        write: {type: unknown}
+
+  - capability: scheduling.lookup_booking
+    tool: erp_find_reservation
+    input_map:
+      key: $.idempotency_key
+    output_map:
+      booking_id: $.id
+      status: $.state
+    error_map:
+      http_status:
+        404: {type: business_error, code: BOOKING_NOT_FOUND}
+      default_5xx:
+        read: {type: technical_error, retryable: true}
+      timeout:
+        read: {type: timeout, retryable: true}
+
+flows:
+  - name: scheduling
+    description: Schedule a haircut or a consultation.
+    triggers: [agendar, agendamento, marcar, marcar horario, cortar cabelo, corte de cabelo, consulta]
+    cancelled_reply: "Tudo bem, não vou agendar nada."
+    digression_capabilities: [scheduling.availability]
+    slots:
+      - name: service
+        type: enum
+        prompt: "Qual serviço você quer: corte de cabelo (30 min) ou consulta (60 min)?"
+        choices:
+          haircut: [corte, cortar, cabelo, corte de cabelo]
+          consultation: [consulta, consultar]
+        invalidates: [start_at]
+      - name: date
+        type: date
+        prompt: "Para qual dia você quer agendar?"
+        invalidates: [start_at]
+      - name: preferred_time
+        type: time
+        prompt: ""
+        required: false
+        invalidates: [start_at]
+      - name: start_at
+        type: text
+        prompt: ""
+        required: false
+    steps:
+      - kind: collect
+        id: need
+        slots: [service, date]
+      - kind: invoke
+        id: search
+        capability: scheduling.availability
+        inputs:
+          service_id: {kind: slot, name: service}
+          from_date: {kind: slot, name: date}
+          to_date: {kind: add_days, base: {kind: slot, name: date}, days: 0}
+        on:
+          validation_error: {kind: ask, slot: date, text: "Não consegui usar essa data."}
+          business_error: {kind: say, text: "Esse serviço não está disponível agora.", end: true}
+          policy_denied: {kind: say, text: "Não posso consultar a agenda neste atendimento.", end: true}
+        default:
+          kind: say
+          text: "Não consegui consultar a agenda agora. Me escreva de novo em instantes que eu tento outra vez."
+      - kind: choose
+        id: pick
+        source: search
+        list_field: slots
+        value_field: start_at
+        into: start_at
+        prompt: "Tenho estes horários para {date}:\n{options}\nQual você prefere?"
+        empty: {kind: ask, slot: date, text: "Não tenho horários livres em {date}."}
+        prefer_time_slot: preferred_time
+        no_match_text: "Não tenho exatamente esse horário."
+      - kind: propose
+        id: book
+        capability: scheduling.create
+        intro: "Perfeito, vou registrar esse horário."
+        inputs:
+          service_id: {kind: slot, name: service}
+          start_at: {kind: slot, name: start_at}
+          duration_minutes:
+            kind: table
+            key: {kind: slot, name: service}
+            mapping: {haircut: 30, consultation: 60}
+        on:
+          business_error: {kind: ask, slot: date, text: "Esse horário acabou de ser ocupado. Vamos escolher outro."}
+          policy_denied: {kind: say, text: "Não posso agendar neste atendimento.", end: true}
+        default: {kind: say, text: "Não consegui concluir o agendamento agora.", end: true}

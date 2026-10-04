@@ -29,7 +29,7 @@ from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.turn_engine import TurnEngine
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.definitions import SCHEDULING_FLOW, build_agent
-from vertical_slice.wiring import build_engine
+from vertical_slice.wiring import build_engine, load_compiled_agent
 
 PRICES = FlowDefinition(
     name="prices",
@@ -57,6 +57,7 @@ class Chat:
         extra_flows: bool = False,
         script: list[Script] | None = None,
         max_depth: int = 3,
+        from_manifest: bool = False,
     ) -> None:
         self.strict = script is None
         self.llm = FakeLLM(script or [])  # strict chats fail on ANY model call
@@ -88,6 +89,7 @@ class Chat:
                 journal=self.journal,
                 clock=new_clock(),
                 flows=True,
+                agent=load_compiled_agent().agent if from_manifest else None,
             )
         self.engine = engine
 
@@ -385,3 +387,14 @@ def test_a_digression_may_only_use_read_capabilities() -> None:
     agent = build_agent().model_copy(update={"flows": (flow,)})
     with pytest.raises(DefinitionError, match="digression"):
         agent._check_flows({c.name: c for c in agent.capabilities})
+
+
+async def test_an_agent_compiled_from_its_manifest_behaves_like_the_python_one(
+    api: ApiHandle,
+) -> None:  # Phase 5: the manifest is a real definition, not documentation
+    chat = Chat(api, from_manifest=True)
+    out = await chat.say("Quero marcar um corte amanhã às 10h")
+    assert proposed_start(out) == datetime(2026, 10, 6, 13, 0, tzinfo=UTC)
+    out = await chat.say("na verdade às 11h")
+    assert proposed_start(out) == datetime(2026, 10, 6, 14, 0, tzinfo=UTC)
+    assert len(api.availability_requests()) == 1
