@@ -37,6 +37,7 @@ from conversation_agent.core.models.media import MediaReference, TranscriptionCo
 from conversation_agent.core.models.runtime import InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
 from conversation_agent.core.observability import bind
+from conversation_agent.core.tracing import span, trace_id_for
 from conversation_agent.engine.capability_pipeline import (
     CapabilityOutcome,
     CapabilityPipeline,
@@ -454,7 +455,8 @@ class TurnEngine:
         )
 
         async def call_llm() -> dict[str, Any]:
-            with bind(purpose=purpose):  # fresh calls only: a replayed step never reaches here
+            # fresh calls only: a replayed step never reaches here
+            with bind(purpose=purpose), span("llm.call", purpose=purpose):
                 response = await self._llm.complete(
                     request.model_copy(update={"request_id": llm_request_id})
                 )
@@ -608,7 +610,7 @@ class TurnEngine:
             invocation_id=stable_hash(
                 identity.tenant_id, identity.conversation_id, turn_id, logical_step_id, args_hash
             )[:32],
-            trace_id=f"trace-{turn_id}",
+            trace_id=trace_id_for(turn_id),
         )
 
 

@@ -28,6 +28,7 @@ from conversation_agent.core.models.tooling import (
     ToolResult,
 )
 from conversation_agent.core.observability import bind
+from conversation_agent.core.tracing import span
 from conversation_agent.ports.tool_provider import ToolProvider
 from conversation_agent.tools.intent import build_intent
 from conversation_agent.tools.mapping import TRANSFORMS, apply_mapping
@@ -132,7 +133,10 @@ class ToolRunner:
         if provider is None:
             return _failure_before_io("PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
         try:
-            with bind(invocation_id=context.invocation_id, trace_id=context.trace_id):
+            with (
+                bind(invocation_id=context.invocation_id, trace_id=context.trace_id),
+                span("tool.call", tool=resolved.tool.name, provider=resolved.tool.provider),
+            ):
                 result = await provider.execute(
                     resolved,
                     dict(intent.tool_args),

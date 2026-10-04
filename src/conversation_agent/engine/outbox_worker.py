@@ -14,6 +14,7 @@ from datetime import timedelta
 
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
 from conversation_agent.core.observability import bind
+from conversation_agent.core.tracing import span
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.outbox import OutboxStore
@@ -49,8 +50,14 @@ class OutboxWorker:
     async def run_once(self, limit: int = 20) -> int:
         messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl)
         for message in messages:
-            with bind(
-                tenant_id=message.tenant_id, outbox_id=message.outbox_id, component="outbox_worker"
+            with (
+                bind(
+                    tenant_id=message.tenant_id,
+                    outbox_id=message.outbox_id,
+                    trace_id=message.trace_id,
+                    component="outbox_worker",
+                ),
+                span("outbox.send", attempts=message.attempts),
             ):
                 await self._deliver(message)
         return len(messages)

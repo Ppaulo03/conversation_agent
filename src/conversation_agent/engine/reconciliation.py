@@ -37,6 +37,7 @@ from conversation_agent.core.models.runtime import (
 )
 from conversation_agent.core.models.tooling import ToolError, ToolResult
 from conversation_agent.core.observability import bind
+from conversation_agent.core.tracing import span
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.side_effects import to_tool_result
 from conversation_agent.ports.coordination import CoordinationClock
@@ -97,10 +98,14 @@ class ReconciliationWorker:
         for invocation, claim in await self._ledger.claim_reconciliation(
             self._owner, limit, self._ttl, agent_id=self._agent_id
         ):
-            with bind(
-                tenant_id=invocation.tenant_id,
-                invocation_id=invocation.invocation_id,
-                component="reconciliation",
+            with (
+                bind(
+                    tenant_id=invocation.tenant_id,
+                    invocation_id=invocation.invocation_id,
+                    trace_id=invocation.context.trace_id,
+                    component="reconciliation",
+                ),
+                span("reconcile.invocation"),
             ):
                 outcome = await self._reconcile_claimed(invocation, claim)
             if outcome is not None:

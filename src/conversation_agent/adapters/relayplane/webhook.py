@@ -33,7 +33,8 @@ from conversation_agent.adapters.senders.relayplane import result_from_gateway
 from conversation_agent.core.errors import ConversationIdentityConflictError, SecretNotFoundError
 from conversation_agent.core.models.media import MAX_MEDIA_ITEMS, MediaReference
 from conversation_agent.core.models.runtime import InboundEvent
-from conversation_agent.core.observability import bind
+from conversation_agent.core.observability import bind, current
+from conversation_agent.core.tracing import new_trace_id, span
 from conversation_agent.ports.admission import AdmissionControl
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.inbox import InboxStore
@@ -146,11 +147,15 @@ class RelayPlaneWebhook:
             return WebhookResponse(400, {"error": "tenant_mismatch"})
         if subscription.instance_ids and envelope.instance_id not in subscription.instance_ids:
             return WebhookResponse(200, {"status": "ignored", "reason": "instance_not_subscribed"})
-        with bind(
-            tenant_id=subscription.tenant_id,
-            channel_id=envelope.instance_id,
-            event_id=envelope.event_id,
-            component="webhook",
+        with (
+            bind(
+                tenant_id=subscription.tenant_id,
+                channel_id=envelope.instance_id,
+                event_id=envelope.event_id,
+                trace_id=new_trace_id(),  # minted HERE: one id, this event to its reply
+                component="webhook",
+            ),
+            span("webhook.receive", event_type=envelope.event_type),
         ):
             try:
                 return await self._dispatch(subscription, envelope)
@@ -242,6 +247,7 @@ class RelayPlaneWebhook:
                 reply_to_provider_message_id=msg.reply_to_provider_message_id,
                 provider_message_id=msg.provider_message_id,
                 media=media,
+                trace_id=current().get("trace_id"),
             )
         )
         return WebhookResponse(200, {"status": "accepted" if created else "duplicate"})

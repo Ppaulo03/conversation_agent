@@ -48,6 +48,7 @@ from conversation_agent.core.models.llm import (
 )
 from conversation_agent.core.models.runtime import FenceToken, InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityResult, ToolContext
+from conversation_agent.core.tracing import trace_id_for
 from conversation_agent.engine.capability_pipeline import (
     CapabilityOutcome,
     CapabilityPipeline,
@@ -349,7 +350,7 @@ class ConfirmationStage:
             contact_id=ident.contact_id,
             turn_id=inp.turn_id,
             invocation_id=invocation_id,  # hash(tenant, conversation, action_id) (§9.1)
-            trace_id=f"trace-{inp.turn_id}",
+            trace_id=trace_id_for(inp.turn_id),
         )
         frozen: list[Any] = []
 

@@ -48,8 +48,9 @@ from conversation_agent.core.models.runtime import (
     Ownership,
     ToolInvocation,
 )
-from conversation_agent.core.observability import bind, conversation_ref
+from conversation_agent.core.observability import bind, conversation_ref, current
 from conversation_agent.core.redaction import redact
+from conversation_agent.core.tracing import span
 from conversation_agent.core.versioning import Version
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
@@ -221,12 +222,17 @@ class TurnCoordinator:
             await uow.commit()
         if opened is None:
             return "none"
-        with bind(
-            tenant_id=fence.tenant_id,
-            conversation_ref=conversation_ref(fence.tenant_id, fence.conversation_id),
-            channel_id=opened.identity.channel_id,
-            turn_id=opened.turn_id,
-            component="coordinator",
+        with (
+            bind(
+                tenant_id=fence.tenant_id,
+                conversation_ref=conversation_ref(fence.tenant_id, fence.conversation_id),
+                channel_id=opened.identity.channel_id,
+                turn_id=opened.turn_id,
+                # the id minted at the edge; rows from before tracing get the old per-turn id
+                trace_id=opened.trace_id or f"trace-{opened.turn_id}",
+                component="coordinator",
+            ),
+            span("turn"),
         ):
             return await self._run_opened_turn(handle, fence, stored, pending, opened)
 
@@ -584,4 +590,5 @@ class TurnCoordinator:
             message_index=index,
             text=text,
             idempotency_key=key,
+            trace_id=current().get("trace_id"),
         )

@@ -30,7 +30,11 @@ class PostgresRateLimiter:
             tokens = (
                 limit.capacity
                 if row is None
-                else min(limit.capacity, row["tokens"] + row["idle"] * limit.refill_per_second)
+                # a clock stepped BACKWARDS must not drain the bucket: idle time is never < 0
+                else min(
+                    limit.capacity,
+                    row["tokens"] + max(row["idle"], 0.0) * limit.refill_per_second,
+                )
             )
             allowed = tokens >= cost
             await conn.execute(

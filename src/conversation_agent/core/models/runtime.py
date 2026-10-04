@@ -82,6 +82,7 @@ class InboundEvent(_Frozen):
     source_sequence: int | None = None
     media: tuple[MediaReference, ...] = ()  # claim-check references, never bytes
     provider_message_id: str | None = None  # the provider's id of the message this event carries
+    trace_id: str | None = None  # correlation id minted where the event entered the system
     # "system": a runtime-originated event (e.g. a proactive timer), not something the contact wrote
     kind: Literal["user", "system"] = "user"
     # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
@@ -115,6 +116,7 @@ class OpenedTurn(_Frozen):
     late_event_ids: tuple[str, ...] = ()
     last_event_at: AwareDatetime | None = None  # newest occurred_at among the turn's events
     first_received_at: AwareDatetime | None = None  # when the OLDEST event reached us (queue wait)
+    trace_id: str | None = None  # the correlation id of the event(s) this turn answers
     inbound: tuple[InboundRef, ...] = ()  # channel evidence per event, in burst order
     resumed: bool = False  # True when an earlier owner had already opened this turn
     attempts: int = 0  # failed processing attempts so far (NOT waits for tool results)
@@ -155,6 +157,7 @@ class OutboundMessage(_Frozen):
     first_sent_at: AwareDatetime | None = None
     reconcile_attempts: int = 0
     channel_message_id: str | None = None  # the GATEWAY's id for this send (not the provider's)
+    trace_id: str | None = None  # correlation with the turn (and inbound event) that produced it
 
 
 class SendResult(_Frozen):

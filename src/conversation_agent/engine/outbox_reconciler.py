@@ -23,6 +23,7 @@ from datetime import timedelta
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
 from conversation_agent.core.observability import bind
+from conversation_agent.core.tracing import span
 from conversation_agent.ports.channel_lookup import MessageLookup
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.outbox import OutboxStore
@@ -66,8 +67,14 @@ class OutboxReconciler:
         )
 
     async def _reconcile(self, message: OutboundMessage) -> None:
-        with bind(
-            tenant_id=message.tenant_id, outbox_id=message.outbox_id, component="outbox_reconciler"
+        with (
+            bind(
+                tenant_id=message.tenant_id,
+                outbox_id=message.outbox_id,
+                trace_id=message.trace_id,
+                component="outbox_reconciler",
+            ),
+            span("outbox.reconcile"),
         ):
             await self._reconcile_one(message)
 
