@@ -226,7 +226,18 @@ FAQ/suporte/ticket, sem alterar core/engine.
 - backup/DR;
 - auditoria administrativa.
 
-## Fase 13 — Mídia de ponta a ponta
+## Fase 13 — Uso real (serve, pacote instalável, canal de terminal)
+
+Achados de um POC que montou o runtime durável a partir de helpers de teste.
+
+- **`serve`:** entrypoint oficial do runtime durável (Postgres, `TurnCoordinator`, `ConfirmationStage`, `OutboxWorker`, polling), uma única composição em `src/` que os testes também usam;
+- **CLI que conclui:** o terminal como canal do `serve` (sender de console com dedupe por idempotency key e `provider_accepted_at`; eventos com `provider_occurred_at`), de modo que proposta, confirmação e execução funcionem de ponta a ponta;
+- **pacote instalável:** o wiring do vertical slice dentro do pacote; `examples/` só com dados;
+- **extras:** `[postgres]`, `[anthropic]`; modo em memória e outros providers sem puxar o que não usam;
+- **docs de uso:** guia do runtime completo, incluindo o requisito de timestamps de canal para confirmação e o motivo da ambiguidade (hoje o contato só vê "não entendi");
+- **depois (fase própria):** `choose` com mais de um campo, fallback de execução com campos do output, testes de caminho sem LLM/cancelamento/multi-worker.
+
+## Fase 14 — Mídia de ponta a ponta
 
 Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
 
