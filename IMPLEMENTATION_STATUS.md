@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 4 — Flows e entendimento (concluída; aguardando merge). Próxima: Fase 5.
+**Fase atual:** 4.1 — hardening dos Flows concluído (aguardando merge). Próxima: Fase 5.
 
 ## Phase 1
 
@@ -373,3 +373,23 @@ estruturada e digressão journaladas), cancelamento cooperativo (migration 0006,
 - Trigger "agendamento" também casa "cancelar meu agendamento" (não há flow de cancelamento ainda).
 - `restart` é política do `PostgresInboxStore`; configuração por agente/canal fica para a Fase 5/6.
 - Gatilhos e textos são pt-BR no exemplo; a normalização temporal é só pt-BR (outros idiomas = outro módulo).
+
+
+## Phase 4.1 — hardening pós-revisão da Fase 4
+
+Status: **PASS** (achados verificados no código antes de corrigir; todos reproduzidos). 663 testes.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| P0 Flow/digressão validavam `cap.risk`, não o risco efetivo | `ResolvedToolBinding.requires_protection` é a regra única (policy, flows e recovery usam a mesma); `Invoke`/digressão exigem leitura *efetiva*, `Propose` exige proteção efetiva | `test_invoke_rejects_a_capability_that_is_only_a_read_by_label`, `test_digression_rejects_*` |
+| P0 `safe_retry` sobrevivia a binding efetivamente write; lookup só era "read" por rótulo | `_check_safe_retry_recovery` (só leitura efetiva) e lookup precisa ser leitura efetiva em todas as camadas | `test_safe_retry_is_rejected_for_an_effective_write`, `test_a_status_lookup_must_be_an_effective_read_*` |
+| P1 `Propose` não-terminal/múltiplo, mas o runtime encerra o Flow nele | v1 formalizada: `Propose` é o único e último step (validação na construção) | `test_propose_must_be_the_single_last_step` |
+| P1 trigger dependia da ordem dos flows | maior `priority`, depois trigger mais específico (mais palavras); empate verdadeiro não inicia nada (agent loop); trigger idêntico em dois flows é erro de definição | `test_the_most_specific_trigger_wins_*`, `test_priority_breaks_ties_*`, `test_the_same_trigger_in_two_flows_*` |
+| P1 pilha de flows ilimitada | `max_flow_depth` (default 3); flow já suspenso é trazido à frente (nunca duplicado) | `test_alternating_between_two_flows_never_duplicates_instances`, `test_depth_limit_*` |
+| P1 `24:30`/`24h` viravam 00:xx do mesmo dia | hora 24 é recusada (o fluxo pergunta) | `test_hour_24_is_refused_*` |
+| P2 erros de definição só em produção | validação: `Table` cobre todas as choices do enum, `AddDays` exige slot date, `max_options >= 1`, campos do `Choose` existem no output da capability de origem, timezone válida | `test_a_table_must_cover_*`, `test_add_days_*`, `test_choose_fields_*`, `test_an_unknown_timezone_*` |
+| Runner | `Invoke` que recebe proposta/resultado nulo não derruba mais (`assert`): vira `unknown` e segue a transição | — |
+
+Fica para a Fase 5 (explícito): `agent_version` participar do dispatch/reconciliation (`AgentRegistry` + `CompiledAgent`
+versionado e pinado por conversa/flow); hoje um deploy entre PREPARE e a reconciliation falha fechado (handoff), não continua
+na versão antiga. Os checks semânticos acima viram DoD do Compiler.

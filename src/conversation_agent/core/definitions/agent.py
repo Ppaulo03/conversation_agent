@@ -5,13 +5,17 @@ No Pack and no YAML/DSL: those arrive only after this model is proven.
 
 from __future__ import annotations
 
+from typing import get_args, get_origin
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
-from conversation_agent.core.definitions.flow import FlowDefinition, Invoke, Propose
+from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Invoke, Propose
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
+from conversation_agent.core.temporal_ptbr import fold
 
 
 class ConfirmationTexts(BaseModel):
@@ -48,6 +52,7 @@ class AgentDefinition(BaseModel):
         "vou cuidar do seu pedido agora."
     )
     flows: tuple[FlowDefinition, ...] = ()
+    max_flow_depth: int = 3  # active + suspended flows kept per conversation
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()
     confirmation_prompt_enabled: bool = True
@@ -79,44 +84,87 @@ class AgentDefinition(BaseModel):
         self._check_flows(by_cap)
         self._check_retry_against_effective_risk(by_cap, by_tool)
         self._check_recovery_lookups(by_cap, by_tool)
+        self._check_safe_retry_recovery()
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
 
     def _check_flows(self, by_cap: dict[str, CapabilityDefinition]) -> None:
-        """A flow only ever talks to Capabilities this agent has: reads in `Invoke`, protected
-        ones in `Propose`, and digressions can use reads only."""
+        """A flow only ever talks to Capabilities this agent has. Protection is decided by the
+        RESOLVED binding (`requires_protection`), never by a label: reads in `Invoke`, protected
+        ones in `Propose`, and digressions can use effective reads only."""
+        if not self.flows:
+            return
+        try:
+            ZoneInfo(self.timezone)
+        except (ZoneInfoNotFoundError, ValueError) as exc:
+            raise DefinitionError(f"unknown timezone {self.timezone!r}") from exc
+        if self.max_flow_depth < 1:
+            raise DefinitionError("max_flow_depth must be at least 1")
         names = [f.name for f in self.flows]
         if len(set(names)) != len(names):
             raise DefinitionError("duplicate flow names")
+        seen: dict[str, str] = {}
         for flow in self.flows:
+            for phrase in flow.triggers:
+                owner = seen.setdefault(fold(phrase), flow.name)
+                if owner != flow.name:
+                    raise DefinitionError(
+                        f"trigger {phrase!r} is declared by both {owner!r} and {flow.name!r}"
+                    )
             for step in flow.steps:
                 if isinstance(step, Invoke | Propose):
-                    cap = by_cap.get(step.capability)
-                    if cap is None or step.capability not in self.allowed_capabilities:
+                    resolved = self.resolve(step.capability)
+                    if resolved is None or step.capability not in self.allowed_capabilities:
                         raise DefinitionError(
                             f"flow {flow.name!r} step {step.id!r}: capability "
-                            f"{step.capability!r} is not defined and allowed"
+                            f"{step.capability!r} is not defined, bound and allowed"
                         )
-                    protected = cap.risk != "read" or cap.confirmation_required
-                    if isinstance(step, Invoke) and protected:
+                    if isinstance(step, Invoke) and resolved.requires_protection:
                         raise DefinitionError(
                             f"flow {flow.name!r} step {step.id!r}: invoke is for reads; use "
-                            f"propose for the protected {step.capability!r}"
+                            f"propose for the protected {step.capability!r} (effective risk "
+                            f"{resolved.effective_risk!r})"
                         )
-                    if isinstance(step, Propose) and not protected:
+                    if isinstance(step, Propose) and not resolved.requires_protection:
                         raise DefinitionError(
                             f"flow {flow.name!r} step {step.id!r}: propose is for protected "
                             f"capabilities; {step.capability!r} is a plain read"
                         )
+                if isinstance(step, Choose):
+                    self._check_choose_fields(flow, step, by_cap)
             for name in flow.digression_capabilities:
-                cap = by_cap.get(name)
-                if cap is None or cap.risk != "read" or cap.confirmation_required:
+                resolved = self.resolve(name)
+                if resolved is None or resolved.requires_protection:
                     raise DefinitionError(
-                        f"flow {flow.name!r}: a digression may only use read capabilities "
-                        f"({name!r} is not)"
+                        f"flow {flow.name!r}: a digression may only use effective read "
+                        f"capabilities ({name!r} is not)"
                     )
+
+    def _check_choose_fields(
+        self, flow: FlowDefinition, step: Choose, by_cap: dict[str, CapabilityDefinition]
+    ) -> None:
+        """The list and item fields a Choose reads must exist in the source capability output."""
+        source = next(s for s in flow.steps if isinstance(s, Invoke) and s.id == step.source)
+        fields = by_cap[source.capability].output_model.model_fields
+        field = fields.get(step.list_field)
+        if field is None:
+            raise DefinitionError(
+                f"flow {flow.name!r} choose {step.id!r}: {source.capability!r} has no output "
+                f"field {step.list_field!r}"
+            )
+        args = get_args(field.annotation)
+        item = args[0] if get_origin(field.annotation) is list and args else None
+        if (
+            isinstance(item, type)
+            and issubclass(item, BaseModel)
+            and (step.value_field not in item.model_fields)
+        ):
+            raise DefinitionError(
+                f"flow {flow.name!r} choose {step.id!r}: items of {step.list_field!r} have no "
+                f"field {step.value_field!r}"
+            )
 
     def _check_retry_against_effective_risk(
         self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]
@@ -136,6 +184,23 @@ class AgentDefinition(BaseModel):
                     "SAME idempotency key"
                 )
 
+    def _check_safe_retry_recovery(self) -> None:
+        """`safe_retry` re-sends the frozen request: only an EFFECTIVE read may use it, however
+        the tool labels itself (INV-021: an ambiguous write is never retried blind)."""
+        for binding in self.bindings:
+            resolved = self.resolve(binding.capability)
+            assert resolved is not None
+            recovery = resolved.tool.recovery
+            if (
+                recovery is not None
+                and recovery.strategy == "safe_retry"
+                and (resolved.requires_protection)
+            ):
+                raise DefinitionError(
+                    f"tool {resolved.tool.name!r} declares recovery safe_retry but is bound to "
+                    f"{binding.capability!r} with effective risk {resolved.effective_risk!r}"
+                )
+
     def _check_recovery_lookups(
         self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]
     ) -> None:
@@ -152,8 +217,12 @@ class AgentDefinition(BaseModel):
                 raise DefinitionError(
                     f"tool {tool.name!r}: lookup capability {name!r} is not defined and bound"
                 )
-            if lookup.risk != "read":
-                raise DefinitionError(f"tool {tool.name!r}: the status lookup must be a read")
+            resolved_lookup = self.resolve(name or "")
+            if resolved_lookup is None or resolved_lookup.requires_protection:
+                raise DefinitionError(
+                    f"tool {tool.name!r}: the status lookup must be an effective read "
+                    "(no protected risk or confirmation on any layer)"
+                )
             if "idempotency_key" not in lookup.input_model.model_fields:
                 raise DefinitionError(
                     f"lookup {name!r} must take an `idempotency_key` (supplied by the runtime)"

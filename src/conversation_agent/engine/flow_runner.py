@@ -41,9 +41,9 @@ from conversation_agent.core.temporal_ptbr import WEEKDAY_ABBREV, reference_date
 from conversation_agent.engine.capability_pipeline import CapabilityOutcome
 from conversation_agent.engine.flow_understanding import (
     build_options,
-    contains_phrase,
     extract_slots,
     is_cancel,
+    phrase_score,
     render_options,
     select_option,
 )
@@ -177,9 +177,20 @@ class FlowRunner:
         today = reference_date(turn.reference_time, self._agent.timezone)
         answers = self._understand(definition, active, turn.text, today)[1]
         if trigger is not None and not answers:  # a different flow asked for: park this one
-            flows[-1] = active.model_copy(update={"status": "suspended"})
-            return await self._start(flows, trigger, turn)
+            parked = next((i for i, f in enumerate(flows) if f.flow_name == trigger.name), None)
+            if parked is not None:  # already suspended below: resume THAT one, never a duplicate
+                flows[-1] = active.model_copy(update={"status": "suspended"})
+                return self._bring_to_front(flows, parked)
+            if len(flows) < self._agent.max_flow_depth:  # bounded: user input cannot grow state
+                flows[-1] = active.model_copy(update={"status": "suspended"})
+                return await self._start(flows, trigger, turn)
         return await self._continue(flows, definition, active, turn)
+
+    def _bring_to_front(self, flows: list[FlowInstance], index: int) -> FlowReply:
+        resumed = flows.pop(index).model_copy(update={"status": "active"})
+        flows.append(resumed)
+        line = self._defs[resumed.flow_name].resume_reply.format(question=resumed.last_question)
+        return FlowReply(line, tuple(flows))
 
     def after_action(
         self,
@@ -211,10 +222,20 @@ class FlowRunner:
     # ------------------------------------------------------------------ lifecycle
 
     def _trigger(self, text: str, current: str | None) -> FlowDefinition | None:
-        for definition in self._defs.values():
-            if definition.name != current and contains_phrase(text, definition.triggers):
-                return definition
-        return None
+        """The flow the message asks for. Never decided by declaration order: highest explicit
+        priority, then the most specific (longest) trigger phrase; a genuine tie starts nothing
+        (the normal agent loop answers) instead of guessing."""
+        scored = [
+            (d.priority, phrase_score(text, d.triggers), d)
+            for d in self._defs.values()
+            if d.name != current
+        ]
+        matches = [(p, s, d) for p, s, d in scored if s > 0]
+        if not matches:
+            return None
+        best = max((p, s) for p, s, _ in matches)
+        winners = [d for p, s, d in matches if (p, s) == best]
+        return winners[0] if len(winners) == 1 else None
 
     async def _start(
         self, flows: list[FlowInstance], definition: FlowDefinition, turn: FlowTurn
@@ -385,8 +406,7 @@ class FlowRunner:
                             continue
                         outcome = await turn.io.invoke(step.capability, args)
                         result = outcome.result
-                        assert result is not None
-                        if result.status == "success":
+                        if result is not None and result.status == "success":
                             flows[-1] = instance.model_copy(
                                 update={
                                     "results": {
@@ -401,7 +421,8 @@ class FlowRunner:
                             )
                             instance = flows[-1]
                             continue
-                        transition = step.on.get(result.status, step.default)
+                        status = result.status if result is not None else "unknown"
+                        transition = step.on.get(status, step.default)
                     else:
                         outcome = await turn.io.invoke(step.capability, args)
                         if outcome.proposal is not None:

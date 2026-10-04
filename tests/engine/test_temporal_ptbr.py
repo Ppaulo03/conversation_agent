@@ -155,3 +155,9 @@ def test_relative_dates_never_depend_on_the_wall_clock() -> None:
 def test_presentation_is_local_and_deterministic() -> None:
     moment = datetime(2026, 10, 6, 13, 0, tzinfo=UTC)  # 10:00 in São Paulo
     assert format_local(moment, "America/Sao_Paulo") == ("ter 06/10", "10:00")
+
+
+def test_hour_24_is_refused_because_it_means_the_next_day() -> None:
+    for text in ("24h", "24:30", "terça às 24h", "24h30"):
+        assert parse_time(text) is None
+    assert parse_time("23:59") == time(23, 59)

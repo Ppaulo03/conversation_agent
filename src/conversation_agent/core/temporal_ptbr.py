@@ -156,8 +156,8 @@ def parse_time(text: str) -> time | None:
 
     hour = int(hour_text)
     minute = 30 if minute_text == "meia" else int(minute_text) if minute_text else 0
-    if not (0 <= hour <= 24 and 0 <= minute <= 59):
-        return None
+    if not (0 <= hour <= 23 and 0 <= minute <= 59):
+        return None  # "24h" would mean midnight of the NEXT day: a time alone cannot say that
     period = _period(t)
     if period in ("pm", "night") and hour < 12:
         hour += 12
@@ -165,7 +165,7 @@ def parse_time(text: str) -> time | None:
         hour = 0  # "12 da noite" is midnight, "12 da manhã" is not noon
     elif period is None and 1 <= hour <= 6:
         return None  # "às 3" / "3h": 03:00 or 15:00? Ambiguous -> the flow asks.
-    return time(0, minute) if hour == 24 else time(hour, minute)
+    return time(hour, minute)
 
 
 # --- durations ---

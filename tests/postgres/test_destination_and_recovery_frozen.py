@@ -329,7 +329,7 @@ def test_a_status_lookup_must_exist_be_bound_be_a_read_and_take_the_idempotency_
 
     with pytest.raises(DefinitionError, match="not defined and bound"):
         with_recovery(lookup_capability="scheduling.nope")
-    with pytest.raises(DefinitionError, match="must be a read"):
+    with pytest.raises(DefinitionError, match="effective read"):
         with_recovery(lookup_capability="scheduling.create")
 
     class NoKey(BaseModel):

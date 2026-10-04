@@ -53,3 +53,4 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - (Fase 4) Coluna `state_json` (jsonb) volta como dict/str conforme o codec: nos testes use `json.loads` se for `str`.
 - (Fase 4) Cancelamento: `cancel_requested` precisa ser reconhecido localmente (`LeaseHandle.acknowledge_cancel`) ao completar/cancelar o turno; senão o turno seguinte herda o pedido do heartbeat e é cancelado à toa (e reabrir os mesmos eventos colidiria no PK de `turns` sem o sal do `turn_id`).
 - (Fase 4) Gatilho vs resposta: "a consulta" respondendo "qual serviço?" contém o trigger "consulta"; a resposta ao flow ativo tem precedência sobre trigger de outro flow.
+- (Fase 4.1) Regra global validada localmente é bug esperado: "é protegido?" vive em `ResolvedToolBinding.requires_protection`; qualquer validação nova deve resolver o binding, nunca olhar `capability.risk`/`tool.risk` isolados. Em testes, use `rebuild(agent, ...)` (reconstrói e revalida); `model_copy` pula validação.

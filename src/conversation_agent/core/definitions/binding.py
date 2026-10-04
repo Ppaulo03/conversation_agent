@@ -67,6 +67,12 @@ class ResolvedToolBinding(BaseModel):
         return max(risks, key=lambda r: RISK_ORDER[r])
 
     @property
+    def requires_protection(self) -> bool:
+        """THE rule for "is this a protected operation?": every layer (policy, flows, recovery)
+        asks the resolved binding, never a label on one abstraction."""
+        return self.effective_risk != "read" or self.effective_confirmation_required
+
+    @property
     def effective_confirmation_required(self) -> bool:
         return (
             self.capability.confirmation_required

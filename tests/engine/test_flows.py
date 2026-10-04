@@ -51,7 +51,12 @@ class Chat:
     """One conversation: carries state across turns like the coordinator would."""
 
     def __init__(
-        self, api: ApiHandle, *, extra_flows: bool = False, script: list[Script] | None = None
+        self,
+        api: ApiHandle,
+        *,
+        extra_flows: bool = False,
+        script: list[Script] | None = None,
+        max_depth: int = 3,
     ) -> None:
         self.strict = script is None
         self.llm = FakeLLM(script or [])  # strict chats fail on ANY model call
@@ -66,7 +71,9 @@ class Chat:
                 clock=new_clock(),
                 flows=True,
             )
-            agent = agent.model_copy(update={"flows": (SCHEDULING_FLOW, PRICES)})
+            agent = agent.model_copy(
+                update={"flows": (SCHEDULING_FLOW, PRICES), "max_flow_depth": max_depth}
+            )
             engine = TurnEngine(
                 agent,
                 self.llm,

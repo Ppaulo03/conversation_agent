@@ -180,6 +180,7 @@ class FlowDefinition(_Frozen):
     resume_reply: str = "Voltando ao que estávamos fazendo: {question}"
     digressions_allowed: bool = True
     max_digressions: int = 5
+    priority: int = 0  # breaks a tie between flows whose triggers both match (higher wins)
     digression_capabilities: tuple[str, ...] = ()  # read capabilities usable in a digression
 
     @model_validator(mode="after")
@@ -216,6 +217,8 @@ class FlowDefinition(_Frozen):
                     )
                 for transition in (*step.on.values(), step.default):
                     self._check_transition(transition, known)
+                for expr in step.inputs.values():
+                    self._check_expression(expr)
             if isinstance(step, Invoke):
                 seen_invokes.add(step.id)
             if isinstance(step, Choose):
@@ -224,12 +227,30 @@ class FlowDefinition(_Frozen):
                         f"flow {self.name!r}: choose {step.id!r} needs an EARLIER invoke "
                         f"{step.source!r}"
                     )
+                if step.max_options < 1:
+                    raise DefinitionError(f"flow {self.name!r}: choose {step.id!r} max_options < 1")
                 need(step.into, f"choose {step.id!r}.into")
                 for ref in (step.prefer_time_slot, step.prefer_date_slot):
                     if ref is not None:
                         need(ref, f"choose {step.id!r}")
                 self._check_transition(step.empty, known)
+        proposals = [i for i, s in enumerate(self.steps) if isinstance(s, Propose)]
+        if len(proposals) > 1 or (proposals and proposals[0] != len(self.steps) - 1):
+            # v1 semantics: once the proposed action reaches a final state the flow ends, so a
+            # Propose must be the single, last step (continuations are not modelled yet).
+            raise DefinitionError(f"flow {self.name!r}: Propose must be the single, last step")
         return self
+
+    def _check_expression(self, expr: Slot | Lit | AddDays | Table) -> None:
+        if isinstance(expr, AddDays) and self.slot(expr.base.name).type != "date":
+            raise DefinitionError(f"flow {self.name!r}: add_days needs a date slot")
+        if isinstance(expr, Table):
+            key = self.slot(expr.key.name)
+            if key.type != "enum" or not set(key.choices) <= set(expr.mapping):
+                raise DefinitionError(
+                    f"flow {self.name!r}: table on {key.name!r} must be an enum slot and map "
+                    f"every choice {sorted(key.choices)}"
+                )
 
     def _check_transition(self, transition: Say | Ask | Handoff, known: set[str]) -> None:
         if isinstance(transition, Ask) and transition.slot not in known:

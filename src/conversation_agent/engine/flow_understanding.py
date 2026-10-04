@@ -39,9 +39,10 @@ def is_cancel(text: str) -> bool:
     return len(folded.split()) <= _MAX_CANCEL_WORDS and _CANCEL.search(folded) is not None
 
 
-def contains_phrase(text: str, phrases: tuple[str, ...]) -> bool:
+def phrase_score(text: str, phrases: tuple[str, ...]) -> int:
+    """Words in the longest trigger phrase found in `text` (0 = none): more words, more specific."""
     folded = f" {fold(text)} "
-    return any(f" {fold(p)} " in folded for p in phrases)
+    return max((len(fold(p).split()) for p in phrases if f" {fold(p)} " in folded), default=0)
 
 
 # --- slots ---
