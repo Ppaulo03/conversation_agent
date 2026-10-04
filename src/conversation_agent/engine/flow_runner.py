@@ -43,6 +43,7 @@ from conversation_agent.engine.flow_understanding import (
     build_options,
     extract_slots,
     is_cancel,
+    looks_like_question,
     phrase_score,
     render_options,
     select_option,
@@ -278,14 +279,18 @@ class FlowRunner:
         understand: bool = False,
     ) -> FlowReply:
         today = reference_date(turn.reference_time, self._agent.timezone)
-        instance, understood = self._understand(definition, instance, turn.text, today)
+        suspect = self._question_for_free_text(definition, instance, turn.text)
+        if suspect is not None:
+            understood = False  # the rules do not get to take a possible question as the answer
+        else:
+            instance, understood = self._understand(definition, instance, turn.text, today)
         flows[-1] = instance
         preface = ""
         asked = instance.awaiting_slot is not None or instance.awaiting_choice is not None
         if asked and not (understood or understand) and definition.digressions_allowed:
             # Rules found nothing: ONE journaled model call decides if this is an answer in
             # other words (its raw spans are re-validated here) or a question off the flow.
-            routed = await self._interpret(definition, instance, turn, today)
+            routed = await self._interpret(definition, instance, turn, today, accept_as=suspect)
             if isinstance(routed, FlowReply):
                 flows[-1] = routed.flows[-1]
                 return FlowReply(routed.reply, tuple(flows))
@@ -303,8 +308,27 @@ class FlowRunner:
         moved = await self._advance(flows, definition, turn, preface)
         return FlowReply(moved.reply, moved.flows, moved.proposed, moved.handoff)
 
+    @staticmethod
+    def _question_for_free_text(
+        definition: FlowDefinition, instance: FlowInstance, text: str
+    ) -> str | None:
+        """The free-text slot being asked, when the message might be a question the model should
+        route instead (the slot opted in with `question_check: model`)."""
+        if instance.awaiting_slot is None or not definition.digressions_allowed:
+            return None
+        slot = definition.slot(instance.awaiting_slot)
+        if slot.type == "text" and slot.question_check == "model" and looks_like_question(text):
+            return slot.name
+        return None
+
     async def _interpret(
-        self, definition: FlowDefinition, instance: FlowInstance, turn: FlowTurn, today: date
+        self,
+        definition: FlowDefinition,
+        instance: FlowInstance,
+        turn: FlowTurn,
+        today: date,
+        *,
+        accept_as: str | None = None,
     ) -> FlowReply | tuple[FlowInstance, bool]:
         options = instance.options.get(instance.awaiting_choice or "", [])
         data = await turn.io.extract(
@@ -344,6 +368,13 @@ class FlowRunner:
             if value is not None:
                 understood = True
                 slots = self._set(definition, slots, name, value)
+        if accept_as is not None and kind == "answer" and not understood:
+            # The model said this IS the answer ("how do I reset my password?" as a subject
+            # subject) without isolating a span: the whole message is the value.
+            value = extract_slots(definition, turn.text, today, accept_as).get(accept_as)
+            if value is not None:
+                slots = self._set(definition, slots, accept_as, value)
+                understood = True
         return instance.model_copy(update={"slots": slots}), understood
 
     @staticmethod

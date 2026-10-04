@@ -38,11 +38,19 @@ class SlotDefinition(_Frozen):
     required: bool = True
     # Slots derived from this one: when its value CHANGES they are forgotten (correction).
     invalidates: tuple[str, ...] = ()
+    # `text` only. A free-text slot takes whatever is said next, so a QUESTION asked while it is
+    # awaited ("how much is it?" while asked for a subject) would become its value. With
+    # `model`, a message that looks like a question is NOT taken by the rules: one journaled model
+    # call decides whether it answers the slot or is a question off the flow (a digression).
+    # Default `off` keeps the rules-only behaviour.
+    question_check: Literal["off", "model"] = "off"
 
     @model_validator(mode="after")
     def _enum_needs_choices(self) -> SlotDefinition:
         if self.type == "enum" and not self.choices:
             raise ValueError(f"enum slot {self.name!r} needs `choices`")
+        if self.question_check != "off" and self.type != "text":
+            raise ValueError(f"question_check only applies to text slots ({self.name!r})")
         return self
 
 
