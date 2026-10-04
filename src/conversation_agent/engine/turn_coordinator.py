@@ -18,7 +18,9 @@ from datetime import timedelta
 from typing import Literal
 
 from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.errors import (
+    AgentVersionUnavailableError,
     FencingError,
     JournalDivergenceError,
     LLMProviderError,
@@ -44,6 +46,7 @@ from conversation_agent.core.models.runtime import (
     ToolInvocation,
 )
 from conversation_agent.core.redaction import redact
+from conversation_agent.core.versioning import Version
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.turn_engine import TurnEngine
@@ -52,7 +55,12 @@ from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.lease import ConversationLeaseStore
-from conversation_agent.ports.uow import ConversationUnitOfWork, ConversationUnitOfWorkFactory
+from conversation_agent.ports.registry import AgentRegistry
+from conversation_agent.ports.uow import (
+    ConversationUnitOfWork,
+    ConversationUnitOfWorkFactory,
+    StoredConversation,
+)
 
 log = logging.getLogger(__name__)
 
@@ -94,7 +102,18 @@ class TurnCoordinator:
         max_turn_attempts: int = 5,
         side_effect_notice: Callable[[list[ToolInvocation]], str | None] | None = None,
         confirmation_ttl: timedelta = timedelta(minutes=30),
+        registry: AgentRegistry | None = None,
+        agent_id: str | None = None,
+        versioned_engine_factory: Callable[[FenceToken, TurnJournal, CompiledAgent], TurnEngine]
+        | None = None,
     ) -> None:
+        if (registry is None) != (versioned_engine_factory is None) or (
+            registry is not None and agent_id is None
+        ):
+            raise ValueError("registry, agent_id and versioned_engine_factory go together")
+        self._registry = registry
+        self._agent_id = agent_id
+        self._versioned_engine_factory = versioned_engine_factory
         self._confirmation_ttl = confirmation_ttl
         self._side_effect_notice = side_effect_notice or default_side_effect_notice
         self._owner = owner
@@ -180,7 +199,16 @@ class TurnCoordinator:
             await self._record_silent_turn(fence, journal, opened, stored.state, stored.ownership)
             return "completed"
 
-        engine = self._engine_factory(fence, journal)
+        try:
+            if self._registry is not None and self._versioned_engine_factory is not None:
+                compiled = await self._resolve_agent(fence, stored, pending, opened)
+                engine = self._versioned_engine_factory(fence, journal, compiled)
+            else:
+                engine = self._engine_factory(fence, journal)
+        except AgentVersionUnavailableError as exc:
+            # Never run a conversation on a version it was not pinned to: wait for an operator.
+            log.error("ALERT agent version unavailable, turn left open: %s", redact(str(exc)))
+            return "retry"
         try:
             outcome = await engine.process_turn(
                 opened.identity,
@@ -231,6 +259,35 @@ class TurnCoordinator:
             await uow.commit()
         handle.acknowledge_cancel()  # completing the turn answered any restart request
         return "completed"
+
+    async def _resolve_agent(
+        self,
+        fence: FenceToken,
+        stored: StoredConversation,
+        pending: PendingAction | None,
+        opened: OpenedTurn,
+    ) -> CompiledAgent:
+        """The agent version this turn runs on. A conversation stays on its pinned version for
+        as long as anything is in progress (a flow, a pending confirmation, a resumed turn);
+        only when it is idle does it move to the latest published one."""
+        assert self._registry is not None and self._agent_id is not None
+        pinned = stored.agent_version
+        target = pinned
+        idle = not stored.state.flows and pending is None and not opened.resumed
+        if pinned is None or idle:
+            latest = await self._registry.latest(self._agent_id)
+            if latest is not None and (pinned is None or Version(latest.version) > Version(pinned)):
+                target = latest.version
+        if target is None:
+            raise AgentVersionUnavailableError(f"no published version of {self._agent_id!r}")
+        if target != pinned:
+            async with self._uows.begin(fence) as uow:
+                await uow.state.pin_agent_version(target)
+                await uow.commit()
+        compiled = await self._registry.get(self._agent_id, target)
+        if compiled is None:
+            raise AgentVersionUnavailableError(f"{self._agent_id!r} {target} is not published")
+        return compiled
 
     async def _persist_reply(
         self, uow: ConversationUnitOfWork, opened: OpenedTurn, outcome: TurnOutcome

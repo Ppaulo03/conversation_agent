@@ -21,6 +21,7 @@ from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, Postgr
 from conversation_agent.adapters.senders.fake import FakeMessageSender
 from conversation_agent.adapters.tools.fake import FakeToolProvider
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.runtime import ConversationKey, FenceToken, InboundEvent
 from conversation_agent.core.models.tooling import PolicyDecision, ToolResult
@@ -32,11 +33,13 @@ from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.reconciliation import RECONCILE_EVENT, ReconciliationWorker
 from conversation_agent.engine.scheduler_worker import SchedulerWorker
 from conversation_agent.engine.side_effects import LedgerToolExecutor
+from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.registry import AgentRegistry
 from conversation_agent.ports.tool_provider import ToolProvider
 from support.builders import IDENTITY
 from vertical_slice.definitions import CONNECTION
@@ -194,6 +197,95 @@ class World:
             lease_ttl=TTL,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
             **kwargs,
+        )
+
+    def versioned_coordinator(
+        self,
+        owner: str,
+        llm: LLMProvider,
+        registry: AgentRegistry,
+        agent_id: str,
+        *,
+        providers: Mapping[str, ToolProvider],
+        policy: PolicyGate | None = None,
+        faults: FaultInjector | None = None,
+        **kwargs: Any,
+    ) -> TurnCoordinator:
+        """A worker whose engine is built from the PINNED agent version the registry returns."""
+        injector = faults or NoFaults()
+
+        def journal_factory(fence: FenceToken) -> TurnJournal:
+            return PostgresTurnJournal(self.uows, self.db, fence)
+
+        def engine_factory(
+            fence: FenceToken, journal: TurnJournal, compiled: CompiledAgent
+        ) -> TurnEngine:
+            agent = compiled.agent
+            gate = policy or PolicyGate(agent.allowed_capabilities)
+            pipeline = CapabilityPipeline(agent, gate, ToolRunner(providers))
+            executor = LedgerToolExecutor(
+                pipeline=pipeline,
+                uows=self.uows,
+                ledger=self.ledger,
+                fence=fence,
+                faults=injector,
+                clock=self.clock,
+                owner=owner,
+            )
+            engine = TurnEngine(agent, llm, pipeline, journal, self.clock, tool_executor=executor)
+            engine.attach_confirmation(
+                ConfirmationStage(
+                    agent=agent,
+                    pipeline=pipeline,
+                    uows=self.uows,
+                    executor=executor,
+                    fence=fence,
+                    faults=injector,
+                    host=engine,
+                    skew_tolerance=timedelta(seconds=2),
+                )
+            )
+            return engine
+
+        return TurnCoordinator(
+            owner=owner,
+            leases=self.leases,
+            uows=self.uows,
+            inbox=self.inbox,
+            journal_factory=journal_factory,
+            engine_factory=lambda fence, journal: (_ for _ in ()).throw(
+                AssertionError("unversioned")
+            ),
+            clock=self.clock,
+            faults=injector,
+            lease_ttl=TTL,
+            registry=registry,
+            agent_id=agent_id,
+            versioned_engine_factory=engine_factory,
+            **kwargs,
+        )
+
+    def versioned_reconciler(
+        self,
+        owner: str,
+        registry: AgentRegistry,
+        agent_id: str,
+        *,
+        providers: Mapping[str, ToolProvider],
+    ) -> ReconciliationWorker:
+        return ReconciliationWorker(
+            ledger=self.ledger,
+            scheduler=self.scheduler,
+            faults=NoFaults(),
+            clock=self.clock,
+            owner=owner,
+            registry=registry,
+            agent_id=agent_id,
+            pipeline_factory=lambda compiled: CapabilityPipeline(
+                compiled.agent,
+                PolicyGate(compiled.agent.allowed_capabilities),
+                ToolRunner(providers),
+            ),
         )
 
     def reconciler(

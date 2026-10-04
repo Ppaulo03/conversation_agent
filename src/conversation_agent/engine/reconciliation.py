@@ -16,11 +16,13 @@ superseded by whoever claims next, and its late writes are refused.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
 
 from pydantic import ValidationError
 
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.errors import ExecutionFencingError, MappingError
 from conversation_agent.core.models.runtime import (
     ExecutionClaim,
@@ -34,6 +36,7 @@ from conversation_agent.engine.side_effects import to_tool_result
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.ledger import ToolInvocationStore
+from conversation_agent.ports.registry import AgentRegistry
 from conversation_agent.ports.scheduler import Scheduler
 from conversation_agent.tools.mapping import apply_mapping
 
@@ -49,7 +52,6 @@ class ReconciliationWorker:
         self,
         *,
         ledger: ToolInvocationStore,
-        pipeline: CapabilityPipeline,
         scheduler: Scheduler,
         faults: FaultInjector,
         clock: Clock,
@@ -57,9 +59,22 @@ class ReconciliationWorker:
         claim_ttl: timedelta = timedelta(seconds=60),
         retry_backoff: timedelta = timedelta(seconds=30),
         max_attempts: int = 5,
+        pipeline: CapabilityPipeline | None = None,
+        registry: AgentRegistry | None = None,
+        agent_id: str | None = None,
+        pipeline_factory: Callable[[CompiledAgent], CapabilityPipeline] | None = None,
     ) -> None:
+        """Single-version mode (`pipeline`) or versioned mode (`registry` + `agent_id` +
+        `pipeline_factory`): every invocation is then reconciled with the definitions of the
+        agent version that PREPARED it, whatever has been published since."""
+        if pipeline is None and (registry is None or agent_id is None or pipeline_factory is None):
+            raise ValueError("give a pipeline, or registry + agent_id + pipeline_factory")
         self._ledger = ledger
         self._pipeline = pipeline
+        self._registry = registry
+        self._agent_id = agent_id or (pipeline.agent_id if pipeline else "")
+        self._pipeline_factory = pipeline_factory
+        self._pipelines: dict[str, CapabilityPipeline] = {}
         self._scheduler = scheduler
         self._faults = faults
         self._clock = clock
@@ -71,7 +86,7 @@ class ReconciliationWorker:
     async def run_once(self, limit: int = 10) -> list[ToolInvocation]:
         resolved: list[ToolInvocation] = []
         for invocation, claim in await self._ledger.claim_reconciliation(
-            self._owner, limit, self._ttl, agent_id=self._pipeline.agent_id
+            self._owner, limit, self._ttl, agent_id=self._agent_id
         ):
             await self._faults.hit("C11_during_reconciliation")  # claimed, nothing persisted yet
             result, handoff = await self._resolve(invocation)
@@ -102,6 +117,9 @@ class ReconciliationWorker:
 
         Decisions come from the recovery contract FROZEN at PREPARE (INV-023), and any re-send
         executes the frozen operation, never one re-derived from today's definitions."""
+        pipeline = await self._pipeline_for(invocation)
+        if pipeline is None:  # the version that prepared it is not available: never use another
+            return self._handoff("AGENT_VERSION_UNAVAILABLE"), True
         intent = invocation.intent
         recovery = intent.recovery
         if invocation.reconcile_attempts > self._max_attempts:
@@ -113,14 +131,14 @@ class ReconciliationWorker:
             lookup = recovery.lookup_intent
             if lookup is None:
                 return self._handoff("LOOKUP_NOT_FROZEN"), True
-            if not self._pipeline.intent_matches(lookup):
+            if not pipeline.intent_matches(lookup):
                 return self._handoff("LOOKUP_CHANGED"), True  # never ask a different system
             # The FROZEN lookup: same tool args, same destination as when the write was prepared.
-            found = await self._pipeline.run_frozen(lookup, invocation.context)
+            found = await pipeline.run_frozen(lookup, invocation.context)
             if found.error is not None and found.error.code == "DESTINATION_CHANGED":
                 return self._handoff("LOOKUP_DESTINATION_CHANGED"), True
             if found.status == "success":
-                adopted = self._adopt(invocation, found.data)
+                adopted = self._adopt(pipeline, invocation, found.data)
                 if adopted is None:
                     return self._handoff("LOOKUP_RESULT_UNUSABLE"), True
                 return adopted, False  # it DID happen: adopt the recorded result
@@ -138,14 +156,30 @@ class ReconciliationWorker:
         elif recovery.strategy == "retry_same_key" and not recovery.idempotency_supported:
             return self._handoff("NOT_IDEMPOTENT"), True
 
-        return await self._resend_frozen(invocation)
+        return await self._resend_frozen(pipeline, invocation)
+
+    async def _pipeline_for(self, invocation: ToolInvocation) -> CapabilityPipeline | None:
+        if self._registry is None or self._pipeline_factory is None:
+            return self._pipeline
+        version = invocation.context.agent_version
+        cached = self._pipelines.get(version)
+        if cached is not None:
+            return cached
+        compiled = await self._registry.get(invocation.context.agent_id, version)
+        if compiled is None:
+            return None
+        self._pipelines[version] = self._pipeline_factory(compiled)
+        return self._pipelines[version]
 
     def _adopt(
-        self, invocation: ToolInvocation, lookup_data: dict[str, Any] | None
+        self,
+        pipeline: CapabilityPipeline,
+        invocation: ToolInvocation,
+        lookup_data: dict[str, Any] | None,
     ) -> ToolResult | None:
         """Lookup output -> the ORIGINAL capability's result, via the frozen `result_map` (or
         directly when the two schemas are identical). Anything that does not fit is refused."""
-        capability = self._pipeline.resolve(invocation.capability).capability
+        capability = pipeline.resolve(invocation.capability).capability
         recovery = invocation.intent.recovery
         try:
             data: dict[str, Any] = lookup_data or {}
@@ -156,11 +190,13 @@ class ReconciliationWorker:
             return None
         return ToolResult(status="success", data=validated)
 
-    async def _resend_frozen(self, invocation: ToolInvocation) -> tuple[ToolResult | None, bool]:
+    async def _resend_frozen(
+        self, pipeline: CapabilityPipeline, invocation: ToolInvocation
+    ) -> tuple[ToolResult | None, bool]:
         """Same frozen tool args, same destination, same idempotency key (INV-021/023/027)."""
-        if not self._pipeline.intent_matches(invocation.intent):
+        if not pipeline.intent_matches(invocation.intent):
             return self._handoff("INTENT_CHANGED"), True  # definitions moved on: never guess
-        result = await self._pipeline.run_frozen(invocation.intent, invocation.context)
+        result = await pipeline.run_frozen(invocation.intent, invocation.context)
         if result.error is not None and result.error.code == "DESTINATION_CHANGED":
             return self._handoff("DESTINATION_CHANGED"), True  # configuration moved: never guess
         return to_tool_result(result), False

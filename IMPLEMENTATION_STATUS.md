@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 4.1 — hardening dos Flows concluído (aguardando merge). Próxima: Fase 5.
+**Fase atual:** 5 — AgentDefinition + Compiler concluída (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -393,3 +393,46 @@ Status: **PASS** (achados verificados no código antes de corrigir; todos reprod
 Fica para a Fase 5 (explícito): `agent_version` participar do dispatch/reconciliation (`AgentRegistry` + `CompiledAgent`
 versionado e pinado por conversa/flow); hoje um deploy entre PREPARE e a reconciliation falha fechado (handoff), não continua
 na versão antiga. Os checks semânticos acima viram DoD do Compiler.
+
+
+## Phase 5 — AgentDefinition + Compiler
+
+Status: **PASS**. 725 testes (+5 live deselecionados), PostgreSQL 16 e API de referência reais. Novas invariantes **INV-028** e **INV-029**.
+
+DoD (`ROADMAP.md` Fase 5): o compiler detecta, antes do runtime —
+
+- [✓] referências ausentes (capability/tool/binding/lookup/flow/allowed, duplicatas) — `test_missing_references_are_all_reported_in_one_pass`, `test_an_allowed_capability_without_a_binding_*`, `test_a_status_lookup_must_point_to_*`, `test_duplicate_names_and_bindings_*`
+- [✓] schema incompatível (mapping ↔ campos reais da capability/tool, obrigatórios sem origem, transform inexistente, enum parcial, flow ↔ inputs da capability, enum de slot ↔ capability, `summary_template`, lookup com schema diferente) — `test_mapping_*`, `test_output_mapping_*`, `test_an_enum_mapping_*`, `test_a_flow_must_feed_*`, `test_a_flow_slot_cannot_offer_*`
+- [✓] downgrade de risco — `test_a_binding_cannot_lower_the_risk`; entre versões, `test_lowering_a_capability_risk_is_a_breaking_change`
+- [✓] bindings inválidos (write ambíguo mapeado como retryable/timeout, status HTTP impossível) — `test_an_ambiguous_write_cannot_be_mapped_to_a_retryable_error`
+- [✓] versões incompatíveis (formato do manifest, `min_framework`, semver, regressão, mudança quebrante sem MAJOR) — `test_a_newer_manifest_format_is_refused`, `test_a_manifest_that_needs_a_newer_framework_is_refused`, `test_a_breaking_change_needs_a_major_bump`
+
+Implementado: `core/definitions/schema_spec.py` (DSL serializável de schema → modelo Pydantic estrito; `schema_fingerprint` canônico para qualquer modelo),
+`core/definitions/manifest.py` (`AgentManifest`: o mesmo modelo dos objetos Python onde já eram dado; só classes viram `ModelSpec`),
+`core/compiler.py` (diagnósticos *coletados* com `code`+`path`; `CompiledAgent` com digest de conteúdo), `core/publishing.py` +
+`core/versioning.py` (regras de publicação), `ports/registry.py` + `adapters/registry/{memory,postgres}.py` (migration 0007, imutável por trigger),
+`adapters/manifest/yaml_loader.py` (`safe_load`, chaves duplicadas rejeitadas, limite de tamanho, `on:` não vira booleano),
+`app/compile.py` (CLI para CI), pinning por versão no `TurnCoordinator` (`registry` + `agent_id` + `versioned_engine_factory`; `StoredConversation.agent_version`)
+e reconciliation por versão (`ReconciliationWorker(registry=, agent_id=, pipeline_factory=)`). O agente de exemplo existe nos dois formatos
+(`vertical_slice/agent.yaml` e `definitions.py`) e **compilam para o mesmo digest**; um teste roda o mesmo cenário nos dois.
+
+### Decisões de arquitetura da Fase 5
+
+1. **Manifest = mesmo modelo, não um segundo.** Bindings, mapping, flows, recovery, retry e textos de confirmação já eram Pydantic serializáveis e entram como estão; só `input_model/output_model` (classes) viram `ModelSpec`. Evita a divergência YAML × Python.
+2. **Equivalência por conteúdo, não por forma.** `schema_fingerprint` ignora títulos/nomes de classe, inlina `$ref` e trata `required` como conjunto (o JSONB não preserva a ordem das chaves — bug real: o digest do manifest recarregado do banco mudava). `agent_document` exclui a *versão* do digest: mesmo conteúdo com outro rótulo tem o mesmo digest.
+3. **Diagnósticos coletados.** Verificações de referência/risco/versão rodam sobre o manifest antes de construir; depois `AgentDefinition` (regras semânticas existentes, agora reportadas como `DEFINITION_INVALID`) e as checagens pós-construção, compartilhadas com agentes Python (`compile_agent`).
+4. **Respostas de sistemas externos são lenientes** (`extra=ignore`) e o que o framework define é estrito (`extra=forbid`): uma API que adiciona um campo não derruba o agente.
+5. **Write ambíguo é erro de definição, não só coerção em runtime**: o compiler exige `unknown` em `default_5xx/timeout` de escrita.
+6. **Publicação imutável e monotônica**: mesma versão+mesmo digest = no-op, mesma versão+outro conteúdo = `VersionConflictError`, versão menor = `VersionRegressionError`, mudança quebrante (capability removida, risco menor, schema de entrada/saída mudou, flow removido) exige MAJOR — a versão é uma promessa para as conversas fixadas. No Postgres: lock advisory por agente (publicadores concorrentes) e trigger contra UPDATE/DELETE.
+7. **O que se guarda é o manifest** (um grafo Python não é armazenável); ao carregar, recompila e confere o digest (`RegistryIntegrityError` se um compiler novo ou uma linha adulterada não bate). Agentes só-Python usam o registry em memória.
+8. **Pinning**: a conversa fica na versão do primeiro turno enquanto houver flow, ação pendente ou turno retomado; ociosa, migra para a mais recente. Versão fixada ausente → o turno fica aberto (`retry_later`), nada roda em outra versão.
+9. **Reconciliation usa a versão que PREPAROU a invocação** (`context.agent_version`): um deploy entre PREPARE e a reconciliation não vira mais handoff por `INTENT_CHANGED`; versão ausente → handoff `AGENT_VERSION_UNAVAILABLE`, sem adivinhar.
+
+### Débitos conhecidos (Fase 5)
+
+- Output/error mapping do lookup continua sendo lido do binding *atual* da versão que preparou (agora a versão certa, mas o fingerprint ainda congela só entrada e destino).
+- Manifest só em YAML/JSON de arquivo; não há API de publicação nem promoção/rollback de "latest" (hoje `latest` = maior versão publicada).
+- `agent_version` não participa do `ToolContext` de testes antigos que constroem agentes Python soltos (sem registry): modo single-version continua suportado.
+- Dry-run de migração de conversas entre versões (simular o estado dos flows contra a nova definição) não existe; a migração só acontece com a conversa ociosa.
+- Compatibilidade de *flows* entre versões é só "removido": mudança de slots/steps não é classificada.
+- Os checks de `Choose.value_field` e fluxos olham schemas, não a semântica dos valores (ex.: um datetime sem fuso).

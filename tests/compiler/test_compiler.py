@@ -303,3 +303,27 @@ def test_a_flow_structure_error_is_reported_as_a_manifest_error() -> None:
     m = raw()
     m["flows"][0]["steps"].append({"kind": "collect", "id": "again", "slots": ["service"]})
     assert "MANIFEST_INVALID" in codes_of(m)  # Propose must be the last step
+
+
+def test_field_order_never_changes_a_schema_fingerprint() -> None:
+    # JSONB does not keep key order, so a stored manifest reloads with its fields reordered
+    a = build_model("A", {"x": FieldSpec(type="string"), "y": FieldSpec(type="integer")})
+    b = build_model("B", {"y": FieldSpec(type="integer"), "x": FieldSpec(type="string")})
+    assert schema_fingerprint(a) == schema_fingerprint(b)
+
+
+def test_the_compile_command_reports_ok_and_diagnostics(
+    tmp_path: Any, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from conversation_agent.app.compile import main
+
+    assert main([str(MANIFEST_PATH)]) == 0
+    assert "OK scheduling-demo 0.1.0 digest=" in capsys.readouterr().out
+    bad = tmp_path / "bad.yaml"
+    text = MANIFEST_PATH.read_text(encoding="utf-8").replace(
+        "lookup_capability: scheduling.lookup_booking", "lookup_capability: ghost.cap"
+    )
+    bad.write_text(text, encoding="utf-8")
+    assert main([str(bad)]) == 1
+    assert "error(s)" in capsys.readouterr().err
+    assert main([str(tmp_path / "missing.yaml")]) == 2

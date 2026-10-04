@@ -147,7 +147,11 @@ def _inline(node: Any, defs: dict[str, Any]) -> Any:
             target = defs[str(node["$ref"]).rsplit("/", 1)[-1]]
             merged = {**_inline(target, defs), **{k: v for k, v in node.items() if k != "$ref"}}
             return merged
-        return {k: _inline(v, defs) for k, v in node.items() if k not in ("title", "$defs")}
+        return {
+            k: sorted(v) if k == "required" and isinstance(v, list) else _inline(v, defs)
+            for k, v in node.items()
+            if k not in ("title", "$defs")
+        }  # `required` is a set: field order must not matter (JSONB does not keep it)
     if isinstance(node, list):
         return [_inline(v, defs) for v in node]
     return node

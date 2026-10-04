@@ -62,7 +62,8 @@ async def db(pg_dsn: str) -> AsyncIterator[PostgresDatabase]:
     database = await PostgresDatabase.connect(pg_dsn, max_size=10)
     await database.pool.execute(
         "TRUNCATE conversation_states, turns, turn_journal, inbox_events, outbox_messages, "
-        "tool_invocations, scheduled_events, pending_actions, action_confirmations "
+        "tool_invocations, scheduled_events, pending_actions, action_confirmations, "
+        "published_agents "
         "RESTART IDENTITY"
     )
     yield database

@@ -75,3 +75,27 @@ class TurnCancelledError(ConversationAgentError):
 class ToolResultPendingError(ConversationAgentError):
     """The tool outcome is not known yet (executing elsewhere or under reconciliation).
     The turn stays open and is resumed later; nothing is re-executed."""
+
+
+class PublishError(ConversationAgentError):
+    """A published version is immutable and versions only move forward (Phase 5)."""
+
+
+class VersionConflictError(PublishError):
+    """That (agent, version) already exists with DIFFERENT content."""
+
+
+class VersionRegressionError(PublishError):
+    """A new version must be greater than the latest published one."""
+
+
+class IncompatibleUpgradeError(PublishError):
+    """Breaking changes (removed capability, lower risk, changed schemas) need a MAJOR bump."""
+
+
+class AgentVersionUnavailableError(ConversationAgentError):
+    """A pinned agent version is not in the registry: the runtime must not guess another."""
+
+
+class RegistryIntegrityError(ConversationAgentError):
+    """A stored agent no longer compiles to the digest it was published with."""
