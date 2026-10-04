@@ -162,6 +162,7 @@ class ConfirmationStage:
         async def decide() -> dict[str, Any]:
             eligibility, prompt_id = await self._eligibility(inp)
             return {
+                "action_id": action.action_id,  # lets a resumed turn find its action again
                 "decision": decision,
                 "interpreter": interpreter,
                 "confidence": confidence,

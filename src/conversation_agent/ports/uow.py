@@ -13,7 +13,7 @@ from conversation_agent.core.models.actions import (
     PromptRecord,
 )
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
-from conversation_agent.core.models.journal import JournalEntry
+from conversation_agent.core.models.journal import JournalEntry, JournalStepType
 from conversation_agent.core.models.runtime import (
     FenceToken,
     OpenedTurn,
@@ -53,6 +53,7 @@ class TurnRepository(Protocol):
 
 class JournalRepository(Protocol):
     async def get(self, turn_id: str, step_index: int) -> JournalEntry | None: ...
+    async def find_step(self, turn_id: str, step_type: JournalStepType) -> JournalEntry | None: ...
     async def append(self, entry: JournalEntry) -> None: ...
 
 

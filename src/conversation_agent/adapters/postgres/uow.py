@@ -248,6 +248,18 @@ class _JournalRepo(_Repo):
         )
         return _journal_from_row(r) if r else None
 
+    async def find_step(self, turn_id: str, step_type: JournalStepType) -> JournalEntry | None:
+        r = await self._c.fetchrow(
+            f"SELECT {_JOURNAL_COLUMNS} FROM turn_journal "
+            "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 AND step_type=$4 "
+            "ORDER BY step_index LIMIT 1",
+            self._f.tenant_id,
+            self._f.conversation_id,
+            turn_id,
+            step_type.value,
+        )
+        return _journal_from_row(r) if r else None
+
     async def append(self, entry: JournalEntry) -> None:
         try:
             await self._c.execute(

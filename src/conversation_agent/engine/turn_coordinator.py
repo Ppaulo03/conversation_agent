@@ -155,7 +155,18 @@ class TurnCoordinator:
         async with self._uows.begin(fence) as uow:
             stored = await uow.state.load()
             opened = await uow.turns.open_next(self._owner, self._clock.now())
-            pending = await uow.actions.awaiting() if opened is not None else None
+            pending = None
+            if opened is not None:
+                # A resumed turn must continue in the stage it already journaled, even if its
+                # action has since left PENDING_CONFIRMATION (e.g. CONFIRMED before a crash).
+                decided = await uow.journal.find_step(
+                    opened.turn_id, JournalStepType.CONFIRMATION_DECISION
+                )
+                pending = (
+                    await uow.actions.get(decided.payload["action_id"])
+                    if decided is not None
+                    else await uow.actions.awaiting()
+                )
             await uow.commit()
         if opened is None:
             return "none"

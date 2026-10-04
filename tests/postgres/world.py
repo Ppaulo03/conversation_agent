@@ -6,7 +6,7 @@ Every worker built here runs tools through the LedgerToolExecutor (PREPARE/EXECU
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Any
 
 from conversation_agent.adapters.clock import FixedClock
@@ -66,6 +66,8 @@ def event(
     clock: FixedClock,
     occurred_offset_s: float = 0,
     sequence: int | None = None,
+    provider_occurred_at: datetime | None = None,
+    reply_to: str | None = None,
 ) -> InboundEvent:
     at = clock.now() + timedelta(seconds=occurred_offset_s)
     return InboundEvent(
@@ -79,6 +81,8 @@ def event(
         occurred_at=at,
         received_at=at,
         source_sequence=sequence,
+        provider_occurred_at=provider_occurred_at,
+        reply_to_provider_message_id=reply_to,
     )
 
 
