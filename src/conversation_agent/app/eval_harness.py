@@ -27,6 +27,7 @@ from conversation_agent.adapters.tools.spy import ExecutionSpy
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.evals import EvalSuite, LLMStep
 from conversation_agent.core.models.conversation import ConversationIdentity
+from conversation_agent.core.releases import ReleaseEvidence
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.evals import EvalResult, run_scenario
 from conversation_agent.engine.policy_gate import PolicyGate
@@ -57,6 +58,16 @@ class SuiteReport:
     @property
     def passed(self) -> bool:
         return self.passed_count == self.total
+
+    def evidence(self) -> ReleaseEvidence:
+        """What a release gate accepts: this suite, run against exactly this agent."""
+        return ReleaseEvidence(
+            agent_digest=self.agent_digest,
+            suite=self.suite,
+            suite_digest=self.suite_digest,
+            passed=self.passed_count,
+            total=self.total,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {

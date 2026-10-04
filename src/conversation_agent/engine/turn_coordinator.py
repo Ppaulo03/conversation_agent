@@ -60,6 +60,7 @@ from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.lease import ConversationLeaseStore
 from conversation_agent.ports.registry import AgentRegistry
+from conversation_agent.ports.releases import ReleaseResolver
 from conversation_agent.ports.uow import (
     ConversationUnitOfWork,
     ConversationUnitOfWorkFactory,
@@ -112,6 +113,7 @@ class TurnCoordinator:
         agent_id: str | None = None,
         versioned_engine_factory: Callable[[FenceToken, TurnJournal, CompiledAgent], TurnEngine]
         | None = None,
+        releases: ReleaseResolver | None = None,
     ) -> None:
         if (registry is None) != (versioned_engine_factory is None) or (
             registry is not None and agent_id is None
@@ -119,6 +121,7 @@ class TurnCoordinator:
             raise ValueError("registry, agent_id and versioned_engine_factory go together")
         self._channel_policy = channel_policy
         self._registry = registry
+        self._releases = releases  # which version NEW work gets; None: the latest published
         self._agent_id = agent_id
         self._versioned_engine_factory = versioned_engine_factory
         self._confirmation_ttl = confirmation_ttl
@@ -296,7 +299,16 @@ class TurnCoordinator:
                 )
             pinned = None  # idle: an explicit re-assignment to the routed agent
         target = pinned
-        if pinned is None or idle:
+        released = (
+            await self._releases.target(
+                fence.tenant_id, self._agent_id, fence.conversation_id, pinned, idle
+            )
+            if self._releases is not None
+            else None
+        )
+        if released is not None:  # a release decides (stable / canary / withdrawn)
+            target = released
+        elif pinned is None or idle:
             latest = await self._registry.latest(fence.tenant_id, self._agent_id)
             if latest is not None and (pinned is None or Version(latest.version) > Version(pinned)):
                 target = latest.version

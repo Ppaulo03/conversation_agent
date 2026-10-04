@@ -52,6 +52,21 @@ async def test_the_shipped_suite_passes_and_its_report_names_what_was_judged() -
     assert as_dict["suite_digest"] == load_suite(SUITE).digest  # the evidence a release gate takes
 
 
+async def test_a_report_becomes_the_release_evidence_for_exactly_that_agent() -> None:
+    from conversation_agent.core.releases import ReleaseError, validate_evidence
+
+    report = await run(load_suite(SUITE))
+    evidence = report.evidence()
+    validate_evidence(evidence, agent_digest=report.agent_digest, required=True)
+    with pytest.raises(ReleaseError, match="different agent"):
+        validate_evidence(evidence, agent_digest="0" * 64, required=True)
+    manifest = copy.deepcopy(load_manifest_file(AGENT))
+    manifest["flows"][0]["triggers"] = ["nunca dispara"]
+    failing = (await run(load_suite(SUITE), manifest)).evidence()
+    with pytest.raises(ReleaseError, match="did not pass"):
+        validate_evidence(failing, agent_digest=failing.agent_digest, required=True)
+
+
 async def test_a_regression_in_the_agent_fails_the_suite() -> None:
     manifest = copy.deepcopy(load_manifest_file(AGENT))
     manifest["flows"][0]["triggers"] = ["nunca dispara"]  # the ticket flow is no longer reachable
