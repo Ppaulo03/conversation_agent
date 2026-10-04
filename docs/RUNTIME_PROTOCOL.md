@@ -103,6 +103,25 @@ retomado pelo journal; nada é reexecutado.
   emite um aviso determinístico no outbox.
 - `provider_metadata` acompanha o resultado até o ledger (nunca ao LLM).
 
+### Destino, lookup e tempo do canal (Fase 3.1)
+
+- **Destino congelado (INV-027).** O PREPARE grava `connection_fingerprint`: hash do destino resolvido
+  (scheme, host, porta, path base, política TLS/rede, forma da auth) — **sem segredos**, então rotacionar uma
+  credencial não move a operação. Antes de todo envio o provider recalcula e compara; divergência →
+  `technical_error DESTINATION_CHANGED` sem enviar (FAILED conhecido na primeira execução; `HUMAN_HANDOFF`
+  na reconciliation).
+- **Lookup de recovery congelado.** Para `status_lookup`, o PREPARE congela também o lookup (`lookup_intent`:
+  args da tool + destino). A reconciliation executa **esse** lookup (`LOOKUP_CHANGED` /
+  `LOOKUP_DESTINATION_CHANGED` → handoff): "não encontrado" de uma consulta diferente nunca autoriza reenvio.
+- **Resultado do lookup → resultado original.** `RecoverySpec.result_map` converte a saída do lookup na saída
+  da capability recuperada; sem `result_map` os schemas precisam ser idênticos (validado ao construir o
+  agente). Resultado que não encaixa → `LOOKUP_RESULT_UNUSABLE` (handoff).
+- **Tempo do canal (INV-026).** `SendResult.provider_accepted_at` vem do canal ou é `None`; o runtime nunca o
+  preenche com horário local. `SendResult` só aceita QUEUED/ACCEPTED/FAILED/UNKNOWN.
+- **Catálogo por tenant.** O LLM só enxerga as capabilities que o tenant pode chamar.
+- **Retry × effective_risk.** As regras de retry de write valem para qualquer tool *ligada* a uma capability
+  protegida, mesmo que a tool se declare `read`.
+
 ### Reconciliation (implementação da Fase 2)
 
 - `UNKNOWN`, `EXECUTING` com lease expirado e `RECONCILING` com lease expirado são claimados para

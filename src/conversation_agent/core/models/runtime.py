@@ -10,8 +10,9 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validator
 
+from conversation_agent.core.definitions.mapping import MappingSpec
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.core.models.tooling import CapabilityRequest, ToolContext
 
@@ -144,9 +145,26 @@ class OutboundMessage(_Frozen):
 class SendResult(_Frozen):
     """What a MessageSender reports. ACCEPTED means accepted for sending, not delivered/read."""
 
-    status: OutboxStatus  # QUEUED | ACCEPTED | FAILED | UNKNOWN
+    status: OutboxStatus  # QUEUED | ACCEPTED | FAILED | UNKNOWN (enforced below)
     provider_message_id: str | None = None
+    # When the CHANNEL accepted the message, in the channel's own clock (INV-026). `None` when the
+    # channel gives no comparable timestamp: the runtime never substitutes its local time.
+    provider_accepted_at: AwareDatetime | None = None
     retryable: bool = False
+
+    @model_validator(mode="after")
+    def _only_sender_outcomes(self) -> SendResult:
+        allowed = {
+            OutboxStatus.QUEUED,
+            OutboxStatus.ACCEPTED,
+            OutboxStatus.FAILED,
+            OutboxStatus.UNKNOWN,
+        }
+        if self.status not in allowed:
+            raise ValueError(f"a sender cannot report {self.status.value}")
+        if self.provider_accepted_at is not None and self.status is not OutboxStatus.ACCEPTED:
+            raise ValueError("provider_accepted_at only applies to an ACCEPTED message")
+        return self
 
 
 # --- Tool-invocation ledger -----------------------------------------------------------------
@@ -184,6 +202,12 @@ class RecoverySnapshot(_Frozen):
 
     strategy: Literal["safe_retry", "retry_same_key", "status_lookup", "human_handoff"]
     lookup_capability: str | None = None
+    # For status_lookup the lookup itself is frozen too: the concrete tool args, provider and
+    # destination fingerprint. Reconciliation must ask the SAME system the write went to, never
+    # whatever the lookup capability resolves to after a deploy (INV-027).
+    lookup_intent: ExecutionIntent | None = None
+    # How a lookup result becomes the ORIGINAL capability result (None: schemas are identical).
+    result_map: MappingSpec | None = None
     absent_codes: tuple[str, ...] = ()
     idempotency_supported: bool = False
 
@@ -204,6 +228,7 @@ class ExecutionIntent(_Frozen):
     tool_args: dict[str, Any]
     tool_args_hash: str
     binding_fingerprint: str
+    connection_fingerprint: str | None = None  # resolved destination, no secrets (INV-027)
     recovery: RecoverySnapshot
 
 

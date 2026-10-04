@@ -138,7 +138,8 @@ class LedgerToolExecutor:
         frozen: list[ExecutionIntent] = []  # filled only if PREPARE is not already journaled
 
         async def prepared_payload() -> dict[str, Any]:
-            intent = self._pipeline.freeze(request)  # INV-023: decided once, here, with no I/O
+            # INV-023/027: the operation, its destination and its recovery are decided ONCE, here.
+            intent = await self._pipeline.prepare_intent(request, step.context)
             if isinstance(intent, CapabilityResult):
                 # A binding defect: nothing is prepared, nothing can ever be sent.
                 failure = CapabilityOutcome(result=intent).model_dump(mode="json")

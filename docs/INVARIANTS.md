@@ -32,6 +32,8 @@ INV-022  prompt de confirmação só é elegível após ACCEPTED pelo canal; QUE
 INV-023  uma ToolInvocation PREPARED é imutável quanto à operação externa que representa: retry e reconciliation executam a intent congelada no PREPARE e nunca re-resolvem binding/tool com outra versão; se a operação resolvida mudou, falham fechado e escalam.
 INV-024  um lease de conversa expirado não autoriza escrita, mesmo antes de qualquer takeover; o heartbeat nunca ressuscita um lease expirado.
 INV-025  aguardar o resultado de uma tool (EXECUTING/UNKNOWN/RECONCILING) não é falha do turno e nunca consome tentativas nem dead-letteriza o inbound.
+INV-026  provider_accepted_at é o horário de aceite no domínio do canal ou NULL; nunca o relógio local/do banco. Sem timestamp comparável nem reply-to, a resposta é ambígua e o runtime pergunta de novo.
+INV-027  uma operação PREPARED não muda de destino: a conexão resolvida (fingerprint sem segredos) e, em status_lookup, o próprio lookup (args + destino) são congelados no PREPARE; mudança de destino/lookup falha fechado (nada é enviado ou decidido).
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -67,6 +69,8 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-023 | `test_prepared_invocation_executes_the_frozen_intent_never_a_re_resolved_one`, `test_a_deploy_between_prepare_and_execute_fails_closed_without_sending` |
 | INV-024 | `test_an_expired_lease_cannot_open_a_unit_of_work_even_before_any_takeover`, `test_a_heartbeat_cannot_resurrect_an_expired_lease` |
 | INV-025 | `test_pending_tool_result_never_exhausts_turn_attempts` |
+| INV-026 | `test_a_channel_that_gives_no_timestamp_leaves_accepted_at_null_not_local_time`, `test_a_legitimate_reply_is_eligible_when_the_channel_clock_runs_behind` |
+| INV-027 | `test_a_prepared_write_is_never_sent_to_a_destination_it_was_not_prepared_for`, `test_a_changed_lookup_binding_refuses_to_decide_absence`, `test_the_execution_path_refuses_a_stale_destination_without_sending` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

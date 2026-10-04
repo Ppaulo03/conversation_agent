@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.capability import Risk
+from conversation_agent.core.definitions.mapping import MappingSpec
 
 
 class HTTPRequestSpec(BaseModel):
@@ -39,6 +40,9 @@ class RecoverySpec(BaseModel):
 
     strategy: Literal["safe_retry", "retry_same_key", "status_lookup", "human_handoff"]
     lookup_capability: str | None = None  # required for status_lookup
+    # How the lookup capability's output becomes the ORIGINAL capability's output. Without it the
+    # two output schemas must be identical (checked when the agent is built).
+    result_map: MappingSpec | None = None
     absent_codes: tuple[str, ...] = ()  # lookup error codes that prove the operation is absent
 
 

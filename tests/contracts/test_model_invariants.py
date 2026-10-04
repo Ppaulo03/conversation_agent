@@ -33,7 +33,7 @@ def cap(name: str) -> CapabilityDefinition:
     return CapabilityDefinition(name=name, description="d", input_model=Empty, output_model=Empty)
 
 
-# --- capability names / LLM tool names ---------------------------------------------------
+# --- capability names / LLM tool names ---
 
 
 @pytest.mark.parametrize(
@@ -73,7 +73,7 @@ def test_agent_rejects_duplicate_capabilities() -> None:
         )
 
 
-# --- ToolResult / CapabilityResult -------------------------------------------------------
+# --- ToolResult / CapabilityResult ---
 
 
 @pytest.mark.parametrize("model", [ToolResult, CapabilityResult])
@@ -105,7 +105,7 @@ class TestStatusPayloadInvariant:
         assert model(status="success", data={"k": 1}).data == {"k": 1}
 
 
-# --- CapabilityOutcome / Evaluation ------------------------------------------------------
+# --- CapabilityOutcome / Evaluation ---
 
 
 def test_outcome_requires_exactly_one_of_result_or_proposal() -> None:
@@ -136,3 +136,31 @@ def test_invalid_state_cannot_survive_a_journal_round_trip() -> None:
         CapabilityOutcome.model_validate({"result": None, "proposal": None})
     with pytest.raises(ValidationError):
         ToolResult.model_validate({"status": "unknown", "data": {"booking_id": "b"}})
+
+
+# --- SendResult: only what a sender can really report ---
+
+
+@pytest.mark.parametrize("status", ["PENDING", "SENDING", "SUPERSEDED", "RECONCILING"])
+def test_a_sender_cannot_report_runtime_internal_outbox_states(status: str) -> None:
+    from conversation_agent.core.models.runtime import OutboxStatus, SendResult
+
+    with pytest.raises(ValidationError):
+        SendResult(status=OutboxStatus(status))
+
+
+def test_a_sender_may_report_queued_accepted_failed_unknown() -> None:
+    from datetime import UTC, datetime
+
+    from conversation_agent.core.models.runtime import OutboxStatus, SendResult
+
+    for status in ("QUEUED", "ACCEPTED", "FAILED", "UNKNOWN"):
+        assert SendResult(status=OutboxStatus(status)).provider_accepted_at is None
+    at = datetime(2026, 10, 5, tzinfo=UTC)
+    assert (
+        SendResult(status=OutboxStatus.ACCEPTED, provider_accepted_at=at).provider_accepted_at == at
+    )
+    with pytest.raises(ValidationError):  # an acceptance time only means something when ACCEPTED
+        SendResult(status=OutboxStatus.QUEUED, provider_accepted_at=at)
+    with pytest.raises(ValidationError):  # and it must be timezone-aware
+        SendResult(status=OutboxStatus.ACCEPTED, provider_accepted_at=datetime(2026, 10, 5))

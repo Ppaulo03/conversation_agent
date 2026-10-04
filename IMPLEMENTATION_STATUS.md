@@ -241,7 +241,7 @@ em vez de polling do turno em espera; autoridade de tempo do `LeaseHandle` local
 
 ## Phase 3 — Protected actions, confirmation e security
 
-Status: **PASS**. DoD verificado contra PostgreSQL 16 real e a API de referência real; 504 testes.
+Status: **PASS**. DoD verificado contra PostgreSQL 16 real e a API de referência real; 527 testes (após a 3.1).
 
 DoD (`ROADMAP.md` Fase 3):
 
@@ -291,3 +291,26 @@ limites de request/response, timeout só pode ser reduzido, credencial injetada 
 - Uma única `PendingAction` aguardando por conversa (índice único); múltiplas ações simultâneas ficam para depois.
 - O resumo de confirmação mostra os argumentos como o modelo os deu (ISO com offset); formatação amigável por capability fica
   para os Flows (Fase 4).
+
+
+## Phase 3.1 — hardening pós-revisão da Fase 3
+
+Status: **PASS** (achados verificados contra o código antes de corrigir). Novas invariantes **INV-026** e **INV-027**. 527 testes.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| P0 `provider_accepted_at` era o relógio local | `SendResult.provider_accepted_at` (canal ou `None`); o outbox nunca carimba horário local; sem prova comparável → ambíguo → pergunta de novo (INV-026) | `test_a_channel_that_gives_no_timestamp_*`, `test_accepted_at_is_the_channel_time_*`, `test_a_legitimate_reply_is_eligible_when_the_channel_clock_runs_behind` |
+| P0 intent congelava o *nome* da connection | `connection_fingerprint` (destino resolvido, sem segredos) no PREPARE; o provider confere antes de enviar; `DESTINATION_CHANGED` falha fechado (INV-027) | `test_prepare_freezes_the_destination_*`, `test_the_connection_fingerprint_covers_the_destination_but_never_secrets`, `test_a_prepared_write_is_never_sent_to_a_destination_*`, `test_the_execution_path_refuses_a_stale_destination_*` |
+| P0 status lookup re-resolvido na reconciliation | `RecoverySnapshot.lookup_intent` congelado (args + destino); mudança → `LOOKUP_CHANGED`/`LOOKUP_DESTINATION_CHANGED` → handoff | `test_a_changed_lookup_binding_refuses_to_decide_absence` |
+| P1 resultado do lookup assumido igual ao original | `RecoverySpec.result_map`; validação ao construir o agente (schemas idênticos ou `result_map`); lookup deve ser read, ligado e receber `idempotency_key` | `test_a_lookup_with_a_different_schema_is_converted_*`, `test_a_lookup_result_that_cannot_become_*`, `test_a_status_lookup_must_exist_*` |
+| P1 catálogo do LLM sem filtro de tenant | `exposed_tools(PolicyContext)`; capability negada ao tenant não aparece | `test_a_capability_the_tenant_cannot_call_is_not_even_shown_*` |
+| P2 retry não olhava `effective_risk` | `AgentDefinition` valida retry contra o risco efetivo do binding | `test_retry_rules_follow_the_effective_risk_not_the_tool_label` |
+| P2 `SendResult` aceitava estados internos | validator: só QUEUED/ACCEPTED/FAILED/UNKNOWN | `test_a_sender_cannot_report_runtime_internal_outbox_states` |
+| Docs | topo do status, INV-026/027, protocolo | — |
+
+Decisão mantida e explícita: só `confirm` exige prova de prompt elegível; `reject`/`modify` não (cancelar demais é
+preferível a executar demais).
+
+Débitos remanescentes: a saída do lookup é lida pelo `output_map` *atual* do binding do lookup (o fingerprint congela
+a entrada e o destino, não a interpretação); recovery de writes sem `status_lookup` continua dependendo só de
+`retry_same_key`/handoff.

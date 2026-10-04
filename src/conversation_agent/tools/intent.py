@@ -42,6 +42,7 @@ def recovery_snapshot(resolved: ResolvedToolBinding) -> RecoverySnapshot:
     return RecoverySnapshot(
         strategy=spec.strategy,
         lookup_capability=spec.lookup_capability,
+        result_map=spec.result_map,
         absent_codes=spec.absent_codes,
         idempotency_supported=resolved.tool.idempotency_supported,
     )

@@ -108,6 +108,7 @@ class StageInput:
     inbound: tuple[InboundRef, ...]
     history: list[LLMMessage]
     system: str
+    tools: tuple[LLMToolDefinition, ...] = ()
     guard: Callable[[], None] | None = None
 
 
@@ -342,7 +343,7 @@ class ConfirmationStage:
         frozen: list[Any] = []
 
         async def payload() -> dict[str, Any]:
-            intent = self._pipeline.freeze(action.request)
+            intent = await self._pipeline.prepare_intent(action.request, context)
             if isinstance(intent, CapabilityResult):
                 failure = CapabilityOutcome(result=intent).model_dump(mode="json")
                 return {
@@ -438,7 +439,9 @@ class ConfirmationStage:
         ]
         fallback = self._agent.confirmation.executed_fallback.format(status=result.status)
         try:
-            response = await self._host.llm_step(cursor, inp.turn_id, inp.system, messages)
+            response = await self._host.llm_step(
+                cursor, inp.turn_id, inp.system, messages, tools=inp.tools
+            )
         except Exception:
             return fallback, 1
         text = response.text.strip()

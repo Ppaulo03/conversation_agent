@@ -102,7 +102,9 @@ class World:
         self.ledger = PostgresToolInvocationStore(db, clock)
         self.outbox = PostgresOutboxStore(db, clock)
         self.scheduler = PostgresScheduler(db, clock)
-        self.sender = FakeMessageSender()
+        # the simulated channel shares the test clock unless a test skews it on purpose
+        self.channel_skew = timedelta(0)
+        self.sender = FakeMessageSender(provider_clock=lambda: clock.now() + self.channel_skew)
         self.tools = FakeToolProvider({"erp_get_available_slots": SLOTS})
 
     @staticmethod

@@ -17,8 +17,11 @@ superseded by whoever claims next, and its late writes are refused.
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
-from conversation_agent.core.errors import ExecutionFencingError
+from pydantic import ValidationError
+
+from conversation_agent.core.errors import ExecutionFencingError, MappingError
 from conversation_agent.core.models.runtime import (
     ExecutionClaim,
     InvocationStatus,
@@ -32,6 +35,7 @@ from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.ledger import ToolInvocationStore
 from conversation_agent.ports.scheduler import Scheduler
+from conversation_agent.tools.mapping import apply_mapping
 
 RECONCILE_EVENT = "reconcile"
 
@@ -106,14 +110,20 @@ class ReconciliationWorker:
             return self._handoff("NO_AUTOMATIC_RECOVERY"), True
 
         if recovery.strategy == "status_lookup":
-            assert recovery.lookup_capability is not None
-            found = await self._pipeline.run_internal_read(
-                recovery.lookup_capability,
-                {"idempotency_key": invocation.idempotency_key},
-                invocation.context,
-            )
+            lookup = recovery.lookup_intent
+            if lookup is None:
+                return self._handoff("LOOKUP_NOT_FROZEN"), True
+            if not self._pipeline.intent_matches(lookup):
+                return self._handoff("LOOKUP_CHANGED"), True  # never ask a different system
+            # The FROZEN lookup: same tool args, same destination as when the write was prepared.
+            found = await self._pipeline.run_frozen(lookup, invocation.context)
+            if found.error is not None and found.error.code == "DESTINATION_CHANGED":
+                return self._handoff("LOOKUP_DESTINATION_CHANGED"), True
             if found.status == "success":
-                return to_tool_result(found), False  # it DID happen: adopt the recorded result
+                adopted = self._adopt(invocation, found.data)
+                if adopted is None:
+                    return self._handoff("LOOKUP_RESULT_UNUSABLE"), True
+                return adopted, False  # it DID happen: adopt the recorded result
             proves_absent = (
                 found.status == "business_error"
                 and found.error is not None
@@ -130,11 +140,29 @@ class ReconciliationWorker:
 
         return await self._resend_frozen(invocation)
 
+    def _adopt(
+        self, invocation: ToolInvocation, lookup_data: dict[str, Any] | None
+    ) -> ToolResult | None:
+        """Lookup output -> the ORIGINAL capability's result, via the frozen `result_map` (or
+        directly when the two schemas are identical). Anything that does not fit is refused."""
+        capability = self._pipeline.resolve(invocation.capability).capability
+        recovery = invocation.intent.recovery
+        try:
+            data: dict[str, Any] = lookup_data or {}
+            if recovery.result_map is not None:
+                data = apply_mapping(recovery.result_map, data)
+            validated = capability.output_model.model_validate(data).model_dump(mode="json")
+        except (MappingError, ValidationError):
+            return None
+        return ToolResult(status="success", data=validated)
+
     async def _resend_frozen(self, invocation: ToolInvocation) -> tuple[ToolResult | None, bool]:
-        """Same frozen tool args, same context, same idempotency key (INV-021, INV-023)."""
+        """Same frozen tool args, same destination, same idempotency key (INV-021/023/027)."""
         if not self._pipeline.intent_matches(invocation.intent):
             return self._handoff("INTENT_CHANGED"), True  # definitions moved on: never guess
         result = await self._pipeline.run_frozen(invocation.intent, invocation.context)
+        if result.error is not None and result.error.code == "DESTINATION_CHANGED":
+            return self._handoff("DESTINATION_CHANGED"), True  # configuration moved: never guess
         return to_tool_result(result), False
 
     @staticmethod

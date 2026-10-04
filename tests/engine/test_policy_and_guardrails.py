@@ -206,3 +206,31 @@ def test_logs_never_carry_secrets_or_common_pii(raw: str, must_not_contain: str)
 
 def test_redaction_leaves_ordinary_text_alone() -> None:
     assert redact("Tenho horários às 09:00 e 09:30") == "Tenho horários às 09:00 e 09:30"
+
+
+# --- the catalogue the model sees is per tenant ---
+
+
+def test_a_capability_the_tenant_cannot_call_is_not_even_shown_to_the_model() -> None:
+    gate = PolicyGate(ALL, tenant_allowlists={"acme": frozenset({"scheduling.availability"})})
+    agent = build_agent()
+    pipeline = CapabilityPipeline(agent, gate, ToolRunner({}))
+    shown = {t.name for t in pipeline.exposed_tools(PolicyContext(tenant_id="acme"))}
+    assert shown == {"scheduling__availability"}  # no create schema for acme
+    other = {t.name for t in pipeline.exposed_tools(PolicyContext(tenant_id="globex"))}
+    assert other == {"scheduling__availability", "scheduling__create"}
+
+
+def test_a_conversation_a_human_owns_exposes_no_tools() -> None:
+    pipeline = CapabilityPipeline(build_agent(), PolicyGate(ALL), ToolRunner({}))
+    assert pipeline.exposed_tools(PolicyContext(ownership=Ownership.HUMAN)) == ()
+
+
+async def test_the_request_sent_to_the_llm_carries_only_the_tenants_catalogue() -> None:
+    llm = FakeLLM([text_response("oi")])
+    gate = PolicyGate(
+        ALL, tenant_allowlists={IDENTITY.tenant_id: frozenset({"scheduling.availability"})}
+    )
+    engine, _ = engine_for(llm, gate)
+    await turn(engine)
+    assert [t.name for t in llm.requests[0].tools] == ["scheduling__availability"]

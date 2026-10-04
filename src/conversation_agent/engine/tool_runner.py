@@ -78,6 +78,15 @@ class ToolRunner:
             )
         return build_intent(resolved, tool_args)
 
+    async def destination_fingerprint(
+        self, resolved: ResolvedToolBinding, context: ToolContext
+    ) -> str | None:
+        """Where the provider would send this operation right now (None if not applicable).
+        Raises `ConnectionNotFoundError` when the tenant has no such connection."""
+        provider = self._providers.get(resolved.tool.provider)
+        fingerprint = getattr(provider, "destination_fingerprint", None)
+        return await fingerprint(resolved, context) if fingerprint is not None else None
+
     async def run(
         self, resolved: ResolvedToolBinding, request: CapabilityRequest, context: ToolContext
     ) -> CapabilityResult:
@@ -122,7 +131,12 @@ class ToolRunner:
         if provider is None:
             return _failure_before_io("PROVIDER_NOT_CONFIGURED", "No provider for this tool.")
         try:
-            result = await provider.execute(resolved, dict(intent.tool_args), context)
+            result = await provider.execute(
+                resolved,
+                dict(intent.tool_args),
+                context,
+                destination_fingerprint=intent.connection_fingerprint,  # INV-027
+            )
         except Exception:  # provider contract violation: never leak, never assume safe
             return _failure_after_possible_io(
                 resolved, "PROVIDER_CONTRACT_VIOLATION", "Tool provider failed."

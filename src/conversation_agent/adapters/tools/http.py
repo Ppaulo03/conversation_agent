@@ -126,16 +126,35 @@ class HTTPToolProvider:
     async def aclose(self) -> None:
         await self._client.aclose()
 
+    async def destination_fingerprint(
+        self, binding: ResolvedToolBinding, context: ToolContext
+    ) -> str | None:
+        """Where this tool's requests would go for this tenant right now (no secrets). Raises
+        `ConnectionNotFoundError` if the tenant has no such connection."""
+        if binding.tool.connection is None:
+            return None
+        resolved = await self._connections.resolve(context.tenant_id, binding.tool.connection)
+        return resolved.fingerprint()
+
     async def execute(
-        self, binding: ResolvedToolBinding, args: dict[str, Any], context: ToolContext
+        self,
+        binding: ResolvedToolBinding,
+        args: dict[str, Any],
+        context: ToolContext,
+        *,
+        destination_fingerprint: str | None = None,
     ) -> ToolResult:
         try:
-            return await self._execute(binding, args, context)
+            return await self._execute(binding, args, context, destination_fingerprint)
         except _Rejected as rejected:  # nothing was sent: a known, safe failure
             return rejected.result
 
     async def _execute(
-        self, binding: ResolvedToolBinding, args: dict[str, Any], context: ToolContext
+        self,
+        binding: ResolvedToolBinding,
+        args: dict[str, Any],
+        context: ToolContext,
+        expected_destination: str | None,
     ) -> ToolResult:
         tool = binding.tool
         spec = tool.http
@@ -147,6 +166,15 @@ class HTTPToolProvider:
             raise _Rejected(
                 _configuration_error("CONNECTION_NOT_CONFIGURED", "No connection.")
             ) from None
+        if expected_destination is not None and connection.fingerprint() != expected_destination:
+            # The operation was prepared against another destination (INV-027): never send it
+            # somewhere else just because configuration changed in the meantime.
+            raise _Rejected(
+                _configuration_error(
+                    "DESTINATION_CHANGED",
+                    "The connection no longer points where this operation was prepared.",
+                )
+            )
         if not spec.path.startswith("/") or spec.path.startswith("//") or "://" in spec.path:
             raise _Rejected(
                 _configuration_error(

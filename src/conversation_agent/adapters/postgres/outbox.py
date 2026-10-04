@@ -69,7 +69,9 @@ class PostgresOutboxStore:
             and message.attempts < self._max_attempts
         ):
             status, available_at = OutboxStatus.PENDING, now + retry_after
-        accepted_at = now if status is OutboxStatus.ACCEPTED else None
+        # The channel's own acceptance time, or NULL. Never the local/db clock: comparing a
+        # provider-domain reply time with a local one would fake (in)eligibility (INV-026).
+        accepted_at = result.provider_accepted_at if status is OutboxStatus.ACCEPTED else None
         await self._db.pool.execute(
             """
             UPDATE outbox_messages

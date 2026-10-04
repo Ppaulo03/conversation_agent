@@ -17,9 +17,21 @@ class FaultInjectingToolProvider:
         self._faults = faults
         self._point = point
 
+    async def destination_fingerprint(
+        self, binding: ResolvedToolBinding, context: ToolContext
+    ) -> str | None:
+        return await self._inner.destination_fingerprint(binding, context)
+
     async def execute(
-        self, binding: ResolvedToolBinding, args: dict[str, Any], context: ToolContext
+        self,
+        binding: ResolvedToolBinding,
+        args: dict[str, Any],
+        context: ToolContext,
+        *,
+        destination_fingerprint: str | None = None,
     ) -> ToolResult:
-        result = await self._inner.execute(binding, args, context)
+        result = await self._inner.execute(
+            binding, args, context, destination_fingerprint=destination_fingerprint
+        )
         await self._faults.hit(self._point)
         return result

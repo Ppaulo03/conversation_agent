@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
+from conversation_agent.core.errors import ConnectionNotFoundError
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.core.models.runtime import ExecutionIntent
 from conversation_agent.core.models.tooling import (
@@ -67,6 +68,12 @@ class CapabilityOutcome(BaseModel):
         return self
 
 
+def _pre_io(code: str, message: str) -> CapabilityResult:
+    return CapabilityResult(
+        status="technical_error", error=ToolError(code=code, message_safe=message)
+    )
+
+
 def llm_name_for(capability_name: str) -> str:
     """Same injective mapping as `CapabilityDefinition.llm_name`."""
     return capability_name.replace(".", "__")
@@ -79,14 +86,17 @@ class CapabilityPipeline:
         self._runner = runner
         self._by_tool_name = {c.llm_name: c.name for c in agent.capabilities}
 
-    def exposed_tools(self) -> tuple[LLMToolDefinition, ...]:
-        """Capability schemas (never API schemas) for allowed capabilities only."""
+    def exposed_tools(self, ctx: PolicyContext | None = None) -> tuple[LLMToolDefinition, ...]:
+        """Capability schemas (never API schemas) for what THIS tenant may actually use: a
+        capability the tenant cannot call is not shown to the model at all."""
         tools: list[LLMToolDefinition] = []
         for cap in self._agent.capabilities:
             resolved = self._agent.resolve(cap.name)
             if cap.name not in self._agent.allowed_capabilities or resolved is None:
                 continue
-            decision = self._policy.evaluate(cap.name, resolved)
+            decision = self._policy.evaluate(cap.name, resolved, ctx)
+            if decision.outcome == "deny":
+                continue
             note = _PROTECTED_NOTE if decision.outcome == "require_confirmation" else ""
             tools.append(
                 LLMToolDefinition(
@@ -121,6 +131,57 @@ class CapabilityPipeline:
     def freeze(self, request: CapabilityRequest) -> ExecutionIntent | CapabilityResult:
         """Resolve the concrete external operation (no I/O) so it can be persisted at PREPARE."""
         return self._runner.freeze(self.resolve(request.capability), request)
+
+    async def prepare_intent(
+        self, request: CapabilityRequest, context: ToolContext
+    ) -> ExecutionIntent | CapabilityResult:
+        """Everything that must be decided ONCE, at PREPARE, so that nothing deployed or
+        reconfigured later can move the operation (INV-023, INV-027):
+
+          - the concrete tool args and the binding fingerprint;
+          - the resolved destination (connection fingerprint, no secrets);
+          - the recovery contract and, for `status_lookup`, the lookup itself (args + destination).
+
+        A failure here is pre-I/O: such an operation must not be prepared at all."""
+        resolved = self.resolve(request.capability)
+        frozen = self._runner.freeze(resolved, request)
+        if isinstance(frozen, CapabilityResult):
+            return frozen
+        try:
+            destination = await self._runner.destination_fingerprint(resolved, context)
+        except ConnectionNotFoundError:
+            return _pre_io("CONNECTION_NOT_CONFIGURED", "No connection for this tool.")
+        intent = frozen.model_copy(update={"connection_fingerprint": destination})
+
+        recovery = intent.recovery
+        if recovery.strategy == "status_lookup":
+            assert recovery.lookup_capability is not None
+            lookup = await self._freeze_lookup(recovery.lookup_capability, context)
+            if isinstance(lookup, CapabilityResult):
+                return lookup  # a write whose recovery cannot be frozen is not prepared
+            intent = intent.model_copy(
+                update={"recovery": recovery.model_copy(update={"lookup_intent": lookup})}
+            )
+        return intent
+
+    async def _freeze_lookup(
+        self, lookup_capability: str, context: ToolContext
+    ) -> ExecutionIntent | CapabilityResult:
+        try:
+            resolved = self.resolve(lookup_capability)
+            request = build_capability_request(
+                resolved.capability, {"idempotency_key": context.invocation_id}
+            )
+        except (KeyError, RequestRejected):
+            return _pre_io("RECOVERY_LOOKUP_NOT_CONFIGURED", "Recovery lookup is not configured.")
+        frozen = self._runner.freeze(resolved, request)
+        if isinstance(frozen, CapabilityResult):
+            return frozen
+        try:
+            destination = await self._runner.destination_fingerprint(resolved, context)
+        except ConnectionNotFoundError:
+            return _pre_io("CONNECTION_NOT_CONFIGURED", "No connection for the recovery lookup.")
+        return frozen.model_copy(update={"connection_fingerprint": destination})
 
     def intent_matches(self, intent: ExecutionIntent) -> bool:
         """True iff the operation resolved from the *currently deployed* definitions is the one

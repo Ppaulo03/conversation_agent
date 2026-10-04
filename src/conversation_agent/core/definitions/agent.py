@@ -68,10 +68,62 @@ class AgentDefinition(BaseModel):
                     f"binding {b.capability!r}->{b.tool!r} declares risk {b.risk!r}, lower than "
                     f"{floor!r}: a binding can raise protection but never lower it"
                 )
+        self._check_retry_against_effective_risk(by_cap, by_tool)
+        self._check_recovery_lookups(by_cap, by_tool)
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_retry_against_effective_risk(
+        self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]
+    ) -> None:
+        """A tool that looks like a read but is bound to a protected capability is a write for
+        every runtime purpose, so the write-retry rules (INV-021) apply to it too."""
+        for b in self.bindings:
+            tool = by_tool[b.tool]
+            risks = [by_cap[b.capability].risk, tool.risk] + ([b.risk] if b.risk else [])
+            effective = max(risks, key=lambda r: RISK_ORDER[r])
+            retry = tool.retry
+            unsafe = not tool.idempotency_supported or retry.mode != "same_idempotency_key"
+            if effective != "read" and retry.max_attempts > 1 and unsafe:
+                raise DefinitionError(
+                    f"tool {tool.name!r} is bound to {b.capability!r} (effective risk "
+                    f"{effective!r}) and cannot retry without idempotency support and the "
+                    "SAME idempotency key"
+                )
+
+    def _check_recovery_lookups(
+        self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]
+    ) -> None:
+        """A status lookup must be a bound read that takes the idempotency key, and its result
+        must be convertible into the result of the operation it recovers."""
+        bound = {b.capability for b in self.bindings}
+        for tool in self.tools:
+            recovery = tool.recovery
+            if recovery is None or recovery.strategy != "status_lookup":
+                continue
+            name = recovery.lookup_capability
+            lookup = by_cap.get(name or "")
+            if lookup is None or name not in bound:
+                raise DefinitionError(
+                    f"tool {tool.name!r}: lookup capability {name!r} is not defined and bound"
+                )
+            if lookup.risk != "read":
+                raise DefinitionError(f"tool {tool.name!r}: the status lookup must be a read")
+            if "idempotency_key" not in lookup.input_model.model_fields:
+                raise DefinitionError(
+                    f"lookup {name!r} must take an `idempotency_key` (supplied by the runtime)"
+                )
+            for b in self.bindings:
+                if b.tool != tool.name or recovery.result_map is not None:
+                    continue
+                original = by_cap[b.capability].output_model
+                if lookup.output_model.model_json_schema() != original.model_json_schema():
+                    raise DefinitionError(
+                        f"lookup {name!r} returns a different schema than {b.capability!r}: "
+                        "declare `recovery.result_map` to convert it"
+                    )
 
     def resolve(self, capability_name: str) -> ResolvedToolBinding | None:
         binding = next((b for b in self.bindings if b.capability == capability_name), None)

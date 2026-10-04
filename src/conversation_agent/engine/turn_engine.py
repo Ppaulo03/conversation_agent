@@ -106,6 +106,9 @@ class TurnEngine:
             *self._history_messages(state),
             LLMMessage.text("user", user_text),
         ]
+        catalog = self._pipeline.exposed_tools(  # only what this tenant may actually call
+            PolicyContext(tenant_id=identity.tenant_id, ownership=Ownership.BOT, now=reference_time)
+        )
         if pending is not None and self._confirmation is not None:
             staged = await self._confirmation.run(
                 cursor,
@@ -118,6 +121,7 @@ class TurnEngine:
                     inbound=inbound,
                     history=self._history_messages(state),
                     system=system,
+                    tools=catalog,
                     guard=guard,
                 ),
             )
@@ -147,7 +151,7 @@ class TurnEngine:
         for _ in range(self._max_steps):
             if guard is not None:
                 guard()  # safe boundary: a stale worker starts no new step
-            response = await self.llm_step(cursor, turn_id, system, working)
+            response = await self.llm_step(cursor, turn_id, system, working, tools=catalog)
             llm_calls += 1
             tokens_used += response.usage.input_tokens + response.usage.output_tokens
             budget = self._agent.max_tokens_per_turn
