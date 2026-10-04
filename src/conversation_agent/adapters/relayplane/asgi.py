@@ -19,15 +19,14 @@ PREFIX = "/webhooks/relayplane/"
 
 
 def webhook_app(webhook: RelayPlaneWebhook) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
-    async def respond(send: Send, status: int, body: dict[str, Any]) -> None:
+    async def respond(
+        send: Send, status: int, body: dict[str, Any], retry_after: int | None = None
+    ) -> None:
         payload = json.dumps(body).encode()
-        await send(
-            {
-                "type": "http.response.start",
-                "status": status,
-                "headers": [(b"content-type", b"application/json")],
-            }
-        )
+        headers = [(b"content-type", b"application/json")]
+        if retry_after:
+            headers.append((b"retry-after", str(retry_after).encode()))
+        await send({"type": "http.response.start", "status": status, "headers": headers})
         await send({"type": "http.response.body", "body": payload})
 
     async def app(scope: Scope, receive: Receive, send: Send) -> None:
@@ -48,6 +47,6 @@ def webhook_app(webhook: RelayPlaneWebhook) -> Callable[[Scope, Receive, Send], 
                 break
         headers = {k.decode("latin-1"): v.decode("latin-1") for k, v in scope["headers"]}
         result = await webhook.handle(path[len(PREFIX) :], body, headers)
-        await respond(send, result.status, result.body)
+        await respond(send, result.status, result.body, result.retry_after)
 
     return app

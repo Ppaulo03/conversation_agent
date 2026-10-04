@@ -23,6 +23,7 @@ from typing import Any
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.tooling import ToolContext, ToolError, ToolResult
 from conversation_agent.ports.metrics import ToolMetrics
+from conversation_agent.ports.ratelimit import RateLimit, RateLimiter
 from conversation_agent.ports.tool_provider import ToolProvider
 
 # Canonical codes that say "the destination is unwell" (see tools.error_mapping and the providers).
@@ -211,3 +212,56 @@ class MeteredToolProvider:
             )
         except Exception:  # metrics must never change what a tool call does
             return
+
+
+class RateLimitedToolProvider:
+    """A cap on calls per (tenant, connection): protects the external system AND the other
+    tenants sharing this runtime from one tenant's burst. Like the circuit breaker it acts only
+    BEFORE calling the inner provider, so a denial is a known non-execution (`technical_error
+    RATE_LIMITED`, retryable) that is safe for a write too, and everything the provider answers
+    passes through unchanged."""
+
+    def __init__(
+        self,
+        inner: ToolProvider,
+        limiter: RateLimiter,
+        limit: RateLimit,
+        *,
+        per_connection: dict[str, RateLimit] | None = None,
+    ) -> None:
+        self._inner = inner
+        self._limiter = limiter
+        self._limit = limit
+        self._per_connection = per_connection or {}
+
+    async def destination_fingerprint(
+        self, binding: ResolvedToolBinding, context: ToolContext
+    ) -> str | None:
+        return await self._inner.destination_fingerprint(binding, context)
+
+    async def execute(
+        self,
+        binding: ResolvedToolBinding,
+        args: dict[str, Any],
+        context: ToolContext,
+        *,
+        destination_fingerprint: str | None = None,
+    ) -> ToolResult:
+        scope = binding.tool.connection or binding.tool.name
+        limit = self._per_connection.get(scope, self._limit)
+        decision = await self._limiter.acquire(
+            "tool_connection", f"{context.tenant_id}/{scope}", limit
+        )
+        if not decision.allowed:
+            return ToolResult(
+                status="technical_error",
+                error=ToolError(
+                    code="RATE_LIMITED",
+                    message_safe="Too many requests to the external system; nothing was sent.",
+                    retryable=True,
+                ),
+                provider_metadata={"retry_after_seconds": round(decision.retry_after_seconds, 1)},
+            )
+        return await self._inner.execute(
+            binding, args, context, destination_fingerprint=destination_fingerprint
+        )

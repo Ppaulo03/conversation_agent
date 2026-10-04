@@ -33,6 +33,7 @@ from conversation_agent.adapters.senders.relayplane import result_from_gateway
 from conversation_agent.core.errors import ConversationIdentityConflictError, SecretNotFoundError
 from conversation_agent.core.models.media import MAX_MEDIA_ITEMS, MediaReference
 from conversation_agent.core.models.runtime import InboundEvent
+from conversation_agent.ports.admission import AdmissionControl
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.outbox import OutboxStore
@@ -56,6 +57,7 @@ _MEDIA_KINDS = {"audio": "audio", "image": "image", "video": "video", "document"
 class WebhookResponse:
     status: int
     body: dict[str, Any] = field(default_factory=dict)
+    retry_after: int | None = None  # seconds, for a refusal the gateway should retry later
 
 
 class _Envelope(BaseModel):
@@ -107,7 +109,9 @@ class RelayPlaneWebhook:
         *,
         tolerance: timedelta = timedelta(minutes=5),
         max_body_bytes: int = MAX_BODY_BYTES,
+        admission: AdmissionControl | None = None,
     ) -> None:
+        self._admission = admission
         self._inbox = inbox
         self._outbox = outbox
         self._subscriptions = subscriptions
@@ -201,6 +205,14 @@ class RelayPlaneWebhook:
             )
         if not (msg.text or media):
             return WebhookResponse(400, {"error": "empty_message"})
+        if self._admission is not None:
+            # Backpressure at the edge, BEFORE anything is persisted or acknowledged: a refused
+            # message is redelivered by the gateway, so this costs latency, never data.
+            decision = await self._admission.admit(sub.tenant_id, msg.from_)
+            if not decision.admitted:
+                return WebhookResponse(
+                    decision.status, {"error": decision.reason}, decision.retry_after_seconds
+                )
         assert len(media) <= MAX_MEDIA_ITEMS
         conversation = f"{event.instance_id}:{msg.from_}"
         created = await self._inbox.insert_if_absent(
