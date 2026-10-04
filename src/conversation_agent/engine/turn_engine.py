@@ -33,6 +33,7 @@ from conversation_agent.core.models.llm import (
     ToolResultPart,
     llm_request_hash,
 )
+from conversation_agent.core.models.media import MediaReference, TranscriptionContext
 from conversation_agent.core.models.runtime import InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
 from conversation_agent.engine.capability_pipeline import (
@@ -43,12 +44,14 @@ from conversation_agent.engine.capability_pipeline import (
 from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
 from conversation_agent.engine.flow_runner import FlowRunner, FlowTurn
 from conversation_agent.engine.journal_steps import TurnJournalCursor
+from conversation_agent.engine.media import MediaNormalizer
 from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.transcriber import Transcriber
 
 MAX_STEPS_DEFAULT = 8
 
@@ -64,6 +67,7 @@ class TurnEngine:
         *,
         max_steps: int = MAX_STEPS_DEFAULT,
         tool_executor: ToolStepExecutor | None = None,
+        transcriber: Transcriber | None = None,
     ) -> None:
         # The engine only runs what the compiler produced (INV-029), and every part of the graph
         # must come from THAT compiled agent (INV-030): no split-brain between definitions.
@@ -83,6 +87,7 @@ class TurnEngine:
         self._executor: ToolStepExecutor = tool_executor or DirectToolExecutor(pipeline)
         self._confirmation: ConfirmationStage | None = None
         self._flows = FlowRunner(agent.agent) if agent.agent.flows else None
+        self._media = MediaNormalizer(agent.agent, transcriber)
 
     @property
     def pipeline(self) -> CapabilityPipeline:
@@ -112,6 +117,7 @@ class TurnEngine:
         pending: PendingAction | None = None,
         inbound: tuple[InboundRef, ...] = (),
         cancel: Callable[[], bool] | None = None,
+        media: tuple[MediaReference, ...] = (),
     ) -> TurnOutcome:
         """Process one turn. Re-running the same `turn_id` replays journaled steps (INV-014)."""
         cursor = TurnJournalCursor(self._journal, turn_id)
@@ -127,6 +133,8 @@ class TurnEngine:
             JournalStepType.INBOUND_AGGREGATED, stable_hash(user_text), aggregate
         )
         reference_time = datetime.fromisoformat(aggregated["turn_reference_time"])  # INV-018
+        if media:
+            user_text = await self._normalize_media(cursor, identity, turn_id, user_text, media)
         system = build_system_prompt(self._agent.persona, reference_time, self._agent.timezone)
 
         working: list[LLMMessage] = [
@@ -333,6 +341,29 @@ class TurnEngine:
             if state.effects == 0:
                 raise TurnCancelledError("restart requested before any irreversible step")
             raise _StopAfterEffect
+
+    async def _normalize_media(
+        self,
+        cursor: TurnJournalCursor,
+        identity: ConversationIdentity,
+        turn_id: str,
+        user_text: str,
+        media: tuple[MediaReference, ...],
+    ) -> str:
+        """The turn text including what the media said (journaled: replay never re-transcribes)."""
+
+        async def produce() -> dict[str, Any]:
+            context = TranscriptionContext(
+                tenant_id=identity.tenant_id,
+                conversation_id=identity.conversation_id,
+                turn_id=turn_id,
+            )
+            return {"lines": await self._media.lines(media, context)}
+
+        step = await cursor.step(
+            JournalStepType.MEDIA_NORMALIZED, stable_hash([m.media_id for m in media]), produce
+        )
+        return "\n".join(part for part in (user_text, *step["lines"]) if part)
 
     def _with_confirmation(self, reply: str, proposal: ProposedAction) -> str:
         line = self._agent.confirmation.prompt.format(

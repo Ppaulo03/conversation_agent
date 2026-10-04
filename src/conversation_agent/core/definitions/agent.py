@@ -34,6 +34,20 @@ class ConfirmationTexts(BaseModel):
     executed_fallback: str = "Your request was processed (status: {status})."
 
 
+class MediaTexts(BaseModel):
+    """Wording the runtime puts in front of the agent when the contact sends media. Transcribed
+    audio becomes `{audio}`; media the runtime cannot read is only NAMED, never invented."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    audio: str = "[voice message] {text}"
+    audio_failed: str = "[voice message that could not be transcribed]"
+    image: str = "[image received]"
+    video: str = "[video received]"
+    document: str = "[document received: {name}]"
+    too_large: str = "[media too large to process]"
+
+
 class AgentDefinition(BaseModel):
     model_config = ConfigDict(frozen=True, arbitrary_types_allowed=True)
 
@@ -58,6 +72,8 @@ class AgentDefinition(BaseModel):
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
     confirmation: ConfirmationTexts = ConfirmationTexts()
     confirmation_prompt_enabled: bool = True
+    media: MediaTexts = MediaTexts()
+    max_media_bytes: int = 25 * 1024 * 1024  # larger media is not fetched or transcribed
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
@@ -98,6 +114,11 @@ class AgentDefinition(BaseModel):
         about explicitly: the runtime-owned confirmation question is what a later "yes" answers."""
         c = self.confirmation
         summary = frozenset({"summary"})
+        m = self.media
+        check_template("media.audio", m.audio, {"text"}, required=frozenset({"text"}))
+        check_template("media.document", m.document, {"name"})
+        for label in ("audio_failed", "image", "video", "too_large"):
+            check_template(f"media.{label}", getattr(m, label), set())
         check_template("confirmation.prompt", c.prompt, {"summary"}, required=summary)
         check_template("confirmation.reprompt", c.reprompt, {"summary"}, required=summary)
         check_template("confirmation.executed_fallback", c.executed_fallback, {"status"})

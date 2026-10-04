@@ -26,7 +26,8 @@ INVOCATION_COLUMNS = (
 
 OUTBOX_COLUMNS = (
     "tenant_id, outbox_id, conversation_id, channel_id, contact_id, turn_id, message_index, "
-    "action_id, text, idempotency_key, status, attempts, provider_message_id"
+    "action_id, text, idempotency_key, status, attempts, provider_message_id, "
+    "first_sent_at, reconcile_attempts"
 )
 
 
@@ -74,4 +75,6 @@ def outbox_from_row(r: asyncpg.Record | dict[str, Any]) -> OutboundMessage:
         status=OutboxStatus(r["status"]),
         attempts=r["attempts"],
         provider_message_id=r["provider_message_id"],
+        first_sent_at=r["first_sent_at"],
+        reconcile_attempts=r["reconcile_attempts"],
     )

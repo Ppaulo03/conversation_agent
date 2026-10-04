@@ -2,14 +2,17 @@
 
 Rows were persisted atomically with the turn that produced them; this worker claims them,
 hands them to the MessageSender and records the outcome. A crash anywhere in between leaves
-the row SENDING; it is later retried with the same payload and idempotency key.
+the row SENDING; it is later retried with the same payload and idempotency key - but only while
+the channel still remembers that key (INV-034): past `retry_horizon` the row is handed to the
+reconciler instead of being re-sent blindly.
 """
 
 from __future__ import annotations
 
 from datetime import timedelta
 
-from conversation_agent.core.models.runtime import OutboxStatus, SendResult
+from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
+from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.outbox import OutboxStore
 from conversation_agent.ports.sender import MessageSender
@@ -25,17 +28,33 @@ class OutboxWorker:
         owner: str,
         claim_ttl: timedelta = timedelta(seconds=30),
         retry_after: timedelta = timedelta(seconds=5),
+        retry_horizon: timedelta | None = None,
+        coordination: CoordinationClock | None = None,
     ) -> None:
+        if retry_horizon is not None and coordination is None:
+            raise ValueError("a retry horizon needs the coordination clock to measure message age")
         self._outbox = outbox
         self._sender = sender
         self._faults = faults
         self._owner = owner
         self._claim_ttl = claim_ttl
         self._retry_after = retry_after
+        self._horizon = retry_horizon
+        self._coordination = coordination
 
     async def run_once(self, limit: int = 20) -> int:
         messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl)
         for message in messages:
+            if await self._past_the_horizon(message):
+                # Another attempt may already have reached the channel and its dedupe memory
+                # may be fading: ask, do not resend (reconciliation decides).
+                await self._outbox.record_result(
+                    message,
+                    self._owner,
+                    SendResult(status=OutboxStatus.UNKNOWN),
+                    self._retry_after,
+                )
+                continue
             try:
                 result = await self._sender.send(message)
             except Exception:
@@ -44,3 +63,13 @@ class OutboxWorker:
             await self._faults.hit("C08_during_outbox_send")  # sent, not yet recorded
             await self._outbox.record_result(message, self._owner, result, self._retry_after)
         return len(messages)
+
+    async def _past_the_horizon(self, message: OutboundMessage) -> bool:
+        if self._horizon is None or self._coordination is None:
+            return False
+        if message.attempts <= 1 or message.first_sent_at is None:
+            return False  # the first send is always allowed
+        if message.reconcile_attempts > 0:
+            return False  # the reconciler proved the channel has no such message (window open)
+        age = (await self._coordination.now()) - message.first_sent_at
+        return age > self._horizon

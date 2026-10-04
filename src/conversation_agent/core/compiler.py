@@ -209,6 +209,8 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "max_flow_depth": agent.max_flow_depth,
         "confirmation": agent.confirmation.model_dump(mode="json"),
         "confirmation_prompt_enabled": agent.confirmation_prompt_enabled,
+        "media": agent.media.model_dump(mode="json"),
+        "max_media_bytes": agent.max_media_bytes,
     }
 
 

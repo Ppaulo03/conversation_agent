@@ -20,6 +20,7 @@ from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.tool_provider import ToolProvider
+from conversation_agent.ports.transcriber import Transcriber
 from vertical_slice.definitions import CONNECTION, build_agent
 
 
@@ -55,6 +56,7 @@ def build_engine(
     executor_factory: Callable[[CapabilityPipeline], ToolStepExecutor] | None = None,
     flows: bool = False,
     agent: AgentDefinition | None = None,
+    transcriber: Transcriber | None = None,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
@@ -70,6 +72,7 @@ def build_engine(
         journal or InMemoryTurnJournal(),
         clock or SystemClock(agent.timezone),
         tool_executor=executor_factory(pipeline) if executor_factory else None,
+        transcriber=transcriber,
     )
     return engine, agent, http
 

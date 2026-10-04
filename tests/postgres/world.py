@@ -24,10 +24,12 @@ from conversation_agent.adapters.tools.fake import FakeToolProvider
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
+from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import ConversationKey, FenceToken, InboundEvent
 from conversation_agent.core.models.tooling import PolicyDecision, ToolResult
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.confirmation_stage import ConfirmationStage
+from conversation_agent.engine.outbox_reconciler import OutboxReconciler
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.policy_rules import PolicyContext
@@ -142,6 +144,7 @@ class World:
         heartbeat_interval_seconds: float = 10.0,
         max_reprompts: int = 3,
         flows: bool = False,
+        transcriber: Any = None,
         **kwargs: Any,
     ) -> TurnCoordinator:
         injector = faults or NoFaults()
@@ -175,6 +178,7 @@ class World:
                 pipeline=shared,
                 executor_factory=make_executor,
                 flows=flows,
+                transcriber=transcriber,
             )
             engine.attach_confirmation(
                 ConfirmationStage(
@@ -323,9 +327,29 @@ class World:
 
         return SchedulerWorker(self.scheduler, {RECONCILE_EVENT: wake}, owner=owner, claim_ttl=TTL)
 
-    def outbox_worker(self, owner: str, faults: FaultInjector | None = None) -> OutboxWorker:
+    def outbox_worker(
+        self,
+        owner: str,
+        faults: FaultInjector | None = None,
+        *,
+        sender: Any = None,
+        retry_horizon: timedelta | None = None,
+    ) -> OutboxWorker:
         return OutboxWorker(
-            self.outbox, self.sender, faults or NoFaults(), owner=owner, claim_ttl=TTL
+            self.outbox,
+            sender or self.sender,
+            faults or NoFaults(),
+            owner=owner,
+            claim_ttl=TTL,
+            retry_horizon=retry_horizon,
+            coordination=self.coord,
+        )
+
+    def outbox_reconciler(
+        self, owner: str, channel: Any, policy: DeliveryPolicy
+    ) -> OutboxReconciler:
+        return OutboxReconciler(
+            self.outbox, channel, self.coord, policy, owner=owner, claim_ttl=TTL
         )
 
     async def count(self, table: str, where: str = "true") -> int:

@@ -14,6 +14,7 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, model_validato
 
 from conversation_agent.core.definitions.mapping import MappingSpec
 from conversation_agent.core.models.conversation import ConversationIdentity
+from conversation_agent.core.models.media import MediaReference
 from conversation_agent.core.models.tooling import CapabilityRequest, ToolContext
 
 
@@ -79,6 +80,9 @@ class InboundEvent(_Frozen):
     occurred_at: AwareDatetime
     received_at: AwareDatetime
     source_sequence: int | None = None
+    media: tuple[MediaReference, ...] = ()  # claim-check references, never bytes
+    # "system": a runtime-originated event (e.g. a proactive timer), not something the contact wrote
+    kind: Literal["user", "system"] = "user"
     # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
     provider_occurred_at: AwareDatetime | None = None  # comparable with `provider_accepted_at`
     reply_to_provider_message_id: str | None = None
@@ -112,6 +116,8 @@ class OpenedTurn(_Frozen):
     inbound: tuple[InboundRef, ...] = ()  # channel evidence per event, in burst order
     resumed: bool = False  # True when an earlier owner had already opened this turn
     attempts: int = 0  # failed processing attempts so far (NOT waits for tool results)
+    media: tuple[MediaReference, ...] = ()
+    system_only: bool = False  # every event of the turn is runtime-originated (no contact input)
 
 
 # --- Outbox ---------------------------------------------------------------------------------
@@ -142,6 +148,10 @@ class OutboundMessage(_Frozen):
     action_id: str | None = None
     attempts: int = 0
     provider_message_id: str | None = None
+    # When the first send of this row was claimed (coordination time): the start of the window
+    # in which a resend can still rely on the channel's idempotency memory.
+    first_sent_at: AwareDatetime | None = None
+    reconcile_attempts: int = 0
 
 
 class SendResult(_Frozen):

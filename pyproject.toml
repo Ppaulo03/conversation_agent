@@ -34,7 +34,12 @@ build-backend = "hatchling.build"
 packages = ["src/conversation_agent"]
 # Editable installs also expose the examples (they are separate top-level packages,
 # never imported by src/conversation_agent — enforced by import-linter).
-dev-mode-dirs = ["src", "examples/vertical-slice", "examples/reference-scheduling-api"]
+dev-mode-dirs = [
+    "src",
+    "examples/vertical-slice",
+    "examples/reference-scheduling-api",
+    "examples/reference-relayplane",
+]
 
 [tool.pytest.ini_options]
 asyncio_mode = "auto"
@@ -47,7 +52,13 @@ addopts = "-m 'not integration'"
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-src = ["src", "examples/vertical-slice", "examples/reference-scheduling-api", "tests"]
+src = [
+    "src",
+    "examples/vertical-slice",
+    "examples/reference-scheduling-api",
+    "examples/reference-relayplane",
+    "tests",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
@@ -56,7 +67,12 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 plugins = ["pydantic.mypy"]
-mypy_path = ["src", "examples/vertical-slice", "examples/reference-scheduling-api"]
+mypy_path = [
+    "src",
+    "examples/vertical-slice",
+    "examples/reference-scheduling-api",
+    "examples/reference-relayplane",
+]
 explicit_package_bases = true
 
 [[tool.mypy.overrides]]
@@ -64,7 +80,7 @@ module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["conversation_agent", "scheduling_api", "vertical_slice"]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -121,10 +137,16 @@ forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
 name = "framework never imports example/external-system code (INV-008)"
 type = "forbidden"
 source_modules = ["conversation_agent"]
-forbidden_modules = ["scheduling_api", "vertical_slice"]
+forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim"]
 
 [[tool.importlinter.contracts]]
 name = "reference API is an external system: no framework imports"
 type = "forbidden"
 source_modules = ["scheduling_api"]
+forbidden_modules = ["conversation_agent"]
+
+[[tool.importlinter.contracts]]
+name = "relayplane simulator is an external system: no framework imports"
+type = "forbidden"
+source_modules = ["relayplane_sim"]
 forbidden_modules = ["conversation_agent"]

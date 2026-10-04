@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from relayplane_sim.main import create_app as create_relay_app
 from scheduling_api.main import create_app
 from support.builders import NOW
 from support.server import LiveServer
@@ -43,4 +45,52 @@ def api(_live_api: tuple[LiveServer, object]) -> ApiHandle:
     handle.state.taken_slots = set()
     handle.state.bookings.clear()
     handle.state.by_key.clear()
+    return handle
+
+
+RELAY_T0 = datetime(2026, 10, 5, 11, 0, tzinfo=UTC)  # 08:00 in Sao Paulo, like NOW
+RELAY_RETENTION = timedelta(hours=1)
+
+
+class RelayHandle:
+    """Per-test view of the simulated channel gateway; its clock is under test control."""
+
+    def __init__(self, server: LiveServer, app: object, clock: dict[str, datetime]) -> None:
+        self.base_url = server.base_url
+        self.state = app.state  # type: ignore[attr-defined]
+        self._clock = clock
+
+    def set_time(self, moment: datetime) -> None:
+        self._clock["now"] = moment
+
+    def advance(self, delta: timedelta) -> None:
+        self._clock["now"] += delta
+
+    @property
+    def deliveries(self) -> list[dict[str, object]]:
+        return list(self.state.deliveries)
+
+
+@pytest.fixture(scope="session")
+def _live_relay() -> Iterator[tuple[LiveServer, object, dict[str, datetime]]]:
+    clock = {"now": RELAY_T0}
+    app = create_relay_app(now=lambda: clock["now"], idempotency_retention=RELAY_RETENTION)
+    server = LiveServer(app)
+    server.start()
+    yield server, app, clock
+    server.stop()
+
+
+@pytest.fixture
+def relay(_live_relay: tuple[LiveServer, object, dict[str, datetime]]) -> RelayHandle:
+    server, app, clock = _live_relay
+    clock["now"] = RELAY_T0
+    handle = RelayHandle(server, app, clock)
+    state = handle.state
+    state.requests.clear()
+    state.fault = None
+    state.queue_mode = False
+    state.messages.clear()
+    state.by_key.clear()
+    state.deliveries.clear()
     return handle

@@ -44,7 +44,8 @@ class PostgresOutboxStore:
             )
             UPDATE outbox_messages o
                SET status = 'SENDING', claim_owner = $3, claim_expires_at = $4,
-                   attempts = o.attempts + 1, updated_at = $1
+                   attempts = o.attempts + 1, updated_at = $1,
+                   first_sent_at = COALESCE(o.first_sent_at, $1)
               FROM picked
              WHERE o.tenant_id = picked.tenant_id AND o.outbox_id = picked.outbox_id
             RETURNING {_O_COLUMNS}
@@ -88,6 +89,79 @@ class PostgresOutboxStore:
             result.provider_message_id,
             accepted_at,
             available_at,
+            now,
+        )
+
+    async def claim_unknown(
+        self, owner: str, limit: int, claim_ttl: timedelta
+    ) -> list[OutboundMessage]:
+        now = await self._time.now()
+        rows = await self._db.pool.fetch(
+            f"""
+            WITH picked AS (
+                SELECT tenant_id, outbox_id FROM outbox_messages
+                 WHERE (status = 'UNKNOWN' AND available_at <= $1)
+                    OR (status = 'RECONCILING' AND claim_expires_at <= $1)
+                 ORDER BY updated_at
+                 LIMIT $2 FOR UPDATE SKIP LOCKED
+            )
+            UPDATE outbox_messages o
+               SET status = 'RECONCILING', claim_owner = $3, claim_expires_at = $4,
+                   updated_at = $1
+              FROM picked
+             WHERE o.tenant_id = picked.tenant_id AND o.outbox_id = picked.outbox_id
+            RETURNING {_O_COLUMNS}
+            """,
+            now,
+            limit,
+            owner,
+            now + claim_ttl,
+        )
+        return [outbox_from_row(r) for r in rows]
+
+    async def record_reconciliation(
+        self,
+        message: OutboundMessage,
+        owner: str,
+        *,
+        found: SendResult | None,
+        resend: bool,
+        retry_after: timedelta,
+        note: str | None = None,
+    ) -> None:
+        now = await self._time.now()
+        if found is not None:
+            status, available_at = found.status, now
+            accepted_at = found.provider_accepted_at if status is OutboxStatus.ACCEPTED else None
+            provider_id = found.provider_message_id
+        elif resend:
+            status, available_at, accepted_at, provider_id = OutboxStatus.PENDING, now, None, None
+        else:
+            status, available_at, accepted_at, provider_id = (
+                OutboxStatus.UNKNOWN,
+                now + retry_after,
+                None,
+                None,
+            )
+        await self._db.pool.execute(
+            """
+            UPDATE outbox_messages
+               SET status = $4, provider_message_id = COALESCE($5, provider_message_id),
+                   provider_accepted_at = COALESCE($6, provider_accepted_at),
+                   available_at = $7, claim_owner = NULL, claim_expires_at = NULL,
+                   reconcile_attempts = reconcile_attempts + 1,
+                   last_error = COALESCE($8, last_error), updated_at = $9
+             WHERE tenant_id = $1 AND outbox_id = $2 AND status = 'RECONCILING'
+               AND claim_owner = $3
+            """,
+            message.tenant_id,
+            message.outbox_id,
+            owner,
+            status.value,
+            provider_id,
+            accepted_at,
+            available_at,
+            note,
             now,
         )
 

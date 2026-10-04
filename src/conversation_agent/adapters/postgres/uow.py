@@ -33,6 +33,7 @@ from conversation_agent.core.models.actions import (
 )
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
 from conversation_agent.core.models.journal import JournalEntry, JournalStepType
+from conversation_agent.core.models.media import MediaReference
 from conversation_agent.core.models.runtime import (
     FenceToken,
     InboundRef,
@@ -120,6 +121,10 @@ class _StateRepo(_Repo):
         )
 
 
+def _media(rows: list[asyncpg.Record]) -> tuple[MediaReference, ...]:
+    return tuple(MediaReference.model_validate(m) for r in rows for m in (r["media"] or []))
+
+
 def _refs(rows: list[asyncpg.Record]) -> tuple[InboundRef, ...]:
     return tuple(
         InboundRef(
@@ -144,8 +149,9 @@ class _TurnRepo(_Repo):
         )
         if open_turn is not None:
             rows = await self._c.fetch(
-                "SELECT event_id, occurred_at, provider_occurred_at, reply_to_provider_message_id "
-                "FROM inbox_events WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 "
+                "SELECT event_id, occurred_at, provider_occurred_at, reply_to_provider_message_id, "
+                "media, kind FROM inbox_events "
+                "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 "
                 "ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id",
                 f.tenant_id,
                 f.conversation_id,
@@ -161,12 +167,14 @@ class _TurnRepo(_Repo):
                 late_event_ids=tuple(open_turn["late_event_ids"]),
                 resumed=True,
                 attempts=open_turn["attempts"],
+                media=_media(rows),
+                system_only=bool(rows) and all(r["kind"] == "system" for r in rows),
             )
 
         events = await self._c.fetch(
             """
             SELECT event_id, text, occurred_at, provider_occurred_at,
-                   reply_to_provider_message_id FROM inbox_events
+                   reply_to_provider_message_id, media, kind FROM inbox_events
              WHERE tenant_id=$1 AND conversation_id=$2 AND status='READY'
              ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id
             """,
@@ -175,6 +183,9 @@ class _TurnRepo(_Repo):
         )
         if not events:
             return None
+        # a runtime-originated event never shares a turn with what the contact wrote: the turn
+        # takes the kind of the OLDEST pending event, the rest wait for their own turn
+        events = [e for e in events if e["kind"] == events[0]["kind"]]
         event_ids = [e["event_id"] for e in events]
         watermark = await self._c.fetchval(
             "SELECT last_event_at FROM conversation_states "
@@ -196,7 +207,7 @@ class _TurnRepo(_Repo):
         )
         parts: list[Any] = [f.tenant_id, f.conversation_id, event_ids]
         turn_id = stable_hash(*parts, *([earlier] if earlier else []))[:32]
-        text = "\n".join(e["text"] for e in events)
+        text = "\n".join(e["text"] for e in events if e["text"])
         await self._c.execute(
             "INSERT INTO turns (tenant_id, conversation_id, turn_id, status, event_ids, "
             "late_event_ids, user_text, created_epoch, created_at) "
@@ -228,6 +239,8 @@ class _TurnRepo(_Repo):
             user_text=text,
             event_ids=tuple(event_ids),
             late_event_ids=tuple(late),
+            media=_media(events),
+            system_only=events[0]["kind"] == "system",
         )
 
     async def record_failure(self, turn_id: str) -> int:

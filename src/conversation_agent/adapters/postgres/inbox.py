@@ -26,8 +26,8 @@ class PostgresInboxStore:
                 """
                 INSERT INTO inbox_events (tenant_id, channel_id, event_id, conversation_id,
                     contact_id, session_id, source_sequence, occurred_at, received_at, text,
-                    provider_occurred_at, reply_to_provider_message_id)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+                    provider_occurred_at, reply_to_provider_message_id, media, kind)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
                 ON CONFLICT (tenant_id, channel_id, event_id) DO NOTHING
                 RETURNING id
                 """,
@@ -43,6 +43,8 @@ class PostgresInboxStore:
                 event.text,
                 event.provider_occurred_at,
                 event.reply_to_provider_message_id,
+                [m.model_dump(mode="json") for m in event.media],
+                event.kind,
             )
             if row is not None and self._restart:
                 await conn.execute(

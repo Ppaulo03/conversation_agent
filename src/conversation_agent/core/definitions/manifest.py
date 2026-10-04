@@ -11,7 +11,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from conversation_agent.core.definitions.agent import AgentDefinition, ConfirmationTexts
+from conversation_agent.core.definitions.agent import (
+    AgentDefinition,
+    ConfirmationTexts,
+    MediaTexts,
+)
 from conversation_agent.core.definitions.binding import CapabilityBinding
 from conversation_agent.core.definitions.capability import CapabilityDefinition, Risk
 from conversation_agent.core.definitions.flow import FlowDefinition
@@ -73,6 +77,8 @@ class AgentManifest(_Strict):
     max_flow_depth: int = 3
     confirmation: ConfirmationTexts = Field(default_factory=ConfirmationTexts)
     confirmation_prompt_enabled: bool = True
+    media: MediaTexts = Field(default_factory=MediaTexts)
+    max_media_bytes: int = 25 * 1024 * 1024
     cancelled_after_effect_reply: str | None = None  # None: the framework default
 
 
@@ -133,5 +139,7 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         max_flow_depth=manifest.max_flow_depth,
         confirmation=manifest.confirmation,
         confirmation_prompt_enabled=manifest.confirmation_prompt_enabled,
+        media=manifest.media,
+        max_media_bytes=manifest.max_media_bytes,
         **extra,
     )

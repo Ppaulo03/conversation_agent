@@ -225,6 +225,7 @@ class TurnCoordinator:
                 pending=pending,
                 inbound=opened.inbound,
                 cancel=lambda: handle.cancel_requested,
+                media=opened.media,
             )
         except TurnCancelledError:
             # A newer message asked to restart and nothing irreversible had happened: abandon
