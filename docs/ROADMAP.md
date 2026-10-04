@@ -226,6 +226,16 @@ FAQ/suporte/ticket, sem alterar core/engine.
 - backup/DR;
 - auditoria administrativa.
 
+## Fase 13 — Mídia de ponta a ponta
+
+Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
+
+- **Transcriber real:** adapter de provedor (Whisper/Groq ou equivalente) atrás da porta `Transcriber`, com custo no ledger de uso e teto por agente;
+- **Visão opcional, por agente:** imagem enviada ao modelo por referência (nunca bytes no estado/journal), journalada, com custo e orçamento; sem o opt-in o comportamento e o digest atuais permanecem;
+- **Mídia como argumento de tool:** referências da conversa guardadas com handle estável (`media_1`), limitadas, cobertas por retenção/erasure; o agente vê o handle na linha de texto; tool/slot declara argumento do tipo `media`; o runtime valida que o handle pertence à conversa (INV-002) e resolve para a referência no momento da chamada (o `MediaFetcher` busca os bytes);
+- **Ação protegida com anexo:** proposta/confirmação continuam valendo e o sha256 entra na chave de idempotência;
+- **Fora do escopo:** mídia de saída (o agente continua enviando só texto).
+
 ## Chaos gates
 
 Fonte única dos casos de fault injection. `C06`, `C07` e `C16` seguem o protocolo C1/C2 de [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md) §4:
