@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 9 — Segundo domínio (implementada; aguardando revisão/merge). Fases 1–8 em `main`. Próxima: Fase 10.
+**Fase atual:** 10 — Production hardening (implementada; aguardando revisão/merge). Fases 1–9 em `main`.
 
 ## Phase 1
 
@@ -694,3 +694,41 @@ DoD:
 - Os itens 2 e 3 acima.
 - A base de FAQ é a do servidor de referência (busca por substring); não há RAG/embeddings (DESIGN §"FAQ/RAG" segue fora do escopo).
 - Sem segunda língua nem Pack para suporte: o comportamento só deve virar Pack quando um segundo agente de suporte o reutilizar (regra do DESIGN §1.3).
+
+
+## Phase 10 — Production hardening
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos). Novas invariantes **INV-043 a INV-047**.
+ROADMAP: eval harness completo; rollout/rollback; migration tooling; retenção/LGPD operacional; dashboards/SLOs; capacity/backpressure; backup/DR; auditoria administrativa.
+O que é código está testado; o que é prática operacional está em `docs/OPERATIONS.md` (runbook) e não é fingido como código.
+
+| Item do ROADMAP | Entregue | Prova |
+|---|---|---|
+| Eval harness completo | `EvalSuite` como dado (passos de modelo scriptados, tools por cassette, asserts sobre o que foi dito/proposto/**executado**: `executes`, `forbidden_capabilities`, `flow`, `handoff`, `max_llm_calls`), `EvalHarness` (engine novo por cenário sobre o pipeline real), `python -m conversation_agent.app.evals` com exit code como gate, relatório com digest do agente e da suíte (`evidence()`) | `tests/evals/test_harness.py`; suíte do agente de suporte em `examples/support-agent/evals.yaml` |
+| Rollout/rollback | `ReleaseManager`: stable/canary (hash estável: alargar só adiciona)/withdrawn, evidência de eval do digest exato para promover, rollback sem evidência, histórico append-only + auditoria na mesma transação; o coordinator resolve a versão pelo release (`latest` quando não há release) | `tests/postgres/test_releases.py` |
+| Migration tooling | `Migrator`: forward-only, checksum por migration (drift para tudo), banco à frente do código recusado, apply serializado por advisory lock, cada migration atômica, `ensure_current` (guarda de startup e `/readyz`), `app.migrate status/check/apply [--dry-run]` | `tests/postgres/test_migrator.py` |
+| Retenção/LGPD operacional | `RetentionService`: política por tenant, `apply_retention` (com dry-run de contagens reais), `locate_contact`, `erase_contact` (some/pseudonimiza tudo que nomeia o contato, tombstones sem conteúdo onde dedupe/idempotência/ledger precisam da linha, recusa enquanto algo está em movimento) | `tests/postgres/test_retention.py` |
+| Dashboards/SLOs | `HealthSnapshot` (backlogs e idades das filas duráveis, relógio do banco), exporter Prometheus sem dependência, `/healthz` `/readyz` `/metrics`, `ops/slo.yaml` → regras de alerta + dashboard Grafana gerados, `app.ops check` falha se o gerado está velho, métrica inexistente ou runbook sem seção | `tests/postgres/test_ops.py` |
+| Capacity/backpressure | `RateLimiter` (memória e PostgreSQL compartilhado, relógio do banco), admissão no webhook: limite por contato (429) e backlog do inbox (503) com `Retry-After` ANTES de persistir/reconhecer; `RateLimitedToolProvider` por (tenant, conexão) | `tests/postgres/test_backpressure.py` |
+| Backup/DR | `verify_integrity` (10 invariantes verificáveis por consulta; só lê), `app.integrity`, procedimento de restore e o que um restore NÃO pode saber (janela de idempotência do gateway) em `docs/OPERATIONS.md` | `tests/postgres/test_ops.py` (cada corrupção achada pela sua checagem) |
+| Auditoria administrativa | `admin_audit` append-only por trigger, só identificadores/contagens (chaves de conteúdo proibidas, redaction, referência não reversível da pessoa); publicar agente, release, ownership, política/execução de retenção, erasure | `tests/postgres/test_admin_audit.py` |
+
+### Decisões da Fase 10
+
+1. **Sinais de saúde = backlog e idade das filas no banco**, não instrumentação no caminho quente: toda a espera do sistema é uma tabela, qualquer worker responde o mesmo, e a idade do mais velho é o que denuncia worker morto, lease preso ou gateway recusando.
+2. **Backpressure recusa ANTES de persistir/reconhecer** (INV-046): para um canal at-least-once isso custa latência, nunca dado; só mensagens novas do usuário são recusadas, eventos de status/exclusão sempre passam. Um limite de tool recusa antes de enviar: escrita negada é não-execução conhecida, não `unknown`.
+3. **Rollback não é "apagar a versão"**: a versão sai de circulação (withdrawn) para sempre, conversas ociosas nela saem no próximo turno, as com fluxo/confirmação pendente terminam onde começaram (INV-028 vence).
+4. **Erasure é conservadora e explícita**: bloqueadores são nomeados (`turn_in_progress`, `conversation_leased`, `external_effect_unfinished`, `message_awaiting_delivery`, `confirmation_pending`); `force` só cancela o que é cancelável (mensagens não entregues, confirmações pendentes), nunca um efeito externo inacabado.
+5. **Redigir, não apagar, quando outra garantia precisa da linha**: inbox (dedupe de redelivery), outbox (chave de idempotência), ledger (efeito externo) ficam como tombstones sem conteúdo nem identificador.
+6. **Migração forward-only**: sem scripts "down"; voltar = restore ou migration nova (expand/contract). O código recusa rodar em schema à frente ou com drift.
+7. **O artefato operacional é gerado de uma fonte**: `ops/slo.yaml` → alertas e dashboard; um teste prova que não há deriva nem alerta sem métrica/runbook.
+
+### Débitos conhecidos (Fase 10)
+
+- **Auditoria de ownership não é atômica** com a mudança (o commit sob lease acontece antes de gravar a trilha; falha de gravação aparece alto mas não desfaz). As operações PostgreSQL próprias (release, retenção, política) gravam a trilha na mesma transação.
+- **O harness roda offline** (modelo scriptado + cassettes): não mede qualidade de linguagem de um LLM real; não há LLM-judge nem modo `record` na CLI (a biblioteca grava cassettes, falta o comando).
+- **Release é por agente/tenant, sem associação automática canal→agente** e sem janela de observação automática do canary (a decisão de alargar/recuar é do operador, guiada pelos SLOs).
+- **Retention não cobre `trace_retention`/`memory_retention`** (não há traces nem memória de longo prazo persistidos) e a retenção de estado da conversa só zera o histórico (a linha de ownership/pin permanece).
+- **Métricas de tool e circuito continuam em memória por processo** (o exporter expõe as de um `InMemoryToolMetrics`); agregação entre processos é do Prometheus (scrape de cada instância).
+- **Backup/DR é procedimento, não automação**: o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. Não há rehearsal automatizado de restore no CI.
+- Achados da Fase 9 ainda abertos: slot de texto livre engole perguntas; não existe pedido direto de atendente humano pelo contato.
