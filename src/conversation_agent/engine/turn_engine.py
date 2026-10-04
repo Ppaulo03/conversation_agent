@@ -97,6 +97,11 @@ class TurnEngine:
     def agent(self) -> AgentDefinition:
         return self._agent
 
+    @property
+    def agent_ref(self) -> tuple[str, str]:
+        """(agent_id, version) this engine runs: what logs and usage records are labelled with."""
+        return self._compiled.agent_id, self._compiled.version
+
     def attach_confirmation(self, stage: ConfirmationStage) -> None:
         """Enable the protected-action confirmation stage (needs the ledger executor)."""
         if stage.compiled.digest != self._compiled.digest or (

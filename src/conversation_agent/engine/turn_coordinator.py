@@ -47,6 +47,7 @@ from conversation_agent.core.models.runtime import (
     Ownership,
     ToolInvocation,
 )
+from conversation_agent.core.observability import bind, conversation_ref
 from conversation_agent.core.redaction import redact
 from conversation_agent.core.versioning import Version
 from conversation_agent.engine.heartbeat import LeaseHandle
@@ -204,7 +205,23 @@ class TurnCoordinator:
             await uow.commit()
         if opened is None:
             return "none"
+        with bind(
+            tenant_id=fence.tenant_id,
+            conversation_ref=conversation_ref(fence.tenant_id, fence.conversation_id),
+            channel_id=opened.identity.channel_id,
+            turn_id=opened.turn_id,
+            component="coordinator",
+        ):
+            return await self._run_opened_turn(handle, fence, stored, pending, opened)
 
+    async def _run_opened_turn(
+        self,
+        handle: LeaseHandle,
+        fence: FenceToken,
+        stored: StoredConversation,
+        pending: PendingAction | None,
+        opened: OpenedTurn,
+    ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         journal = self._journal_factory(fence)
         if opened.system_only:  # a timer, not the contact: policy-gated, never an agent turn
             await self._proactive_turn(fence, journal, opened, stored)
@@ -221,8 +238,24 @@ class TurnCoordinator:
                 engine = self._engine_factory(fence, journal)
         except (AgentVersionUnavailableError, AgentMismatchError, RegistryIntegrityError) as exc:
             # Never run a conversation on a version it was not pinned to: wait for an operator.
-            log.error("ALERT agent not runnable, turn left open: %s", redact(str(exc)))
+            log.error(
+                "turn.agent_not_runnable",
+                extra={"fields": {"alert": True, "reason": redact(str(exc))}},
+            )
             return "retry"
+        agent_id, agent_version = engine.agent_ref
+        with bind(agent_id=agent_id, agent_version=agent_version):
+            return await self._drive_turn(handle, fence, stored, pending, opened, engine)
+
+    async def _drive_turn(
+        self,
+        handle: LeaseHandle,
+        fence: FenceToken,
+        stored: StoredConversation,
+        pending: PendingAction | None,
+        opened: OpenedTurn,
+        engine: TurnEngine,
+    ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         try:
             outcome = await engine.process_turn(
                 opened.identity,
@@ -245,7 +278,10 @@ class TurnCoordinator:
             handle.acknowledge_cancel()
             return "cancelled"
         except JournalDivergenceError as exc:
-            log.error("ALERT journal divergence, turn failed closed: %s", redact(str(exc)))
+            log.error(
+                "turn.journal_divergence",
+                extra={"fields": {"alert": True, "reason": redact(str(exc))}},
+            )
             await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
             return "completed"
         except ToolResultPendingError:
@@ -256,10 +292,15 @@ class TurnCoordinator:
                 await uow.commit()
             if failures >= self._max_attempts:
                 log.error(
-                    "ALERT turn %s failed after %s attempts: %s",
-                    opened.turn_id,
-                    failures,
-                    redact(str(exc)),
+                    "turn.failed_permanently",
+                    extra={
+                        "fields": {
+                            "alert": True,
+                            "attempts": failures,
+                            "error": type(exc).__name__,
+                            "reason": redact(str(exc)),
+                        }
+                    },
                 )
                 await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
                 return "completed"
@@ -412,7 +453,7 @@ class TurnCoordinator:
                 await uow.state.save(state, last_event_at=None)  # the contact did not write
                 await uow.outbox.add(self._outbound(opened, opened.user_text))
             else:
-                log.info("proactive message %s not sent: %s", opened.turn_id, verdict["reason"])
+                log.info("proactive.not_sent", extra={"fields": {"reason": str(verdict["reason"])}})
             await uow.turns.complete(opened.turn_id)
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()

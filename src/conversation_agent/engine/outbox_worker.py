@@ -9,13 +9,17 @@ reconciler instead of being re-sent blindly.
 
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
+from conversation_agent.core.observability import bind
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.outbox import OutboxStore
 from conversation_agent.ports.sender import MessageSender
+
+log = logging.getLogger(__name__)
 
 
 class OutboxWorker:
@@ -45,24 +49,42 @@ class OutboxWorker:
     async def run_once(self, limit: int = 20) -> int:
         messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl)
         for message in messages:
-            if await self._past_the_horizon(message):
-                # Another attempt may already have reached the channel and its dedupe memory
-                # may be fading: ask, do not resend (reconciliation decides).
-                await self._outbox.record_result(
-                    message,
-                    self._owner,
-                    SendResult(status=OutboxStatus.UNKNOWN),
-                    self._retry_after,
-                )
-                continue
-            try:
-                result = await self._sender.send(message)
-            except Exception:
-                # The request may have reached the channel: unknown, never "failed, resend".
-                result = SendResult(status=OutboxStatus.UNKNOWN)
-            await self._faults.hit("C08_during_outbox_send")  # sent, not yet recorded
-            await self._outbox.record_result(message, self._owner, result, self._retry_after)
+            with bind(
+                tenant_id=message.tenant_id, outbox_id=message.outbox_id, component="outbox_worker"
+            ):
+                await self._deliver(message)
         return len(messages)
+
+    async def _deliver(self, message: OutboundMessage) -> None:
+        if await self._past_the_horizon(message):
+            # Another attempt may already have reached the channel and its dedupe memory
+            # may be fading: ask, do not resend (reconciliation decides).
+            log.warning(
+                "outbox.past_horizon_not_resent", extra={"fields": {"attempts": message.attempts}}
+            )
+            await self._outbox.record_result(
+                message, self._owner, SendResult(status=OutboxStatus.UNKNOWN), self._retry_after
+            )
+            return
+        try:
+            result = await self._sender.send(message)
+        except Exception as exc:
+            # The request may have reached the channel: unknown, never "failed, resend".
+            log.warning("outbox.send_raised", extra={"fields": {"error": type(exc).__name__}})
+            result = SendResult(status=OutboxStatus.UNKNOWN)
+        await self._faults.hit("C08_during_outbox_send")  # sent, not yet recorded
+        if result.status in (OutboxStatus.UNKNOWN, OutboxStatus.FAILED):
+            log.warning(
+                "outbox.send_not_confirmed",
+                extra={
+                    "fields": {
+                        "status": result.status.value,
+                        "retryable": result.retryable,
+                        "attempts": message.attempts,
+                    }
+                },
+            )
+        await self._outbox.record_result(message, self._owner, result, self._retry_after)
 
     async def _past_the_horizon(self, message: OutboundMessage) -> bool:
         if self._horizon is None or self._coordination is None:

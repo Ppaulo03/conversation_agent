@@ -33,6 +33,7 @@ from conversation_agent.adapters.senders.relayplane import result_from_gateway
 from conversation_agent.core.errors import ConversationIdentityConflictError, SecretNotFoundError
 from conversation_agent.core.models.media import MAX_MEDIA_ITEMS, MediaReference
 from conversation_agent.core.models.runtime import InboundEvent
+from conversation_agent.core.observability import bind
 from conversation_agent.ports.admission import AdmissionControl
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.inbox import InboxStore
@@ -145,14 +146,23 @@ class RelayPlaneWebhook:
             return WebhookResponse(400, {"error": "tenant_mismatch"})
         if subscription.instance_ids and envelope.instance_id not in subscription.instance_ids:
             return WebhookResponse(200, {"status": "ignored", "reason": "instance_not_subscribed"})
-        try:
-            return await self._dispatch(subscription, envelope)
-        except ConversationIdentityConflictError:
-            return WebhookResponse(409, {"error": "conversation_identity_conflict"})
-        except Exception:
-            # Not persisted -> NOT acknowledged: the gateway will deliver it again.
-            log.exception("event %s could not be applied", envelope.event_id)
-            return WebhookResponse(503, {"error": "storage_unavailable"})
+        with bind(
+            tenant_id=subscription.tenant_id,
+            channel_id=envelope.instance_id,
+            event_id=envelope.event_id,
+            component="webhook",
+        ):
+            try:
+                return await self._dispatch(subscription, envelope)
+            except ConversationIdentityConflictError:
+                log.warning("webhook.conversation_identity_conflict")
+                return WebhookResponse(409, {"error": "conversation_identity_conflict"})
+            except Exception:
+                # Not persisted -> NOT acknowledged: the gateway will deliver it again.
+                log.exception(
+                    "webhook.not_applied", extra={"fields": {"event_type": envelope.event_type}}
+                )
+                return WebhookResponse(503, {"error": "storage_unavailable"})
 
     # ------------------------------------------------------------------ events
 
@@ -171,7 +181,8 @@ class RelayPlaneWebhook:
             return WebhookResponse(200, {"status": "applied", "withdrawn": withdrawn})
         if event.event_type == "instance.status_changed":
             log.warning(
-                "gateway instance %s status: %s", event.instance_id, event.payload.get("status")
+                "webhook.gateway_instance_status",
+                extra={"fields": {"status": str(event.payload.get("status"))}},
             )
         return WebhookResponse(200, {"status": "ignored"})  # acknowledged, never retried
 
@@ -271,7 +282,10 @@ class RelayPlaneWebhook:
         try:
             secret = (await self._secrets.get(sub.tenant_id, sub.secret_ref)).reveal()
         except SecretNotFoundError:
-            log.error("webhook secret for %s is not configured", sub.subscription_id)
+            log.error(
+                "webhook.secret_not_configured",
+                extra={"fields": {"alert": True, "subscription": sub.subscription_id}},
+            )
             return WebhookResponse(503, {"error": "signature_not_configurable"})
         expected = hmac.new(secret.encode(), str(timestamp).encode() + b"." + body, hashlib.sha256)
         if not any(hmac.compare_digest(expected.hexdigest(), c) for c in candidates):

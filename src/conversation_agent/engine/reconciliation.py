@@ -16,6 +16,7 @@ superseded by whoever claims next, and its late writes are refused.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from datetime import timedelta
 from typing import Any
@@ -35,6 +36,7 @@ from conversation_agent.core.models.runtime import (
     ToolInvocation,
 )
 from conversation_agent.core.models.tooling import ToolError, ToolResult
+from conversation_agent.core.observability import bind
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.side_effects import to_tool_result
 from conversation_agent.ports.coordination import CoordinationClock
@@ -45,6 +47,9 @@ from conversation_agent.ports.scheduler import Scheduler
 from conversation_agent.tools.mapping import apply_mapping
 
 RECONCILE_EVENT = "reconcile"
+
+
+log = logging.getLogger(__name__)
 
 
 def reconcile_key(invocation_id: str) -> str:
@@ -92,18 +97,34 @@ class ReconciliationWorker:
         for invocation, claim in await self._ledger.claim_reconciliation(
             self._owner, limit, self._ttl, agent_id=self._agent_id
         ):
-            await self._faults.hit("C11_during_reconciliation")  # claimed, nothing persisted yet
-            result, handoff = await self._resolve(invocation)
-            try:
-                final = await self._ledger.finalize_reconciliation(
-                    invocation.tenant_id, invocation.invocation_id, claim, result, handoff=handoff
-                )
-            except ExecutionFencingError:
-                continue  # superseded by a newer claim: whoever holds it decides
-            if final.status is InvocationStatus.UNKNOWN:
-                await self._schedule_retry(final)
-            resolved.append(final)
+            with bind(
+                tenant_id=invocation.tenant_id,
+                invocation_id=invocation.invocation_id,
+                component="reconciliation",
+            ):
+                outcome = await self._reconcile_claimed(invocation, claim)
+            if outcome is not None:
+                resolved.append(outcome)
         return resolved
+
+    async def _reconcile_claimed(
+        self, invocation: ToolInvocation, claim: Any
+    ) -> ToolInvocation | None:
+        await self._faults.hit("C11_during_reconciliation")  # claimed, nothing persisted yet
+        result, handoff = await self._resolve(invocation)
+        try:
+            final = await self._ledger.finalize_reconciliation(
+                invocation.tenant_id, invocation.invocation_id, claim, result, handoff=handoff
+            )
+        except ExecutionFencingError:
+            return None  # superseded by a newer claim: whoever holds it decides
+        if final.status is InvocationStatus.UNKNOWN:
+            await self._schedule_retry(final)
+        log.info(
+            "reconciliation.resolved",
+            extra={"fields": {"status": final.status.value, "handoff": handoff}},
+        )
+        return final
 
     async def _schedule_retry(self, invocation: ToolInvocation) -> None:
         await self._scheduler.schedule(

@@ -22,6 +22,7 @@ from datetime import timedelta
 
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
+from conversation_agent.core.observability import bind
 from conversation_agent.ports.channel_lookup import MessageLookup
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.outbox import OutboxStore
@@ -65,6 +66,12 @@ class OutboxReconciler:
         )
 
     async def _reconcile(self, message: OutboundMessage) -> None:
+        with bind(
+            tenant_id=message.tenant_id, outbox_id=message.outbox_id, component="outbox_reconciler"
+        ):
+            await self._reconcile_one(message)
+
+    async def _reconcile_one(self, message: OutboundMessage) -> None:
         if message.channel_message_id is None:
             age = (
                 (await self._coordination.now()) - message.first_sent_at
@@ -77,10 +84,9 @@ class OutboxReconciler:
                 )
                 return
             log.error(
-                "ALERT outbox %s has no gateway id and is past the idempotency window: not "
-                "resending (the key may be forgotten and the message duplicated)",
-                message.outbox_id,
-            )
+                "outbox.unproven_past_retention",
+                extra={"fields": {"alert": True, "attempts": message.attempts}},
+            )  # no gateway id and past the idempotency window: not resending (it could duplicate)
             await self._unproven(message, "UNPROVEN_PAST_RETENTION")
             return
         try:
@@ -90,9 +96,8 @@ class OutboxReconciler:
             return
         if found.status is OutboxStatus.UNKNOWN:
             log.error(
-                "ALERT outbox %s is UNKNOWN at the gateway: it needs a decision (resolve)",
-                message.outbox_id,
-            )
+                "outbox.gateway_unknown_needs_decision", extra={"fields": {"alert": True}}
+            )  # the gateway itself is unsure: a person resolves it
         await self._outbox.record_reconciliation(
             message,
             self._owner,
