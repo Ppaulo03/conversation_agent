@@ -269,6 +269,7 @@ class TurnEngine:
                     None,
                     None,
                     flows=flow_turn.flows,
+                    handoff=flow_turn.handoff,
                 )
 
         llm_calls = 0
@@ -385,6 +386,7 @@ class TurnEngine:
         reprompt_action_id: str | None,
         *,
         flows: tuple[FlowInstance, ...] | None = None,
+        handoff: bool = False,
     ) -> TurnOutcome:
         await cursor.step(
             JournalStepType.TURN_COMPLETED,
@@ -408,6 +410,7 @@ class TurnEngine:
             halted=halted,
             proposed=proposed,
             reprompt_action_id=reprompt_action_id,
+            handoff_requested=handoff,
         )
 
     def _history_messages(self, state: ConversationState) -> list[LLMMessage]:

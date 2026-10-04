@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5.5 — Fase 5 fechada, pronta para a borda (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 6 — RelayPlane + mídia + proativo (implementada contra um contrato assumido; aguardando revisão/merge). Próxima: Fase 7.
 
 ## Phase 1
 
@@ -532,3 +532,50 @@ Status: **PASS** (reproduzido antes de corrigir). Suíte completa verde.
 Registrado, sem mudança: `status_lookup` é hoje *lookup por `idempotency_key`* (não genérico: referência externa/negócio fica para a Fase 7);
 a compatibilidade SemVer é por igualdade de fingerprint (conservadora: adicionar campo opcional exige MAJOR) — direcionalidade fica para quando
 a ergonomia incomodar.
+
+
+## Phase 6 — RelayPlane + mídia + proativo
+
+Status: **PASS contra o contrato assumido** (`docs/RELAYPLANE_CONTRACT.md`). **Ressalva principal:** não havia especificação do RelayPlane real nem credenciais
+neste ambiente. Todo o borda foi construído e testado contra um **simulador** (`examples/reference-relayplane`) que implementa o contrato que o
+projeto assume; `tests/contracts/test_relayplane_live.py` (opt-in, `RELAYPLANE_*`) roda as mesmas verificações contra um gateway implantado e é o
+que fecha o item "contract test da janela `relayplane_idempotency_retention`" do ROADMAP — **ainda não foi executado contra o gateway real**.
+Novas invariantes **INV-034, INV-035, INV-036**.
+
+DoD (`ROADMAP.md` Fase 6):
+
+- [✓] webhook persiste antes de 2xx — `test_a_signed_message_is_persisted_before_the_2xx`, `test_nothing_is_acknowledged_that_was_not_persisted` (falha de persistência = 503, nunca 2xx), `test_a_redelivery_is_acknowledged_without_a_second_row`
+- [✓] HMAC — `test_unverifiable_requests_are_rejected_and_never_persisted` (segredo errado, sem header, malformado, replay antigo/futuro, corpo adulterado), `test_secret_rotation_accepts_either_signature`
+- [✓] outbound sai somente da outbox — `OutboxWorker` continua o único que importa `ports.sender` (teste de arquitetura); `RelayPlaneSender` implementa o mapeamento de status do DESIGN §40
+- [✓] HUMAN/HANDOFF_PENDING permanecem silenciosos — `test_a_conversation_the_bot_does_not_own_stores_context_and_says_nothing`, `test_a_human_owned_conversation_stays_silent_for_timers`
+- [✓] timers/proativos sobrevivem a restart — `test_a_timer_survives_a_restart_and_sends_exactly_one_message`, `test_a_timer_fired_twice_is_one_event_and_one_message`
+- [✓] `sender_retry_horizon <= relayplane_idempotency_retention` — `DeliveryPolicy` (validação) + `test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention`; comportamento: `test_the_sender_does_not_resend_blindly_past_the_retry_horizon`, `test_past_the_retention_an_absent_lookup_is_not_proof_*`
+- [✓] claim-check/mídia + Transcriber — `tests/engine/test_media.py`
+- [✓] channel policy, handoff de ownership — `tests/postgres/test_proactive.py`, `tests/postgres/test_handoff.py`
+- [ ] contract test contra o RelayPlane **real** — escrito, não executado (sem acesso)
+
+Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.py` (`MediaReference`, `Transcript`), migrations 0011 (outbox `first_sent_at`/`reconcile_attempts`)
+e 0012 (inbox `media`/`kind`), `adapters/senders/relayplane.py` (+`lookup`), `engine/outbox_reconciler.py`, `OutboxWorker` com horizonte,
+`adapters/relayplane/{webhook,asgi,subscriptions}.py`, `engine/media.py` + step journalado `MEDIA_NORMALIZED` + `ports/transcriber.py`
+(+ `FakeTranscriber`), `MediaTexts` no agente/manifest, `engine/proactive.py` (timer → evento de sistema) + `PROACTIVE_DECISION` no coordinator +
+`ports/channel_policy.py` + `ServiceWindowPolicy`, `engine/ownership.py` (`OwnershipService`), `Handoff` de Flow → `HANDOFF_PENDING` na mesma transação da resposta.
+
+### Decisões da Fase 6
+
+1. **A janela da idempotency key é premissa de segurança, não detalhe**: o sender não reenvia depois do horizonte; a reconciliação só reenvia com 404 dentro de `retention − margem`.
+2. **Tenant/canal do webhook vêm do cadastro da subscription**; o payload não escolhe.
+3. **Transcrição é I/O não determinístico → um step do journal** (replay reaproveita o texto); falha/vazio/grande demais viram uma linha de texto nomeada, nunca falha do turno.
+4. **O runtime só *nomeia* mídia que não lê** (imagem/vídeo/documento): nunca descreve o que não viu.
+5. **Proativo reentra pelo runtime** como evento `kind=system` deduplicado pela chave do timer, em turno próprio (nunca misturado com texto do contato); o `ChannelPolicy` decide e a decisão é journalada; **sem política configurada nada sai**; a mensagem proativa não atualiza `last_event_at` (não renova a janela do contato).
+6. **Regras de canal (janela de atendimento, horário de silêncio) vivem no adapter** `ServiceWindowPolicy`; o core não conhece WhatsApp.
+7. **Ownership só muda sob o lease** da conversa (`OwnershipService`) e, via Flow `Handoff`, na mesma transação que grava a resposta ("vou chamar um atendente" sai; depois, silêncio).
+
+### Débitos conhecidos (Fase 6)
+
+- **Contrato real do RelayPlane não verificado** (ver ressalva): formato do webhook, assinatura, `Idempotency-Key`, lookup e retenção são premissas documentadas.
+- Mensagens **template** (fora da janela de atendimento) não são enviadas: fora da janela a política nega; falta `template` em `OutboundMessage`/sender.
+- `defer` do `ChannelPolicy` (reagendar para depois do horário de silêncio) não existe: hoje é enviar ou descartar (journalado).
+- Transcriber real (STT) e *fetch* de mídia com proteção SSRF não foram implementados; só a porta, o fake e os limites (`max_media_bytes`).
+- `RelayPlaneSender` não faz pinning de IP/SSRF como o `HTTPToolProvider` (o destino é configuração do operador, não entrada do modelo).
+- Rate limit por contato/canal e backpressure do envio continuam para a Fase 10; delivery/read receipts não fazem parte da garantia mínima.
+- Ordenação de eventos do webhook é best effort (usa `sequence`/`occurred_at` do canal).

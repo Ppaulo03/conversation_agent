@@ -56,3 +56,6 @@ class TurnOutcome(_Frozen):
     # Protected actions proposed this turn (-> PendingAction + prompt) / re-asked this turn.
     proposed: tuple[ProposedAction, ...] = ()
     reprompt_action_id: str | None = None
+    # A Flow handed the conversation to a person: ownership moves to HANDOFF_PENDING in the SAME
+    # transaction that persists this reply.
+    handoff_requested: bool = False

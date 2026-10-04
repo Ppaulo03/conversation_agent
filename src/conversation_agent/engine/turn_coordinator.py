@@ -52,6 +52,7 @@ from conversation_agent.core.versioning import Version
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.channel_policy import ChannelPolicy
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.faults import FaultInjector
@@ -106,6 +107,7 @@ class TurnCoordinator:
         max_turn_attempts: int = 5,
         side_effect_notice: Callable[[list[ToolInvocation]], str | None] | None = None,
         confirmation_ttl: timedelta = timedelta(minutes=30),
+        channel_policy: ChannelPolicy | None = None,
         registry: AgentRegistry | None = None,
         agent_id: str | None = None,
         versioned_engine_factory: Callable[[FenceToken, TurnJournal, CompiledAgent], TurnEngine]
@@ -115,6 +117,7 @@ class TurnCoordinator:
             registry is not None and agent_id is None
         ):
             raise ValueError("registry, agent_id and versioned_engine_factory go together")
+        self._channel_policy = channel_policy
         self._registry = registry
         self._agent_id = agent_id
         self._versioned_engine_factory = versioned_engine_factory
@@ -200,6 +203,9 @@ class TurnCoordinator:
             return "none"
 
         journal = self._journal_factory(fence)
+        if opened.system_only:  # a timer, not the contact: policy-gated, never an agent turn
+            await self._proactive_turn(fence, journal, opened, stored)
+            return "completed"
         if stored.ownership is not Ownership.BOT:
             await self._record_silent_turn(fence, journal, opened, stored.state, stored.ownership)
             return "completed"
@@ -260,6 +266,8 @@ class TurnCoordinator:
         async with self._uows.begin(fence) as uow:
             await uow.state.save(outcome.state, last_event_at=opened.last_event_at)
             await self._persist_reply(uow, opened, outcome)
+            if outcome.handoff_requested:  # the reply and the ownership change are ONE decision
+                await uow.state.set_ownership(Ownership.HANDOFF_PENDING)
             await uow.turns.complete(opened.turn_id)
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()
@@ -349,6 +357,53 @@ class TurnCoordinator:
                 await uow.outbox.supersede(prompt.outbox_id)
         await uow.outbox.add(message)
         await uow.actions.set_prompt(action_id, message.outbox_id, new_attempt=new_attempt)
+
+    async def _proactive_turn(
+        self,
+        fence: FenceToken,
+        journal: TurnJournal,
+        opened: OpenedTurn,
+        stored: StoredConversation,
+    ) -> None:
+        """A runtime-originated message (DESIGN 28). The decision is journaled; nothing is sent
+        unless the conversation is the bot's AND the channel policy allows it (fail closed: no
+        policy configured means no proactive message). It never touches the contact's own
+        activity watermark, and a HUMAN conversation stays silent (INV-019)."""
+        cursor = TurnJournalCursor(journal, opened.turn_id)
+
+        async def decide() -> dict[str, object]:
+            if stored.ownership is not Ownership.BOT:
+                return {"send": False, "reason": f"OWNERSHIP_{stored.ownership.value}"}
+            if self._channel_policy is None:
+                return {"send": False, "reason": "NO_CHANNEL_POLICY"}
+            decision = await self._channel_policy.evaluate(
+                opened.identity,
+                now=self._clock.now(),
+                last_contact_event_at=stored.last_event_at,
+                kind="proactive",
+            )
+            return {"send": decision.allowed, "reason": decision.reason}
+
+        verdict = await cursor.step(
+            JournalStepType.PROACTIVE_DECISION, stable_hash(opened.user_text), decide
+        )
+        async with self._uows.begin(fence) as uow:
+            if verdict["send"]:
+                state = stored.state.model_copy(
+                    update={
+                        "history": (
+                            *stored.state.history,
+                            ConversationMessage(role="assistant", text=opened.user_text),
+                        )
+                    }
+                )
+                await uow.state.save(state, last_event_at=None)  # the contact did not write
+                await uow.outbox.add(self._outbound(opened, opened.user_text))
+            else:
+                log.info("proactive message %s not sent: %s", opened.turn_id, verdict["reason"])
+            await uow.turns.complete(opened.turn_id)
+            await uow.inbox.consume(opened.event_ids)
+            await uow.commit()
 
     async def _record_silent_turn(
         self,

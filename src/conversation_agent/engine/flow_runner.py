@@ -81,6 +81,7 @@ class FlowReply:
     reply: str
     flows: tuple[FlowInstance, ...]
     proposed: bool = False  # a protected action was proposed: the engine adds the question
+    handoff: bool = False  # the flow gave up: the conversation goes to a person (after this reply)
 
 
 @dataclass(frozen=True)
@@ -90,6 +91,7 @@ class _Moved:
     flows: tuple[FlowInstance, ...]
     reply: str
     proposed: bool = False
+    handoff: bool = False
 
 
 @dataclass(frozen=True)
@@ -99,6 +101,7 @@ class _Next:
         str | None
     )  # None: keep going (an Ask transition) with `preface` in front of the question
     preface: str
+    handoff: bool = False
 
 
 _EXTRACT_SYSTEM = (
@@ -213,7 +216,7 @@ class FlowRunner:
                 stack = list(flows)
                 moved = self._transition(transition, stack, definition, active, "")
                 if moved.reply is not None:
-                    return FlowReply(moved.reply, moved.flows)
+                    return FlowReply(moved.reply, moved.flows, handoff=moved.handoff)
                 if isinstance(transition, Ask):  # ask for the slot again, flow stays open
                     asked = self._ask(stack, definition, transition.slot, moved.preface)
                     return FlowReply(asked.reply, asked.flows)
@@ -298,7 +301,7 @@ class FlowRunner:
             )
         flows[-1] = flows[-1].model_copy(update={"unclear_count": 0})
         moved = await self._advance(flows, definition, turn, preface)
-        return FlowReply(moved.reply, moved.flows, moved.proposed)
+        return FlowReply(moved.reply, moved.flows, moved.proposed, moved.handoff)
 
     async def _interpret(
         self, definition: FlowDefinition, instance: FlowInstance, turn: FlowTurn, today: date
@@ -439,7 +442,7 @@ class FlowRunner:
                         transition = step.on.get(status, step.default)
                     moved = self._transition(transition, flows, definition, instance, preface)
                     if moved.reply is not None:
-                        return _Moved(moved.flows, moved.reply)
+                        return _Moved(moved.flows, moved.reply, handoff=moved.handoff)
                     flows, preface, settled = list(moved.flows), moved.preface, True
                     break
                 if isinstance(step, Choose):
@@ -484,7 +487,7 @@ class FlowRunner:
         if not items:
             moved = self._transition(step.empty, flows, definition, instance, preface)
             if moved.reply is not None:
-                return _Moved(moved.flows, moved.reply)
+                return _Moved(moved.flows, moved.reply, handoff=moved.handoff)
             return list(moved.flows), moved.preface
         options = build_options(items, step.value_field, self._agent.timezone)
         if instance.slots.get(step.into) in [o["value"] for o in options]:
@@ -537,7 +540,7 @@ class FlowRunner:
             return _Next(tuple(flows), spoken, "")
         if isinstance(transition, Handoff):
             done = self._finish(flows, spoken)
-            return _Next(done.flows, done.reply, "")
+            return _Next(done.flows, done.reply, "", handoff=True)
         assert isinstance(transition, Ask)
         slots = {k: v for k, v in instance.slots.items() if k != transition.slot}
         for derived in definition.slot(transition.slot).invalidates:

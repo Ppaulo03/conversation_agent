@@ -33,6 +33,7 @@ from conversation_agent.engine.outbox_reconciler import OutboxReconciler
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.policy_rules import PolicyContext
+from conversation_agent.engine.proactive import PROACTIVE_EVENT, ProactiveEventHandler
 from conversation_agent.engine.reconciliation import RECONCILE_EVENT, ReconciliationWorker
 from conversation_agent.engine.scheduler_worker import SchedulerWorker
 from conversation_agent.engine.side_effects import LedgerToolExecutor
@@ -123,12 +124,14 @@ class World:
         providers: Mapping[str, ToolProvider] | None = None,
         policy: PolicyGate | None = None,
         flows: bool = False,
+        agent: Any = None,
     ) -> CapabilityPipeline:
         pipeline, _, _ = build_pipeline(
             api_base_url="http://unused",
             providers=providers or {"http": self.tools},
             policy=policy,
             flows=flows,
+            agent=agent,
         )
         return pipeline
 
@@ -145,6 +148,8 @@ class World:
         max_reprompts: int = 3,
         flows: bool = False,
         transcriber: Any = None,
+        channel_policy: Any = None,
+        agent: Any = None,
         **kwargs: Any,
     ) -> TurnCoordinator:
         injector = faults or NoFaults()
@@ -169,7 +174,7 @@ class World:
                 )
                 return made[0]
 
-            shared = pipeline or self.pipeline(providers, policy, flows)
+            shared = pipeline or self.pipeline(providers, policy, flows, agent)
             engine, _, _ = build_engine(
                 llm,
                 api_base_url="http://unused",
@@ -207,6 +212,7 @@ class World:
             faults=injector,
             lease_ttl=TTL,
             heartbeat_interval_seconds=heartbeat_interval_seconds,
+            channel_policy=channel_policy,
             **kwargs,
         )
 
@@ -326,6 +332,14 @@ class World:
             return None
 
         return SchedulerWorker(self.scheduler, {RECONCILE_EVENT: wake}, owner=owner, claim_ttl=TTL)
+
+    def proactive_worker(self, owner: str) -> SchedulerWorker:
+        return SchedulerWorker(
+            self.scheduler,
+            {PROACTIVE_EVENT: ProactiveEventHandler(self.inbox, self.clock)},
+            owner=owner,
+            claim_ttl=TTL,
+        )
 
     def outbox_worker(
         self,

@@ -95,6 +95,16 @@ class _StateRepo(_Repo):
             agent_version=r["agent_version"],
         )
 
+    async def set_ownership(self, ownership: Ownership) -> None:
+        await self._c.execute(
+            "UPDATE conversation_states SET ownership=$3, updated_at=$4 "
+            "WHERE tenant_id=$1 AND conversation_id=$2",
+            self._f.tenant_id,
+            self._f.conversation_id,
+            ownership.value,
+            self._clock.now(),
+        )
+
     async def pin_agent(self, agent_id: str, version: str) -> None:
         await self._c.execute(
             "UPDATE conversation_states SET agent_id=$3, agent_version=$4 "
