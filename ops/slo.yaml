@@ -159,3 +159,17 @@ slos:
     for: 30m
     severity: warning
     runbook: handoff-rate
+
+  - name: LLMBudgetNearLimit
+    description: "A tenant has used more than 80 % of an LLM budget."
+    expr: max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) > 0.8
+    for: 5m
+    severity: warning
+    runbook: llm-budget
+
+  - name: LLMBudgetExceeded
+    description: "A tenant has exhausted an LLM budget."
+    expr: max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) >= 1
+    for: 1m
+    severity: critical
+    runbook: llm-budget

@@ -466,6 +466,54 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 20,
+      "type": "timeseries",
+      "title": "LLMBudgetNearLimit",
+      "description": "A tenant has used more than 80 % of an LLM budget.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 63
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) > 0.8",
+          "legendFormat": "LLMBudgetNearLimit",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "LLMBudgetExceeded",
+      "description": "A tenant has exhausted an LLM budget.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 70
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) >= 1",
+          "legendFormat": "LLMBudgetExceeded",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

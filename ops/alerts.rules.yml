@@ -161,3 +161,19 @@ groups:
     annotations:
       summary: More than 30 % of turns of an agent version hand the conversation to a person.
       runbook: docs/OPERATIONS.md#handoff-rate
+  - alert: ConversationAgentLLMBudgetNearLimit
+    expr: max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) > 0.8
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: A tenant has used more than 80 % of an LLM budget.
+      runbook: docs/OPERATIONS.md#llm-budget
+  - alert: ConversationAgentLLMBudgetExceeded
+    expr: max by (tenant_id, period, unit) (conversation_agent_llm_budget_used_ratio) >= 1
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: A tenant has exhausted an LLM budget.
+      runbook: docs/OPERATIONS.md#llm-budget

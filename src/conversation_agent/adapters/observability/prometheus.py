@@ -10,6 +10,7 @@ from conversation_agent.adapters.llm.metrics import Histogram, InMemoryLLMMetric
 from conversation_agent.adapters.observability.runtime_metrics import InMemoryRuntimeMetrics
 from conversation_agent.adapters.postgres.health import HealthSnapshot
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
+from conversation_agent.core.llm_budget import BudgetStatus
 
 PREFIX = "conversation_agent_"
 
@@ -94,6 +95,8 @@ RUNTIME_METRICS = {
     TURN_PROPOSALS,
     HANDOFFS,
 }
+BUDGET_RATIO = "llm_budget_used_ratio"
+BUDGET_METRICS = {BUDGET_RATIO}
 LLM_METRICS = {
     LLM_CALLS,
     LLM_TOKENS,
@@ -119,6 +122,7 @@ def available_metrics() -> set[str]:
     names = {PREFIX + g for g in GAUGES}
     names |= {PREFIX + c for c in COUNTERS} | {PREFIX + f"{TOOL_DURATION}_max"}
     names |= {PREFIX + m for m in LLM_METRICS} | {PREFIX + m for m in RUNTIME_METRICS}
+    names |= {PREFIX + m for m in BUDGET_METRICS}
     return names
 
 
@@ -162,6 +166,18 @@ def _render_runtime(rt: InMemoryRuntimeMetrics) -> list[str]:
             lines.append(
                 f"{PREFIX}{name}{_labels(agent_id=agent_id, agent_version=version)} {count}"
             )
+    return lines
+
+
+def _render_budgets(budgets: list[BudgetStatus]) -> list[str]:
+    lines = [
+        f"# HELP {PREFIX}{BUDGET_RATIO} Share of an LLM budget used (1 = exhausted).",
+        f"# TYPE {PREFIX}{BUDGET_RATIO} gauge",
+    ]
+    for status in sorted(budgets, key=lambda s: s.tenant_id):
+        for line in status.lines:
+            labels = _labels(tenant_id=status.tenant_id, period=line.period, unit=line.unit)
+            lines.append(f"{PREFIX}{BUDGET_RATIO}{labels} {line.ratio:.6g}")
     return lines
 
 
@@ -219,6 +235,7 @@ def render(
     tools: InMemoryToolMetrics | None = None,
     llm: InMemoryLLMMetrics | None = None,
     runtime: InMemoryRuntimeMetrics | None = None,
+    budgets: list[BudgetStatus] | None = None,
 ) -> str:
     lines: list[str] = []
     values = snapshot.as_dict()
@@ -264,6 +281,8 @@ def render(
             lines.append(f"{PREFIX}{CIRCUIT_COUNTER}{labels} {count}")
     if runtime is not None:
         lines += _render_runtime(runtime)
+    if budgets is not None:
+        lines += _render_budgets(budgets)
     if llm is not None:
         lines += _render_llm(llm)
     return "\n".join(lines) + "\n"

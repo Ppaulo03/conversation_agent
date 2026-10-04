@@ -103,6 +103,17 @@ Many turns end by handing the conversation to a person. Compare by `agent_versio
 agent give up more is a regression the eval suite did not cover; if it is a tool failing, the flows' fallback
 is a handoff, so look at *tool-failures* first.
 
+### llm-budget
+A tenant is near or over its LLM budget (`LLMBudget`: tokens and/or USD, per day and per month; set with
+`PostgresBudgetStore.set`, audited). With `on_exceed: alert` (the default) nothing is refused: decide
+whether to raise the budget or find the cause (`app.usage --tenant T --by agent_version,purpose`: a loop,
+a release that got dearer, a flood from one contact). With `on_exceed: refuse_new` the edge already refuses
+NEW user messages with 503 and a `Retry-After` until the period resets; messages in flight finish. Mind that
+a gateway gives up redelivering after its own retry budget, so a long refusal can lose messages: it
+protects the bill, not the customer. USD figures are a lower bound while models are unpriced
+(*llm-unpriced*). The budget is evaluated from the usage ledger and cached for seconds: a tenant can
+overshoot by what it spends inside one cache window.
+
 ## Releases
 
 Publishing a version makes it available; a **release** decides who gets it (`ReleaseManager`).

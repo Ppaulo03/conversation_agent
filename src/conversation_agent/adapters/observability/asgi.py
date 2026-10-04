@@ -21,6 +21,7 @@ from conversation_agent.adapters.postgres.health import collect_health
 from conversation_agent.adapters.postgres.migrator import Migrator
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 from conversation_agent.core.errors import ConversationAgentError
+from conversation_agent.core.llm_budget import BudgetStatus
 
 Scope = MutableMapping[str, Any]
 Receive = Callable[[], Awaitable[MutableMapping[str, Any]]]
@@ -32,6 +33,7 @@ def ops_app(
     tools: InMemoryToolMetrics | None = None,
     llm: InMemoryLLMMetrics | None = None,
     runtime: InMemoryRuntimeMetrics | None = None,
+    budgets: Callable[[], Awaitable[list[BudgetStatus]]] | None = None,
 ) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
     async def respond(send: Send, status: int, body: bytes, content_type: str) -> None:
         await send(
@@ -69,7 +71,8 @@ def ops_app(
                 await json_response(send, 200, {"status": "ready"})
         elif path == "/metrics":
             try:
-                body = render(await collect_health(db), tools, llm, runtime).encode()
+                standing = await budgets() if budgets is not None else None
+                body = render(await collect_health(db), tools, llm, runtime, standing).encode()
             except Exception:
                 await json_response(send, 503, {"error": "metrics_unavailable"})
             else:
