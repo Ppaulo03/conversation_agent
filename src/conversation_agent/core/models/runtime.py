@@ -81,6 +81,7 @@ class InboundEvent(_Frozen):
     received_at: AwareDatetime
     source_sequence: int | None = None
     media: tuple[MediaReference, ...] = ()  # claim-check references, never bytes
+    provider_message_id: str | None = None  # the provider's id of the message this event carries
     # "system": a runtime-originated event (e.g. a proactive timer), not something the contact wrote
     kind: Literal["user", "system"] = "user"
     # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
@@ -152,6 +153,7 @@ class OutboundMessage(_Frozen):
     # in which a resend can still rely on the channel's idempotency memory.
     first_sent_at: AwareDatetime | None = None
     reconcile_attempts: int = 0
+    channel_message_id: str | None = None  # the GATEWAY's id for this send (not the provider's)
 
 
 class SendResult(_Frozen):
@@ -163,6 +165,7 @@ class SendResult(_Frozen):
     # channel gives no comparable timestamp: the runtime never substitutes its local time.
     provider_accepted_at: AwareDatetime | None = None
     retryable: bool = False
+    channel_message_id: str | None = None  # the gateway's id, known as soon as it took the send
 
     @model_validator(mode="after")
     def _only_sender_outcomes(self) -> SendResult:

@@ -41,7 +41,7 @@ def webhook_app(webhook: RelayPlaneWebhook) -> Callable[[Scope, Receive, Send], 
         while True:
             message = await receive()
             body += message.get("body", b"")
-            if len(body) > webhook._max_body:
+            if len(body) > webhook.max_body_bytes:
                 await respond(send, 413, {"error": "payload_too_large"})
                 return
             if not message.get("more_body", False):

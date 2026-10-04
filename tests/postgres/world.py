@@ -360,10 +360,20 @@ class World:
         )
 
     def outbox_reconciler(
-        self, owner: str, channel: Any, policy: DeliveryPolicy
+        self,
+        owner: str,
+        channel: Any,
+        policy: DeliveryPolicy,
+        poll_after: timedelta = timedelta(seconds=30),
     ) -> OutboxReconciler:
         return OutboxReconciler(
-            self.outbox, channel, self.coord, policy, owner=owner, claim_ttl=TTL
+            self.outbox,
+            channel,
+            self.coord,
+            policy,
+            owner=owner,
+            claim_ttl=TTL,
+            poll_after=poll_after,
         )
 
     async def count(self, table: str, where: str = "true") -> int:

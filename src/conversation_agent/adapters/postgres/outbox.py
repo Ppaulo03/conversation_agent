@@ -79,6 +79,7 @@ class PostgresOutboxStore:
             UPDATE outbox_messages
                SET status = $4, provider_message_id = COALESCE($5, provider_message_id),
                    provider_accepted_at = COALESCE($6, provider_accepted_at),
+                   channel_message_id = COALESCE($9, channel_message_id),
                    available_at = $7, claim_owner = NULL, claim_expires_at = NULL, updated_at = $8
              WHERE tenant_id = $1 AND outbox_id = $2 AND status = 'SENDING' AND claim_owner = $3
             """,
@@ -90,10 +91,11 @@ class PostgresOutboxStore:
             accepted_at,
             available_at,
             now,
+            result.channel_message_id,
         )
 
-    async def claim_unknown(
-        self, owner: str, limit: int, claim_ttl: timedelta
+    async def claim_unsettled(
+        self, owner: str, limit: int, claim_ttl: timedelta, poll_after: timedelta
     ) -> list[OutboundMessage]:
         now = await self._time.now()
         rows = await self._db.pool.fetch(
@@ -101,6 +103,7 @@ class PostgresOutboxStore:
             WITH picked AS (
                 SELECT tenant_id, outbox_id FROM outbox_messages
                  WHERE (status = 'UNKNOWN' AND available_at <= $1)
+                    OR (status = 'QUEUED' AND updated_at <= $5)
                     OR (status = 'RECONCILING' AND claim_expires_at <= $1)
                  ORDER BY updated_at
                  LIMIT $2 FOR UPDATE SKIP LOCKED
@@ -116,6 +119,7 @@ class PostgresOutboxStore:
             limit,
             owner,
             now + claim_ttl,
+            now - poll_after,
         )
         return [outbox_from_row(r) for r in rows]
 
@@ -131,7 +135,10 @@ class PostgresOutboxStore:
     ) -> None:
         now = await self._time.now()
         if found is not None:
-            status, available_at = found.status, now
+            status = found.status
+            # UNKNOWN/QUEUED are asked again later, not in a tight loop
+            waiting = status in (OutboxStatus.UNKNOWN, OutboxStatus.QUEUED)
+            available_at = now + retry_after if waiting else now
             accepted_at = found.provider_accepted_at if status is OutboxStatus.ACCEPTED else None
             provider_id = found.provider_message_id
         elif resend:
@@ -148,6 +155,7 @@ class PostgresOutboxStore:
             UPDATE outbox_messages
                SET status = $4, provider_message_id = COALESCE($5, provider_message_id),
                    provider_accepted_at = COALESCE($6, provider_accepted_at),
+                   channel_message_id = COALESCE($10, channel_message_id),
                    available_at = $7, claim_owner = NULL, claim_expires_at = NULL,
                    reconcile_attempts = reconcile_attempts + 1,
                    last_error = COALESCE($8, last_error), updated_at = $9
@@ -163,7 +171,36 @@ class PostgresOutboxStore:
             available_at,
             note,
             now,
+            found.channel_message_id if found is not None else None,
         )
+
+    async def apply_channel_status(
+        self, tenant_id: str, channel_message_id: str, result: SendResult
+    ) -> bool:
+        """Forward-only: the row may be waiting (SENDING/QUEUED/UNKNOWN/RECONCILING/PENDING); a
+        final ACCEPTED or FAILED is never rewritten and a late QUEUED never regresses anything."""
+        now = await self._time.now()
+        accepted_at = (
+            result.provider_accepted_at if result.status is OutboxStatus.ACCEPTED else None
+        )
+        updated = await self._db.pool.execute(
+            """
+            UPDATE outbox_messages
+               SET status = $3, provider_message_id = COALESCE($4, provider_message_id),
+                   provider_accepted_at = COALESCE($5, provider_accepted_at),
+                   claim_owner = NULL, claim_expires_at = NULL, updated_at = $6
+             WHERE tenant_id = $1 AND channel_message_id = $2
+               AND status IN ('SENDING', 'QUEUED', 'UNKNOWN', 'RECONCILING', 'PENDING')
+               AND NOT ($3 = 'QUEUED' AND status IN ('QUEUED', 'UNKNOWN'))
+            """,
+            tenant_id,
+            channel_message_id,
+            result.status.value,
+            result.provider_message_id,
+            accepted_at,
+            now,
+        )
+        return not updated.endswith(" 0")
 
     async def get(self, tenant_id: str, outbox_id: str) -> OutboundMessage | None:
         r = await self._db.pool.fetchrow(

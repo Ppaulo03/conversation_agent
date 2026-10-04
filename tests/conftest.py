@@ -6,6 +6,7 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from relayplane_sim.main import create_app as create_relay_app
+from relayplane_sim.main import settle as relay_settle
 from scheduling_api.main import create_app
 from support.builders import NOW
 from support.server import LiveServer
@@ -49,7 +50,7 @@ def api(_live_api: tuple[LiveServer, object]) -> ApiHandle:
 
 
 RELAY_T0 = datetime(2026, 10, 5, 11, 0, tzinfo=UTC)  # 08:00 in Sao Paulo, like NOW
-RELAY_RETENTION = timedelta(hours=1)
+RELAY_RETENTION = timedelta(hours=24)  # the gateway's default IDEMPOTENCY_TTL
 
 
 class RelayHandle:
@@ -57,6 +58,7 @@ class RelayHandle:
 
     def __init__(self, server: LiveServer, app: object, clock: dict[str, datetime]) -> None:
         self.base_url = server.base_url
+        self.app = app
         self.state = app.state  # type: ignore[attr-defined]
         self._clock = clock
 
@@ -67,8 +69,13 @@ class RelayHandle:
         self._clock["now"] += delta
 
     @property
-    def deliveries(self) -> list[dict[str, object]]:
-        return list(self.state.deliveries)
+    def sent(self) -> list[dict[str, object]]:
+        """What the gateway really created (deduped), one entry per message."""
+        return list(self.state.sent)
+
+    def settle(self, message_id: str, status: str, provider_message_id: str | None = None) -> None:
+        """The provider reported what became of a message."""
+        relay_settle(self.app, message_id, status, provider_message_id=provider_message_id)  # type: ignore[arg-type]
 
 
 @pytest.fixture(scope="session")
@@ -89,8 +96,10 @@ def relay(_live_relay: tuple[LiveServer, object, dict[str, datetime]]) -> RelayH
     state = handle.state
     state.requests.clear()
     state.fault = None
-    state.queue_mode = False
+    state.auto_accept = False
     state.messages.clear()
     state.by_key.clear()
-    state.deliveries.clear()
+    state.sent.clear()
+    state.media.clear()
+    state.media_etag.clear()
     return handle

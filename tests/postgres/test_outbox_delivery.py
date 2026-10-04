@@ -1,6 +1,7 @@
-"""Outbound delivery over the gateway (INV-034): the sender stops re-sending before the gateway's
-idempotency memory fades, UNKNOWN rows are reconciled by asking the gateway, and absence proves
-nothing once the window has passed."""
+"""Outbound delivery over the gateway (INV-034), following its contract: a send is acknowledged
+as QUEUED with the gateway's own id; ACCEPTED (with the provider id and acceptance time) arrives
+later, by event or by asking; a resend of the SAME key is a replay inside the gateway's
+idempotency window and a possible duplicate outside it."""
 
 from __future__ import annotations
 
@@ -14,7 +15,7 @@ from conversation_agent.adapters.connections.static import StaticConnectionResol
 from conversation_agent.adapters.faults import ChaosFaults, SimulatedCrash
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response
 from conversation_agent.adapters.postgres.db import PostgresDatabase
-from conversation_agent.adapters.senders.relayplane import RelayPlaneSender
+from conversation_agent.adapters.senders.relayplane import RelayPlaneSender, result_from_gateway
 from conversation_agent.core.models.connections import ResolvedConnection
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboxStatus
@@ -42,6 +43,10 @@ def gateway(relay: RelayHandle) -> RelayPlaneSender:
     return RelayPlaneSender(StaticConnectionResolver({"relayplane": connection}))
 
 
+def reconciler(world: World, relay: RelayHandle, owner: str = "r"):  # type: ignore[no-untyped-def]
+    return world.outbox_reconciler(owner, gateway(relay), POLICY, poll_after=timedelta(0))
+
+
 async def make_message(world: World) -> None:
     await world.inbox.insert_if_absent(event("e1", clock=world.clock))
     await world.coordinator("c", FakeLLM([text_response("Olá!")])).run_once()
@@ -59,83 +64,161 @@ def tick(world: World, relay: RelayHandle, delta: timedelta) -> None:
     relay.advance(delta)
 
 
-async def test_delivery_over_the_gateway_records_the_channels_acceptance_time(
-    world: World, relay: RelayHandle
-) -> None:
-    relay.set_time(RELAY_T0 + timedelta(hours=3))  # the channel's own clock
-    await make_message(world)
-    assert await world.outbox_worker("s", sender=gateway(relay)).run_once() == 1
-    stored = await row(world)
-    assert stored["status"] == OutboxStatus.ACCEPTED
-    assert stored["provider_accepted_at"] == RELAY_T0 + timedelta(hours=3)  # never our own clock
-    assert len(relay.deliveries) == 1 and stored["first_sent_at"] is not None
+async def send(world: World, relay: RelayHandle, owner: str = "s", **kw: object) -> None:
+    await world.outbox_worker(owner, sender=gateway(relay), **kw).run_once()  # type: ignore[arg-type]
 
 
-async def test_a_lost_answer_is_reconciled_by_lookup_without_a_second_delivery(
+async def test_a_send_is_queued_until_the_provider_reports_it_accepted(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
-    relay.state.fault = {"status_after_effect": 503}  # taken by the gateway, answer lost
-    await world.outbox_worker("s", sender=gateway(relay)).run_once()
-    assert (await row(world))["status"] == OutboxStatus.UNKNOWN and len(relay.deliveries) == 1
-
-    relay.state.fault = None
-    assert await world.outbox_reconciler("r", gateway(relay), POLICY).run_once() == 1
+    await send(world, relay)
     stored = await row(world)
-    assert stored["status"] == OutboxStatus.ACCEPTED and stored["reconcile_attempts"] == 1
-    assert len(relay.deliveries) == 1  # nothing was re-sent
+    assert stored["status"] == OutboxStatus.QUEUED  # accepted durably, NOT yet by the provider
+    assert stored["channel_message_id"] == "msg_1" and stored["provider_message_id"] is None
+    assert stored["first_sent_at"] is not None and len(relay.sent) == 1
 
 
-async def test_a_message_the_gateway_never_got_is_resent_with_the_same_key(
+async def test_the_accepted_event_gives_the_provider_id_and_the_channels_acceptance_time(
+    world: World, relay: RelayHandle
+) -> None:
+    await make_message(world)
+    await send(world, relay)
+    accepted_at = (RELAY_T0 + timedelta(hours=3)).isoformat()
+    applied = await world.outbox.apply_channel_status(
+        "tenant-1",
+        "msg_1",
+        result_from_gateway(
+            "ACCEPTED",
+            channel_message_id="msg_1",
+            provider_message_id="3EB0316FBDC6EC84F13164",
+            accepted_at=accepted_at,
+        ),  # type: ignore[arg-type]
+    )
+    stored = await row(world)
+    assert applied and stored["status"] == OutboxStatus.ACCEPTED
+    assert stored["provider_message_id"] == "3EB0316FBDC6EC84F13164"  # what a quoted reply carries
+    assert stored["provider_accepted_at"] == RELAY_T0 + timedelta(hours=3)  # the channel's clock
+
+
+async def test_status_only_moves_forward(world: World, relay: RelayHandle) -> None:
+    await make_message(world)
+    await send(world, relay)
+    accepted = result_from_gateway(
+        "ACCEPTED", channel_message_id="msg_1", provider_message_id="3EB1"
+    )
+    assert accepted is not None
+    await world.outbox.apply_channel_status("tenant-1", "msg_1", accepted)
+    for late in ("QUEUED", "FAILED"):  # a late or contradictory report after the final one
+        stale = result_from_gateway(late, channel_message_id="msg_1")
+        assert stale is not None
+        assert not await world.outbox.apply_channel_status("tenant-1", "msg_1", stale)
+    assert (await row(world))["status"] == OutboxStatus.ACCEPTED
+    queued = result_from_gateway("QUEUED", channel_message_id="msg_1")
+    assert queued is not None and not await world.outbox.apply_channel_status(
+        "tenant-9", "msg_1", queued
+    )
+
+
+async def test_a_lost_status_event_is_recovered_by_asking_the_gateway(
+    world: World, relay: RelayHandle
+) -> None:
+    await make_message(world)
+    await send(world, relay)
+    relay.settle("msg_1", "ACCEPTED", provider_message_id="3EBPOLL")  # the event never reached us
+    assert await reconciler(world, relay).run_once() == 1
+    stored = await row(world)
+    assert stored["status"] == OutboxStatus.ACCEPTED and stored["provider_message_id"] == "3EBPOLL"
+    assert len(relay.sent) == 1
+
+
+async def test_a_lost_response_is_resent_with_the_same_key_and_never_duplicates(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
     key = (await row(world))["idempotency_key"]
-    relay.state.fault = {"status": 503}  # refused before any effect, but the sender cannot know
-    await world.outbox_worker("s", sender=gateway(relay)).run_once()
-    assert (await row(world))["status"] == OutboxStatus.UNKNOWN and relay.deliveries == []
+    relay.state.fault = {"status_after_effect": 503}  # taken by the gateway, answer lost
+    await send(world, relay)
+    stored = await row(world)
+    assert stored["status"] == OutboxStatus.UNKNOWN and stored["channel_message_id"] is None
+    assert len(relay.sent) == 1
 
     relay.state.fault = None
-    await world.outbox_reconciler("r", gateway(relay), POLICY).run_once()  # 404: proven absent
+    await reconciler(world, relay).run_once()  # no gateway id yet, inside the window: resend
     assert (await row(world))["status"] == OutboxStatus.PENDING
-    await world.outbox_worker("s2", sender=gateway(relay)).run_once()
+    await send(world, relay, "s2")
     stored = await row(world)
-    assert stored["status"] == OutboxStatus.ACCEPTED and len(relay.deliveries) == 1
-    assert relay.deliveries[0]["idempotency_key"] == key  # the SAME key as the first attempt
+    assert stored["status"] == OutboxStatus.QUEUED and stored["channel_message_id"] == "msg_1"
+    assert len(relay.sent) == 1 and relay.sent[0]["idempotency_key"] == key  # a REPLAY
 
 
-async def test_an_unanswerable_lookup_proves_nothing_and_resends_nothing(
+async def test_a_send_the_gateway_never_got_is_created_by_the_resend(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
-    relay.state.fault = {"status": 503}
-    await world.outbox_worker("s", sender=gateway(relay)).run_once()
-    await world.outbox_reconciler("r", gateway(relay), POLICY).run_once()  # lookup also fails
+    relay.state.fault = {"status": 503}  # refused before any effect, but the sender cannot know
+    await send(world, relay)
+    assert (await row(world))["status"] == OutboxStatus.UNKNOWN and relay.sent == []
+    relay.state.fault = None
+    await reconciler(world, relay).run_once()
+    await send(world, relay, "s2")
+    assert (await row(world))["status"] == OutboxStatus.QUEUED and len(relay.sent) == 1
+
+
+async def test_an_unanswerable_status_query_proves_nothing_and_resends_nothing(
+    world: World, relay: RelayHandle
+) -> None:
+    await make_message(world)
+    await send(world, relay)
+    relay.state.fault = {"status": 503}  # asking also fails
+    await world.db.pool.execute(
+        "UPDATE outbox_messages SET updated_at = updated_at - interval '1 hour'"
+    )
+    await reconciler(world, relay).run_once()
     stored = await row(world)
     assert stored["status"] == OutboxStatus.UNKNOWN and stored["last_error"] == "LOOKUP_FAILED"
-    assert relay.deliveries == []
+    assert len(relay.sent) == 1
+
+
+async def test_a_gateway_unknown_waits_for_a_decision_and_is_never_guessed(
+    world: World, relay: RelayHandle
+) -> None:
+    await make_message(world)
+    await send(world, relay)
+    relay.settle("msg_1", "UNKNOWN")  # the gateway itself is unsure and holds the instance's queue
+    await reconciler(world, relay).run_once()
+    stored = await row(world)
+    assert stored["status"] == OutboxStatus.UNKNOWN
+    assert stored["last_error"] == "CHANNEL_UNKNOWN_NEEDS_DECISION"
+    assert len(relay.sent) == 1  # nothing was resent behind the gateway's back
 
 
 async def test_the_sender_does_not_resend_blindly_past_the_retry_horizon(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
-    with pytest.raises(SimulatedCrash):  # delivered to the gateway, never recorded
+    with pytest.raises(SimulatedCrash):  # sent, the answer never recorded
         await world.outbox_worker(
             "s1", ChaosFaults("C08_during_outbox_send"), sender=gateway(relay)
         ).run_once()
-    assert len(relay.deliveries) == 1
+    assert len(relay.sent) == 1
 
     tick(world, relay, TTL + timedelta(minutes=11))  # claim expired AND past the 10 min horizon
-    worker = world.outbox_worker("s2", sender=gateway(relay), retry_horizon=POLICY.retry_horizon)
-    assert await worker.run_once() == 1
+    assert (
+        await world.outbox_worker(
+            "s2", sender=gateway(relay), retry_horizon=POLICY.retry_horizon
+        ).run_once()
+        == 1
+    )
     stored = await row(world)
     assert stored["status"] == OutboxStatus.UNKNOWN and stored["attempts"] == 2
     assert len(relay.state.requests) == 1  # the second attempt NEVER reached the wire
 
-    await world.outbox_reconciler("r", gateway(relay), POLICY).run_once()
-    assert (await row(world))["status"] == OutboxStatus.ACCEPTED  # the gateway still remembers
-    assert len(relay.deliveries) == 1
+    await reconciler(world, relay).run_once()  # still inside the gateway's 24 h window: replay
+    await send(world, relay, "s3", retry_horizon=POLICY.retry_horizon)
+    stored = await row(world)
+    assert stored["status"] == OutboxStatus.QUEUED and stored["channel_message_id"] == "msg_1"
+    assert len(relay.sent) == 1  # the same message, found again by key
 
 
 async def test_inside_the_horizon_a_stale_row_is_still_retried_with_the_same_key(
@@ -147,39 +230,33 @@ async def test_inside_the_horizon_a_stale_row_is_still_retried_with_the_same_key
             "s1", ChaosFaults("C08_during_outbox_send"), sender=gateway(relay)
         ).run_once()
     tick(world, relay, TTL + timedelta(seconds=1))  # well inside the horizon
-    worker = world.outbox_worker("s2", sender=gateway(relay), retry_horizon=POLICY.retry_horizon)
-    assert await worker.run_once() == 1
-    assert (await row(world))["status"] == OutboxStatus.ACCEPTED
-    assert len(relay.deliveries) == 1  # deduped by the key: the retry was safe
+    await send(world, relay, "s2", retry_horizon=POLICY.retry_horizon)
+    assert (await row(world))["status"] == OutboxStatus.QUEUED and len(relay.sent) == 1
 
 
-async def test_past_the_retention_an_absent_lookup_is_not_proof_and_nothing_is_resent(
+async def test_past_the_gateways_retention_no_resend_is_safe_and_nothing_is_resent(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
     relay.state.fault = {"status_after_effect": 503}
-    await world.outbox_worker("s", sender=gateway(relay)).run_once()
-    assert len(relay.deliveries) == 1
+    await send(world, relay)
+    assert len(relay.sent) == 1 and (await row(world))["channel_message_id"] is None
 
     relay.state.fault = None
     tick(world, relay, RELAY_RETENTION + timedelta(minutes=10))  # the gateway forgot the key
-    await world.outbox_reconciler("r", gateway(relay), POLICY).run_once()
+    await reconciler(world, relay).run_once()
     stored = await row(world)
     assert stored["status"] == OutboxStatus.UNKNOWN
     assert stored["last_error"] == "UNPROVEN_PAST_RETENTION"
-    assert len(relay.deliveries) == 1  # a resend would have duplicated the message
+    assert len(relay.sent) == 1  # a resend would have created a second message
 
 
-async def test_two_reconcilers_cannot_both_resolve_the_same_row(
+async def test_two_reconcilers_cannot_both_claim_the_same_row(
     world: World, relay: RelayHandle
 ) -> None:
     await make_message(world)
     relay.state.fault = {"status_after_effect": 503}
-    await world.outbox_worker("s", sender=gateway(relay)).run_once()
-    relay.state.fault = None
-    first = world.outbox_reconciler("r1", gateway(relay), POLICY)
-    second = world.outbox_reconciler("r2", gateway(relay), POLICY)
-    claimed_a = await world.outbox.claim_unknown("r1", 10, TTL)
-    claimed_b = await world.outbox.claim_unknown("r2", 10, TTL)
-    assert len(claimed_a) == 1 and claimed_b == []  # the claim is exclusive
-    assert first is not second
+    await send(world, relay)
+    first = await world.outbox.claim_unsettled("r1", 10, TTL, timedelta(0))
+    second = await world.outbox.claim_unsettled("r2", 10, TTL, timedelta(0))
+    assert len(first) == 1 and second == []  # the claim is exclusive

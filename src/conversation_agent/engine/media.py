@@ -24,7 +24,11 @@ class MediaNormalizer:
         texts = self._agent.media
         out: list[str] = []
         for item in media:
-            if item.size_bytes is not None and item.size_bytes > self._agent.max_media_bytes:
+            if item.status == "failed":
+                out.append(texts.unavailable)
+            elif item.status == "rejected":
+                out.append(texts.too_large if item.reason == "too_large" else texts.unsupported)
+            elif item.size_bytes is not None and item.size_bytes > self._agent.max_media_bytes:
                 out.append(texts.too_large)
             elif item.kind == "audio":
                 out.append(await self._audio(item, context))

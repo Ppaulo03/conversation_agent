@@ -46,6 +46,8 @@ class MediaTexts(BaseModel):
     video: str = "[video received]"
     document: str = "[document received: {name}]"
     too_large: str = "[media too large to process]"
+    unsupported: str = "[media of a type that is not supported]"
+    unavailable: str = "[media that could not be retrieved; ask the contact to send it again]"
 
 
 class AgentDefinition(BaseModel):
@@ -117,7 +119,7 @@ class AgentDefinition(BaseModel):
         m = self.media
         check_template("media.audio", m.audio, {"text"}, required=frozenset({"text"}))
         check_template("media.document", m.document, {"name"})
-        for label in ("audio_failed", "image", "video", "too_large"):
+        for label in ("audio_failed", "image", "video", "too_large", "unsupported", "unavailable"):
             check_template(f"media.{label}", getattr(m, label), set())
         check_template("confirmation.prompt", c.prompt, {"summary"}, required=summary)
         check_template("confirmation.reprompt", c.reprompt, {"summary"}, required=summary)

@@ -6,9 +6,9 @@ from conversation_agent.core.models.runtime import OutboundMessage, SendResult
 
 
 class MessageLookup(Protocol):
-    """Asks the channel what became of a message, by its idempotency key (reconciliation)."""
+    """Asks the channel what became of a send it already acknowledged (it gave us its id)."""
 
-    async def lookup(self, message: OutboundMessage) -> SendResult | None:
-        """The channel's answer, or None when it PROVES it has no such message. Raises when the
-        question itself could not be answered (that proves nothing)."""
+    async def lookup(self, message: OutboundMessage) -> SendResult:
+        """The channel's current answer for `message.channel_message_id`. Raises when the question
+        could not be answered: that proves nothing."""
         ...

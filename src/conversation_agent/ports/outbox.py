@@ -17,10 +17,20 @@ class OutboxStore(Protocol):
         self, message: OutboundMessage, owner: str, result: SendResult, retry_after: timedelta
     ) -> None: ...
 
-    async def claim_unknown(
-        self, owner: str, limit: int, claim_ttl: timedelta
+    async def claim_unsettled(
+        self, owner: str, limit: int, claim_ttl: timedelta, poll_after: timedelta
     ) -> list[OutboundMessage]:
-        """UNKNOWN rows due for reconciliation -> RECONCILING (claimed)."""
+        """Rows whose outcome the channel has not told us yet -> RECONCILING (claimed): UNKNOWN
+        ones that are due, and QUEUED ones that nobody has heard about for `poll_after` (the
+        status event may have been lost)."""
+        ...
+
+    async def apply_channel_status(
+        self, tenant_id: str, channel_message_id: str, result: SendResult
+    ) -> bool:
+        """The channel told us (event or poll) what became of a send. Only moves a row FORWARD
+        (a late QUEUED never undoes an ACCEPTED, a FAILED never undoes a final ACCEPTED).
+        Returns whether a row was updated."""
         ...
 
     async def record_reconciliation(

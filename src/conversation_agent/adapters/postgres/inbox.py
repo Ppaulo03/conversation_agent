@@ -26,8 +26,9 @@ class PostgresInboxStore:
                 """
                 INSERT INTO inbox_events (tenant_id, channel_id, event_id, conversation_id,
                     contact_id, session_id, source_sequence, occurred_at, received_at, text,
-                    provider_occurred_at, reply_to_provider_message_id, media, kind)
-                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)
+                    provider_occurred_at, reply_to_provider_message_id, media, kind,
+                    provider_message_id)
+                VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)
                 ON CONFLICT (tenant_id, channel_id, event_id) DO NOTHING
                 RETURNING id
                 """,
@@ -45,6 +46,7 @@ class PostgresInboxStore:
                 event.reply_to_provider_message_id,
                 [m.model_dump(mode="json") for m in event.media],
                 event.kind,
+                event.provider_message_id,
             )
             if row is not None and self._restart:
                 await conn.execute(
@@ -54,6 +56,18 @@ class PostgresInboxStore:
                     event.conversation_id,
                 )
         return row is not None
+
+    async def withdraw_unprocessed(
+        self, tenant_id: str, channel_id: str, provider_message_id: str
+    ) -> int:
+        status = await self._db.pool.execute(
+            "UPDATE inbox_events SET status='DEAD' WHERE tenant_id=$1 AND channel_id=$2 "
+            "AND provider_message_id=$3 AND status='READY'",
+            tenant_id,
+            channel_id,
+            provider_message_id,
+        )
+        return int(status.rsplit(" ", 1)[-1])
 
     async def list_ready_conversations(self, limit: int = 50) -> list[ConversationKey]:
         rows = await self._db.pool.fetch(

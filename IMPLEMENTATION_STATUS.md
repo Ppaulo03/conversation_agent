@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 6 — RelayPlane + mídia + proativo (implementada contra um contrato assumido; aguardando revisão/merge). Próxima: Fase 7.
+**Fase atual:** 6 — RelayPlane + mídia + proativo (implementada contra o contrato publicado do RelayPlane; aguardando revisão/merge). Próxima: Fase 7.
 
 ## Phase 1
 
@@ -536,46 +536,49 @@ a ergonomia incomodar.
 
 ## Phase 6 — RelayPlane + mídia + proativo
 
-Status: **PASS contra o contrato assumido** (`docs/RELAYPLANE_CONTRACT.md`). **Ressalva principal:** não havia especificação do RelayPlane real nem credenciais
-neste ambiente. Todo o borda foi construído e testado contra um **simulador** (`examples/reference-relayplane`) que implementa o contrato que o
-projeto assume; `tests/contracts/test_relayplane_live.py` (opt-in, `RELAYPLANE_*`) roda as mesmas verificações contra um gateway implantado e é o
-que fecha o item "contract test da janela `relayplane_idempotency_retention`" do ROADMAP — **ainda não foi executado contra o gateway real**.
+Status: **PASS contra o contrato publicado do RelayPlane** (`github.com/Ppaulo03/RelayPlane`, `docs/CONTRACT.md` no commit `880820a`; resumo em `docs/RELAYPLANE_CONTRACT.md`).
+A primeira versão da fase assumia um contrato inventado; ao ler o repositório real, quatro premissas de segurança estavam erradas e a borda foi refeita:
+não há consulta por chave (o replay da mesma chave é a primitiva); o envio é assíncrono (`202 QUEUED` + `message_id`, `provider_message_id`/`accepted_at` só no ACCEPTED);
+`UNKNOWN` do gateway exige `resolve` humano; assinatura/envelope/headers (`X-RelayPlane-*`, `v1=`) e mídia (claim-check com `READY/REJECTED/FAILED`) são outros.
+Tudo é testado contra um **simulador** (`examples/reference-relayplane`) fiel ao contrato publicado; `tests/contracts/test_relayplane_live.py` (opt-in, `RELAYPLANE_*`)
+confere replay de chave e retenção (`GET /limits`) contra um gateway implantado — **ainda não executado** (sem credenciais neste ambiente).
 Novas invariantes **INV-034, INV-035, INV-036**.
 
 DoD (`ROADMAP.md` Fase 6):
 
-- [✓] webhook persiste antes de 2xx — `test_a_signed_message_is_persisted_before_the_2xx`, `test_nothing_is_acknowledged_that_was_not_persisted` (falha de persistência = 503, nunca 2xx), `test_a_redelivery_is_acknowledged_without_a_second_row`
-- [✓] HMAC — `test_unverifiable_requests_are_rejected_and_never_persisted` (segredo errado, sem header, malformado, replay antigo/futuro, corpo adulterado), `test_secret_rotation_accepts_either_signature`
-- [✓] outbound sai somente da outbox — `OutboxWorker` continua o único que importa `ports.sender` (teste de arquitetura); `RelayPlaneSender` implementa o mapeamento de status do DESIGN §40
-- [✓] HUMAN/HANDOFF_PENDING permanecem silenciosos — `test_a_conversation_the_bot_does_not_own_stores_context_and_says_nothing`, `test_a_human_owned_conversation_stays_silent_for_timers`
+- [✓] webhook persiste antes de 2xx — `test_a_signed_message_is_persisted_before_the_2xx`, `test_nothing_is_acknowledged_that_was_not_persisted` (503, nunca 2xx), `test_a_redelivery_is_acknowledged_without_a_second_row`
+- [✓] HMAC — `test_unverifiable_requests_are_rejected_and_never_persisted`, `test_secret_rotation_accepts_either_signature`, `test_the_event_id_header_must_agree_with_the_signed_body`
+- [✓] outbound sai somente da outbox — `OutboxWorker` é o único que importa `ports.sender` (teste de arquitetura); mapeamento de status em `result_from_gateway`
+- [✓] HUMAN/HANDOFF_PENDING silenciosos — `test_a_conversation_the_bot_does_not_own_stores_context_and_says_nothing`, `test_a_human_owned_conversation_stays_silent_for_timers`
 - [✓] timers/proativos sobrevivem a restart — `test_a_timer_survives_a_restart_and_sends_exactly_one_message`, `test_a_timer_fired_twice_is_one_event_and_one_message`
-- [✓] `sender_retry_horizon <= relayplane_idempotency_retention` — `DeliveryPolicy` (validação) + `test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention`; comportamento: `test_the_sender_does_not_resend_blindly_past_the_retry_horizon`, `test_past_the_retention_an_absent_lookup_is_not_proof_*`
-- [✓] claim-check/mídia + Transcriber — `tests/engine/test_media.py`
+- [✓] `sender_retry_horizon <= idempotency_retention` — `DeliveryPolicy` + `test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention`, `test_the_delivery_policy_is_checked_against_what_the_gateway_reports` (lê `/limits`); comportamento: `test_the_sender_does_not_resend_blindly_past_the_retry_horizon`, `test_past_the_gateways_retention_no_resend_is_safe_and_nothing_is_resent`, `test_after_its_retention_the_gateway_forgets_the_key_and_a_resend_duplicates` (por que o horizonte existe)
+- [✓] claim-check/mídia + Transcriber — `tests/engine/test_media.py`, `tests/contracts/test_relayplane_media.py`, `test_media_arrives_as_a_reference_with_what_the_gateway_made_of_it`
 - [✓] channel policy, handoff de ownership — `tests/postgres/test_proactive.py`, `tests/postgres/test_handoff.py`
-- [ ] contract test contra o RelayPlane **real** — escrito, não executado (sem acesso)
+- [ ] contract test contra o RelayPlane **real** — escrito (`test_relayplane_live.py`), não executado
 
-Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.py` (`MediaReference`, `Transcript`), migrations 0011 (outbox `first_sent_at`/`reconcile_attempts`)
-e 0012 (inbox `media`/`kind`), `adapters/senders/relayplane.py` (+`lookup`), `engine/outbox_reconciler.py`, `OutboxWorker` com horizonte,
-`adapters/relayplane/{webhook,asgi,subscriptions}.py`, `engine/media.py` + step journalado `MEDIA_NORMALIZED` + `ports/transcriber.py`
-(+ `FakeTranscriber`), `MediaTexts` no agente/manifest, `engine/proactive.py` (timer → evento de sistema) + `PROACTIVE_DECISION` no coordinator +
-`ports/channel_policy.py` + `ServiceWindowPolicy`, `engine/ownership.py` (`OwnershipService`), `Handoff` de Flow → `HANDOFF_PENDING` na mesma transação da resposta.
+Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.py`, migrations 0011 (outbox `first_sent_at`/`reconcile_attempts`), 0012 (inbox `media`/`kind`) e 0013
+(`outbox.channel_message_id`, `inbox.provider_message_id`), `adapters/senders/relayplane.py` (`send`/`lookup`/`resolve`/`delivery_policy`), `engine/outbox_reconciler.py`
+(`claim_unsettled`), `OutboxWorker` com horizonte, `adapters/relayplane/{webhook,asgi,subscriptions,media}.py` (`message.received`, `message.outbound_status`, `message.deleted`),
+`engine/media.py` + step `MEDIA_NORMALIZED` + `ports/transcriber.py` (+ fake), `engine/proactive.py` + `PROACTIVE_DECISION` + `ports/channel_policy.py` + `ServiceWindowPolicy`,
+`engine/ownership.py`, `Handoff` de Flow → `HANDOFF_PENDING` na mesma transação.
 
 ### Decisões da Fase 6
 
-1. **A janela da idempotency key é premissa de segurança, não detalhe**: o sender não reenvia depois do horizonte; a reconciliação só reenvia com 404 dentro de `retention − margem`.
-2. **Tenant/canal do webhook vêm do cadastro da subscription**; o payload não escolhe.
-3. **Transcrição é I/O não determinístico → um step do journal** (replay reaproveita o texto); falha/vazio/grande demais viram uma linha de texto nomeada, nunca falha do turno.
-4. **O runtime só *nomeia* mídia que não lê** (imagem/vídeo/documento): nunca descreve o que não viu.
-5. **Proativo reentra pelo runtime** como evento `kind=system` deduplicado pela chave do timer, em turno próprio (nunca misturado com texto do contato); o `ChannelPolicy` decide e a decisão é journalada; **sem política configurada nada sai**; a mensagem proativa não atualiza `last_event_at` (não renova a janela do contato).
-6. **Regras de canal (janela de atendimento, horário de silêncio) vivem no adapter** `ServiceWindowPolicy`; o core não conhece WhatsApp.
-7. **Ownership só muda sob o lease** da conversa (`OwnershipService`) e, via Flow `Handoff`, na mesma transação que grava a resposta ("vou chamar um atendente" sai; depois, silêncio).
+1. **A janela da idempotency key é premissa de segurança**: reenviar a MESMA linha só enquanto o gateway lembra a chave (`retry_horizon <= retenção`, retenção lida de `/limits`); depois disso nada é reenviado às cegas (INV-034).
+2. **Aceite ≠ entrega**: `QUEUED` guarda o `channel_message_id`; ACCEPTED (com `provider_message_id` e `accepted_at` do canal) chega por evento ou por consulta; o estado só avança.
+3. **`UNKNOWN` do gateway nunca é decidido pela automação** (`CHANNEL_UNKNOWN_NEEDS_DECISION`; `RelayPlaneSender.resolve` é ação de operador).
+4. **Tenant/instância do webhook vêm do cadastro da subscription**; o payload não escolhe; `schema_version` ≠ 1 é recusado.
+5. **Transcrição é um step do journal** (replay reaproveita); falha/vazio/grande demais/`REJECTED`/`FAILED` viram uma linha de texto nomeada, nunca falha do turno; o runtime só nomeia mídia que não lê.
+6. **Proativo reentra pelo runtime** como evento `kind=system` deduplicado pela chave do timer; `ChannelPolicy` decide e a decisão é journalada; sem política nada sai; não renova `last_event_at`.
+7. **Regras de canal (janela de atendimento, silêncio) vivem no adapter**; o RelayPlane não tem templates nem janela de 24h.
+8. **Ownership só muda sob o lease** da conversa; via Flow `Handoff`, na mesma transação da resposta.
+9. `message.deleted` retira (READY → DEAD) só o que ainda não foi consumido por um turno; grupos e edições `secretEncrypted` são reconhecidos e ignorados.
 
 ### Débitos conhecidos (Fase 6)
 
-- **Contrato real do RelayPlane não verificado** (ver ressalva): formato do webhook, assinatura, `Idempotency-Key`, lookup e retenção são premissas documentadas.
-- Mensagens **template** (fora da janela de atendimento) não são enviadas: fora da janela a política nega; falta `template` em `OutboundMessage`/sender.
-- `defer` do `ChannelPolicy` (reagendar para depois do horário de silêncio) não existe: hoje é enviar ou descartar (journalado).
-- Transcriber real (STT) e *fetch* de mídia com proteção SSRF não foram implementados; só a porta, o fake e os limites (`max_media_bytes`).
-- `RelayPlaneSender` não faz pinning de IP/SSRF como o `HTTPToolProvider` (o destino é configuração do operador, não entrada do modelo).
-- Rate limit por contato/canal e backpressure do envio continuam para a Fase 10; delivery/read receipts não fazem parte da garantia mínima.
-- Ordenação de eventos do webhook é best effort (usa `sequence`/`occurred_at` do canal).
+- Contrato real **não executado** contra um gateway implantado (só contra o simulador fiel ao repositório).
+- Sem detecção de lacuna em `sequence` (o gateway garante ordem sem lacunas; guardamos `source_sequence`, mas não alertamos), sem bootstrap/rotação automática de subscription e de `secret` (hoje `StaticSubscriptionResolver`).
+- Respostas citando (`reply_to`) o `provider_message_id` de um prompt nosso ainda não são usadas pelo runtime (a evidência já é gravada na outbox).
+- Mensagens **template** não existem (nem no RelayPlane): fora da janela a política nega. `defer` do `ChannelPolicy` não existe.
+- Transcriber real (STT) não implementado (porta + fake); o download de mídia é `RelayPlaneMediaFetcher` (limite de tamanho + checksum), sem pinning de IP/SSRF (destino é configuração do operador).
+- Rate limit/backpressure do envio ficam para a Fase 10; delivery/read receipts não fazem parte da garantia mínima.

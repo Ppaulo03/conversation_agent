@@ -1,59 +1,85 @@
-# Contrato assumido com o gateway de canal ("RelayPlane")
+# Contrato com o gateway de canal (RelayPlane)
 
-> **Isto NÃO é a especificação do fornecedor.** É o contrato que este projeto assume, escrito para
-> ser verificado. O simulador (`examples/reference-relayplane`) implementa exatamente isto, e
-> `tests/contracts/test_relayplane_live.py` roda as mesmas verificações contra um gateway real
-> (variáveis `RELAYPLANE_*`, ver abaixo). Qualquer divergência encontrada no gateway real é um
-> bug deste documento, não do gateway.
+> Fonte: o contrato **publicado** do RelayPlane (`github.com/Ppaulo03/RelayPlane`: `docs/CONTRACT.md`,
+> `docs/EVENTS.md`, `docs/openapi.yaml`, lido no commit `880820a`). Este documento resume só o que os
+> adaptadores do framework usam e o que a segurança da entrega assume. O simulador
+> (`examples/reference-relayplane`) implementa este recorte; `tests/contracts/test_relayplane_live.py`
+> (opt-in, `RELAYPLANE_*`) confere as premissas de segurança contra um gateway implantado.
+> Divergência entre este texto e o repositório do RelayPlane: vale o repositório.
 
-## Outbound
+## Outbound (assíncrono)
 
-`POST {base_url}/v1/messages`, header `Idempotency-Key: <outbox idempotency_key>`, corpo
-`{"channel_id", "to", "text"}` — idêntico em toda repetição técnica da mesma linha da outbox.
+`POST /api/v1/messages/send`, header `Idempotency-Key: <idempotency_key da linha da outbox>`, corpo
+`{"instance_id", "to", "type": "text", "payload": {"text"}}` — idêntico em toda repetição técnica da linha.
 
 | Resposta | Outbox | Observação |
 |---|---|---|
-| 200/202 `{id, status: "accepted", accepted_at}` | `ACCEPTED` | `accepted_at` é o relógio do **canal** (INV-026); sem ele, `NULL` |
-| 200/202 `{status: "queued"}` | `QUEUED` | não autoriza confirmação |
-| 408, 429 | `FAILED` (retryable) | o gateway não tomou a mensagem |
-| outros 4xx | `FAILED` (não retryable) | recusada |
-| 409 | `UNKNOWN` | chave em uso/reusada com outro corpo: nunca assumir |
+| `202 {message_id, status: QUEUED}` | `QUEUED` + `channel_message_id` | aceite **durável** no gateway; ainda não do provedor |
+| 429 | `FAILED` (retryable) | o gateway não tomou a mensagem |
+| 400/404/409/413/422 | `FAILED` (não retryable) | recusada (422 = mesma chave, outro corpo: bug nosso) |
 | 5xx, timeout, erro de rede, corpo ilegível, status desconhecido | `UNKNOWN` | pode ter sido aceita |
 
-`GET {base_url}/v1/messages?idempotency_key=K` → `200 {id, status, accepted_at}` ou `404`.
-`404` **só prova ausência dentro da janela de retenção** (abaixo).
+O resto chega depois, por evento `message.outbound_status` ou `GET /api/v1/messages/{id}`:
+`QUEUED/DISPATCHING → QUEUED`; `ACCEPTED/DELIVERED/READ → ACCEPTED` (agora sim com `provider_message_id`
+e `accepted_at`, relógio do **canal**, INV-026); `FAILED → FAILED`; `UNKNOWN → UNKNOWN`.
+O estado só avança (`apply_channel_status`); evento atrasado nunca regride a linha.
+
+**Não existe consulta por chave.** A primitiva segura de reconciliação é o próprio reenvio: a mesma
+chave dentro da retenção devolve a mesma mensagem (`Idempotent-Replayed: true`).
 
 ### Retenção da idempotency key (premissa de segurança)
 
-O gateway deduplica por `Idempotency-Key` por `relayplane_idempotency_retention`. Depois disso a chave
-é esquecida: reenviar duplicaria, e um `404` no lookup deixa de provar ausência.
+`GET /api/v1/limits → idempotency_retention_seconds` (padrão 24 h). Depois disso a chave é esquecida e
+reenviar **cria uma mensagem nova**.
 
 ```text
-sender_retry_horizon <= relayplane_idempotency_retention          (DeliveryPolicy valida)
+sender_retry_horizon <= idempotency_retention          (DeliveryPolicy valida; delivery_policy() lê /limits)
 ```
 
 - Dentro de `retry_horizon`: o sender reenvia a mesma linha com a mesma chave.
-- Passado o horizon: o sender **não** reenvia; a linha vira `UNKNOWN` e o reconciliador pergunta ao gateway.
-- Reconciliação: encontrada → registra; `404` com idade ≤ `retention − margem` → reenvio com a mesma chave;
-  `404` mais velho, ou erro no lookup → continua `UNKNOWN` (alerta); nunca reenvio cego.
+- Passado o horizon: o sender **não** envia; a linha vira `UNKNOWN` (sem chamada ao gateway).
+- Reconciliador: com `channel_message_id` → `GET` e aplica o status (linha `QUEUED` antiga é consultada);
+  sem id e dentro de `retenção − margem` → volta a `PENDING` (reenvio = replay seguro);
+  sem id e fora da janela → `UNPROVEN_PAST_RETENTION`, continua `UNKNOWN` (alerta, nunca reenvio cego);
+  erro no `GET` → `LOOKUP_FAILED`, nada é provado.
+- `UNKNOWN` **do gateway** exige decisão humana (`POST /messages/{id}/resolve`): `RelayPlaneSender.resolve`
+  existe para o operador, a automação nunca o chama (`CHANNEL_UNKNOWN_NEEDS_DECISION`).
 
 ## Inbound (webhook)
 
-`POST {nosso_endpoint}/webhooks/relayplane/{subscription_id}` — at-least-once.
+`POST {nosso_endpoint}/webhooks/relayplane/{subscription_id}` — at-least-once, sequência por
+(subscription, instância) sem lacunas.
 
-Assinatura: header `X-Relay-Signature: t=<unix>,v1=<hex>[,v1=<hex>...]`, `v1 = HMAC-SHA256(secret, "<t>.<corpo cru>")`.
-Vários `v1` permitem rotação de segredo. `t` fora de ±5 min é rejeitado (replay).
+Headers: `X-RelayPlane-Timestamp`, `X-RelayPlane-Signature: v1=<hex>[,v1=<hex>...]`
+(`HMAC-SHA256(secret, "<timestamp>.<corpo cru>")`; vários `v1` durante rotação), `X-RelayPlane-Event-Id`
+(deve coincidir com o `event_id` do corpo). Timestamp fora de ±5 min é rejeitado.
 
-Corpo (`message.received`): `id` (dedupe), `channel_id`, `conversation_id`, `contact_id`, `session_id?`,
-`occurred_at` (relógio do canal), `sequence?`, `reply_to?`, `text?`, `media[]` (referências:
-`media_id, kind, mime_type, size_bytes?, url?, sha256?, filename?`). Outros `type` são reconhecidos (200) e ignorados.
+Envelope: `schema_version` (só `1`; outro → 400), `event_id`, `sequence`, `event_type`, `tenant_id`,
+`instance_id`, `timestamp`, `payload`.
 
-Respostas: `200` aceito/duplicado/ignorado; `400` payload inválido; `401` assinatura; `404` subscription;
-`409` identidade de conversa conflitante; `413` corpo grande; `503` não persistiu (o gateway reentrega).
-**Nada é reconhecido antes de persistido.** Tenant e canal vêm do cadastro da subscription, nunca do corpo.
+| `event_type` | Efeito |
+|---|---|
+| `message.received` | `InboundEvent` no inbox (dedupe por `event_id`); conversa = `{instance_id}:{from}` |
+| `message.outbound_status` | status do que enviamos → outbox (só avança) |
+| `message.deleted` | retira do inbox o evento ainda não consumido por um turno (`READY → DEAD`) |
+| `message.status`, `instance.status_changed`, outros | reconhecidos (200) e ignorados |
+
+Fora de escopo, reconhecidos e ignorados: mensagens de grupo (`chat_id`) e edições `secretEncrypted`.
+Mídia chega como referência com status do gateway (`READY` / `REJECTED` / `FAILED`); bytes só por
+`GET /api/v1/media/{id}/content`, com `ETag` = sha256 verificado (`RelayPlaneMediaFetcher`).
+
+Respostas: `200` aceito/duplicado/ignorado; `400` envelope/payload inválido; `401` assinatura;
+`404` subscription; `409` identidade de conversa conflitante; `413` corpo grande; `503` não persistiu
+(o gateway reentrega). **Nada é reconhecido antes de persistido.** Nosso tenant vem do cadastro da
+subscription (`Subscription.tenant_id`), nunca do corpo; `relay_tenant_id`/`instance_ids` opcionais filtram.
+
+## O que o gateway NÃO oferece (e portanto não é prometido aqui)
+
+Templates / janela de 24 h (a política de serviço é nossa: `ChannelPolicy`), consulta por chave de
+idempotência, grupos.
 
 ## Variáveis do teste contra o gateway real
 
-`RELAYPLANE_BASE_URL`, `RELAYPLANE_TOKEN`, `RELAYPLANE_CHANNEL_ID`, `RELAYPLANE_TO`,
-`RELAYPLANE_IDEMPOTENCY_RETENTION_SECONDS`, `RELAYPLANE_RETRY_HORIZON_SECONDS` e (opcional, demorado)
-`RELAYPLANE_MEASURE_RETENTION=1`, que espera a janela e mede se a chave realmente foi esquecida.
+`RELAYPLANE_BASE_URL`, `RELAYPLANE_TOKEN`, `RELAYPLANE_CHANNEL_ID` (= `instance_id`), `RELAYPLANE_TO`,
+`RELAYPLANE_RETRY_HORIZON_SECONDS` e (opcional, demorado) `RELAYPLANE_MEASURE_RETENTION=1`, que espera a
+retenção reportada por `/limits` e confirma que a chave ainda é lembrada.

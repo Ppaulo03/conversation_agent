@@ -25,6 +25,12 @@ class MediaReference(BaseModel):
     url: str | None = Field(default=None, max_length=2000)  # a reference, never fetched here
     sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
     filename: str | None = Field(default=None, max_length=200)
+    seconds: int | None = Field(default=None, ge=0)  # audio/video duration, when the channel says
+    # What the channel did with the attachment BEFORE telling us about the message: only a `ready`
+    # one can be fetched. `rejected` (too large / type not allowed / unsupported) and `failed`
+    # (expired / download failed) are reported, never retried here.
+    status: Literal["ready", "rejected", "failed"] = "ready"
+    reason: str | None = Field(default=None, max_length=100)
 
 
 class Transcript(BaseModel):

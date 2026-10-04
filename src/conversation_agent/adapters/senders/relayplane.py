@@ -1,38 +1,71 @@
-"""MessageSender over the channel gateway ("RelayPlane"), see docs/RELAYPLANE_CONTRACT.md.
+"""MessageSender over the RelayPlane gateway (docs/RELAYPLANE_CONTRACT.md).
 
-- the row's `idempotency_key` travels as `Idempotency-Key`: a technical retry of the SAME row
-  reuses it (and the same body), a semantic re-prompt is a new row with a new key;
-- what the gateway answers maps to the outbox like this (DESIGN 40):
+A send is ASYNCHRONOUS: the gateway durably accepts it (202 QUEUED + its own `message_id`) and
+reports the rest later (`message.outbound_status` event, or `GET /messages/{id}`):
 
-      202/200 {status: accepted}  -> ACCEPTED   (+ the gateway's own `accepted_at`, INV-026)
-      202/200 {status: queued}    -> QUEUED
-      4xx (not 408/409/429)       -> FAILED, not retryable (the gateway refused it)
-      408/429                     -> FAILED, retryable (it did not take the message)
-      409 (key in flight/reused)  -> UNKNOWN (never assume)
-      5xx, timeout, network error, unreadable answer -> UNKNOWN (it may have been accepted)
+    POST /api/v1/messages/send  (Idempotency-Key = the outbox row's key)
+        202 {message_id, status: QUEUED}   -> QUEUED, `channel_message_id` recorded
+        429                                -> FAILED, retryable (it did not take the message)
+        400/404/409/413/422                -> FAILED, not retryable (it refused it)
+        5xx, timeout, network error, unreadable answer -> UNKNOWN
+    `UNKNOWN` from a transport problem is SAFE to retry with the same key while the gateway still
+    remembers it (`GET /limits` -> idempotency_retention_seconds): the reconciler does exactly that.
 
-- UNKNOWN is resolved by `lookup` (reconciliation), never by guessing.
+Gateway status -> outbox: QUEUED/DISPATCHING -> QUEUED; ACCEPTED/DELIVERED/READ -> ACCEPTED (with
+the provider's id and acceptance time, the evidence a quoted reply is matched against);
+FAILED -> FAILED; UNKNOWN -> UNKNOWN (the gateway wants a decision: `resolve`).
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import httpx
 
 from conversation_agent.core.errors import ConnectionNotFoundError, SecretNotFoundError
 from conversation_agent.core.models.connections import ResolvedConnection
+from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
 from conversation_agent.ports.connections import ConnectionResolver
 from conversation_agent.ports.secrets import SecretProvider
 
-_STATUS = {
-    "queued": OutboxStatus.QUEUED,
-    "accepted": OutboxStatus.ACCEPTED,
-    "failed": OutboxStatus.FAILED,
+STATUS_MAP: dict[str, OutboxStatus] = {
+    "QUEUED": OutboxStatus.QUEUED,
+    "DISPATCHING": OutboxStatus.QUEUED,
+    "ACCEPTED": OutboxStatus.ACCEPTED,
+    "DELIVERED": OutboxStatus.ACCEPTED,
+    "READ": OutboxStatus.ACCEPTED,
+    "FAILED": OutboxStatus.FAILED,
+    "UNKNOWN": OutboxStatus.UNKNOWN,
 }
 _UNKNOWN = SendResult(status=OutboxStatus.UNKNOWN)
+
+
+def result_from_gateway(
+    status: str,
+    *,
+    channel_message_id: str | None,
+    provider_message_id: str | None = None,
+    accepted_at: str | None = None,
+) -> SendResult | None:
+    """One mapping for every place the gateway tells us a status (response, GET, event)."""
+    mapped = STATUS_MAP.get(status.upper())
+    if mapped is None:
+        return None  # a status this build does not know is never assumed
+    parsed: datetime | None = None
+    if mapped is OutboxStatus.ACCEPTED and accepted_at:
+        try:
+            candidate = datetime.fromisoformat(accepted_at.replace("Z", "+00:00"))
+        except ValueError:
+            candidate = None
+        parsed = candidate if candidate is not None and candidate.tzinfo is not None else None
+    return SendResult(
+        status=mapped,
+        provider_message_id=provider_message_id or None,
+        provider_accepted_at=parsed,
+        channel_message_id=channel_message_id,
+    )
 
 
 class RelayPlaneSender:
@@ -43,13 +76,11 @@ class RelayPlaneSender:
         client: httpx.AsyncClient | None = None,
         *,
         connection_id: str = "relayplane",
-        messages_path: str = "/v1/messages",
     ) -> None:
         self._connections = connections
         self._secrets = secrets
         self._client = client or httpx.AsyncClient(follow_redirects=False)
         self._connection_id = connection_id
-        self._path = messages_path
 
     async def aclose(self) -> None:
         await self._client.aclose()
@@ -60,44 +91,96 @@ class RelayPlaneSender:
         prepared = await self._prepare(message.tenant_id)
         if isinstance(prepared, SendResult):
             return prepared  # nothing was sent
-        url, headers, timeout = prepared
+        base, headers, timeout = prepared
         body = {
-            "channel_id": message.channel_id,
+            "instance_id": message.channel_id,
             "to": message.contact_id,
-            "text": message.text,
-        }  # deterministic from the persisted row: identical on every retry
+            "type": "text",
+            "payload": {"text": message.text},
+        }  # deterministic from the persisted row: identical on every retry (same key, same body)
         try:
             response = await self._client.post(
-                url,
+                f"{base}/api/v1/messages/send",
                 json=body,
                 headers={**headers, "Idempotency-Key": message.idempotency_key},
                 timeout=timeout,
             )
         except httpx.RequestError:
-            return _UNKNOWN  # timeout/broken connection: the gateway may have the message
+            return _UNKNOWN  # timeout/broken connection: the gateway may have it (replay is safe)
         return self._interpret(response)
 
     # ------------------------------------------------------------------ lookup (reconciliation)
 
-    async def lookup(self, message: OutboundMessage) -> SendResult | None:
+    async def lookup(self, message: OutboundMessage) -> SendResult:
+        if message.channel_message_id is None:
+            raise RuntimeError("the gateway never gave an id for this message")
         prepared = await self._prepare(message.tenant_id)
         if isinstance(prepared, SendResult):
             raise RuntimeError("cannot ask the gateway: connection/credential unavailable")
-        url, headers, timeout = prepared
+        base, headers, timeout = prepared
         response = await self._client.get(
-            url,
-            params={"idempotency_key": message.idempotency_key},
+            f"{base}/api/v1/messages/{message.channel_message_id}", headers=headers, timeout=timeout
+        )
+        if response.status_code != 200:
+            raise RuntimeError(f"gateway answered {response.status_code} to a status query")
+        data = self._json(response)
+        if data is None:
+            raise RuntimeError("gateway status answer unreadable")
+        found = result_from_gateway(
+            str(data.get("status", "")),
+            channel_message_id=message.channel_message_id,
+            provider_message_id=_text(data.get("provider_message_id")),
+            accepted_at=_text(data.get("accepted_at")),
+        )
+        if found is None:
+            raise RuntimeError("gateway reported a status this build does not know")
+        return found
+
+    async def resolve(self, message: OutboundMessage, *, sent: bool) -> SendResult:
+        """OPERATOR action for a gateway-UNKNOWN send: record whether it really left. Resolving
+        the wrong way duplicates or loses the message: never call this from automation."""
+        prepared = await self._prepare(message.tenant_id)
+        if isinstance(prepared, SendResult) or message.channel_message_id is None:
+            raise RuntimeError("cannot resolve: connection unavailable or no gateway id")
+        base, headers, timeout = prepared
+        response = await self._client.post(
+            f"{base}/api/v1/messages/{message.channel_message_id}/resolve",
+            json={"outcome": "sent" if sent else "not_sent"},
             headers=headers,
             timeout=timeout,
         )
-        if response.status_code == 404:
-            return None  # the gateway PROVES it has no such message (inside its retention)
-        if response.status_code != 200:
-            raise RuntimeError(f"lookup answered {response.status_code}")
-        result = self._parse(response)
-        if result is None:
-            raise RuntimeError("lookup answer unreadable")
-        return result
+        data = self._json(response)
+        found = (
+            result_from_gateway(
+                str(data.get("status", "")),
+                channel_message_id=message.channel_message_id,
+                provider_message_id=_text(data.get("provider_message_id")),
+                accepted_at=_text(data.get("accepted_at")),
+            )
+            if response.status_code == 200 and data is not None
+            else None
+        )
+        if found is None:
+            raise RuntimeError(f"resolve answered {response.status_code}")
+        return found
+
+    # ------------------------------------------------------------------ startup check
+
+    async def delivery_policy(self, tenant_id: str, retry_horizon: timedelta) -> DeliveryPolicy:
+        """`sender_retry_horizon <= idempotency retention`, checked against what the DEPLOYED
+        gateway reports (`GET /limits`), not against a number someone typed."""
+        prepared = await self._prepare(tenant_id)
+        if isinstance(prepared, SendResult):
+            raise RuntimeError("cannot read the gateway limits: connection/credential unavailable")
+        base, headers, timeout = prepared
+        response = await self._client.get(f"{base}/api/v1/limits", headers=headers, timeout=timeout)
+        data = self._json(response) if response.status_code == 200 else None
+        seconds = data.get("idempotency_retention_seconds") if data else None
+        if not isinstance(seconds, int) or isinstance(seconds, bool) or seconds <= 0:
+            raise RuntimeError("the gateway did not report its idempotency retention")
+        return DeliveryPolicy(
+            idempotency_retention=timedelta(seconds=seconds), retry_horizon=retry_horizon
+        )
 
     # ------------------------------------------------------------------ internals
 
@@ -108,16 +191,16 @@ class RelayPlaneSender:
             connection = await self._connections.resolve(tenant_id, self._connection_id)
         except ConnectionNotFoundError:
             return SendResult(status=OutboxStatus.FAILED, retryable=True)
-        url = connection.base_url.rstrip("/") + self._path
-        if connection.tls_required and not url.startswith("https://"):
+        base = connection.base_url.rstrip("/")
+        if connection.tls_required and not base.startswith("https://"):
             return SendResult(status=OutboxStatus.FAILED, retryable=False)
         headers = {"Content-Type": "application/json"}
-        credential = await self._credential(connection, tenant_id)
-        if credential is None and connection.auth is not None:
-            return SendResult(status=OutboxStatus.FAILED, retryable=True)
-        if connection.auth is not None and credential is not None:
+        if connection.auth is not None:
+            credential = await self._credential(connection, tenant_id)
+            if credential is None:
+                return SendResult(status=OutboxStatus.FAILED, retryable=True)
             headers[connection.auth.header] = credential
-        return url, headers, httpx.Timeout(connection.max_timeout_seconds)
+        return base, headers, httpx.Timeout(connection.max_timeout_seconds)
 
     async def _credential(self, connection: ResolvedConnection, tenant_id: str) -> str | None:
         auth = connection.auth
@@ -132,38 +215,29 @@ class RelayPlaneSender:
     def _interpret(self, response: httpx.Response) -> SendResult:
         code = response.status_code
         if code in (200, 202):
-            return self._parse(response) or _UNKNOWN
-        if code in (408, 429):
+            data = self._json(response)
+            if data is None or not data.get("message_id"):
+                return _UNKNOWN
+            found = result_from_gateway(
+                str(data.get("status", "QUEUED")), channel_message_id=str(data["message_id"])
+            )
+            return found or _UNKNOWN
+        if code == 429:
             return SendResult(status=OutboxStatus.FAILED, retryable=True)
-        if code == 409 or code >= 500:
+        if code >= 500:
             return _UNKNOWN
         if 400 <= code < 500:
             return SendResult(status=OutboxStatus.FAILED, retryable=False)
         return _UNKNOWN
 
     @staticmethod
-    def _parse(response: httpx.Response) -> SendResult | None:
+    def _json(response: httpx.Response) -> dict[str, Any] | None:
         try:
-            data: Any = response.json()
+            data = response.json()
         except ValueError:
             return None
-        if not isinstance(data, dict):
-            return None
-        status = _STATUS.get(str(data.get("status", "")).lower())
-        if status is None:
-            return None
-        accepted_at: datetime | None = None
-        raw = data.get("accepted_at")
-        if status is OutboxStatus.ACCEPTED and isinstance(raw, str):
-            try:
-                parsed = datetime.fromisoformat(raw)
-            except ValueError:
-                parsed = None
-            accepted_at = parsed if parsed is not None and parsed.tzinfo is not None else None
-        provider_id = data.get("id")
-        return SendResult(
-            status=status,
-            provider_message_id=str(provider_id) if provider_id is not None else None,
-            provider_accepted_at=accepted_at,
-            retryable=False,
-        )
+        return data if isinstance(data, dict) else None
+
+
+def _text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None
