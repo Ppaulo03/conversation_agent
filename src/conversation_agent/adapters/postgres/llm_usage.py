@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from conversation_agent.adapters.postgres.db import PostgresDatabase
+from conversation_agent.core.llm_compare import VersionCost
 from conversation_agent.core.llm_prices import PriceTable, cost_of, rollup
 from conversation_agent.core.models.llm_usage import LLMCallRecord, UsageQuery, UsageRow
 
@@ -113,3 +114,61 @@ class PostgresLLMUsageStore:
             cost_usd=cost or 0.0,
             unpriced_calls=int(row["calls"]) if cost is None else 0,
         )
+
+    async def compare_versions(
+        self,
+        tenant_id: str,
+        agent_id: str,
+        versions: list[str],
+        since: datetime,
+        until: datetime,
+        prices: PriceTable,
+    ) -> list[VersionCost]:
+        """Cost and calls PER TURN for the given versions of one agent (what a canary compares)."""
+        rows = await self.report(
+            UsageQuery(
+                tenant_id=tenant_id,
+                since=since,
+                until=until,
+                group_by=("agent_version",),
+                agent_id=agent_id,
+            ),
+            prices,
+        )
+        distinct = await self._db.pool.fetch(
+            "SELECT agent_version, count(DISTINCT turn_id) AS turns, "
+            "count(DISTINCT conversation_ref) AS conversations FROM llm_usage "
+            "WHERE tenant_id = $1 AND agent_id = $2 AND started_at >= $3 AND started_at < $4 "
+            "AND agent_version = ANY($5::text[]) GROUP BY agent_version",
+            tenant_id,
+            agent_id,
+            since,
+            until,
+            versions,
+        )
+        counts = {r["agent_version"]: r for r in distinct}
+        out: list[VersionCost] = []
+        for version in versions:
+            row = next((r for r in rows if r.keys.get("agent_version") == version), None)
+            seen = counts.get(version)
+            out.append(
+                VersionCost(
+                    agent_version=version,
+                    turns=int(seen["turns"]) if seen else 0,
+                    conversations=int(seen["conversations"]) if seen else 0,
+                    calls=row.calls if row else 0,
+                    errors=row.errors if row else 0,
+                    tokens=(
+                        row.input_tokens
+                        + row.output_tokens
+                        + row.cache_read_tokens
+                        + row.cache_write_tokens
+                        if row
+                        else 0
+                    ),
+                    cost_usd=row.cost_usd if row else 0.0,
+                    unpriced_calls=row.unpriced_calls if row else 0,
+                    latency_p95_ms=row.latency_p95_ms if row else 0.0,
+                )
+            )
+        return out

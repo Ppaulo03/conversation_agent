@@ -9,6 +9,7 @@ release gate accepts as evidence.
 
 from __future__ import annotations
 
+from collections import Counter
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -23,10 +24,13 @@ from conversation_agent.adapters.llm.fake import (
     text_response,
     tool_call_response,
 )
+from conversation_agent.adapters.llm.metered import MeteredLLMProvider
+from conversation_agent.adapters.llm.usage_memory import InMemoryLLMUsageStore
 from conversation_agent.adapters.tools.spy import ExecutionSpy
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.evals import EvalSuite, LLMStep
 from conversation_agent.core.models.conversation import ConversationIdentity
+from conversation_agent.core.observability import bind
 from conversation_agent.core.releases import ReleaseEvidence
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.evals import EvalResult, run_scenario
@@ -39,6 +43,18 @@ DEFAULT_NOW = datetime(2026, 10, 5, 11, 0, tzinfo=UTC)
 
 
 @dataclass(frozen=True)
+class ScenarioUsage:
+    """What a scenario asked of the model: a real, deterministic measure of how chatty the agent
+    is (token figures are the SCRIPTED ones, so they only mean something when the suite models
+    realistic usage; the number of calls and their purposes always do)."""
+
+    scenario: str
+    llm_calls: int
+    purposes: dict[str, int]
+    tokens: int
+
+
+@dataclass(frozen=True)
 class SuiteReport:
     suite: str
     suite_digest: str
@@ -46,6 +62,7 @@ class SuiteReport:
     agent_version: str
     agent_digest: str
     results: tuple[EvalResult, ...]
+    usage: tuple[ScenarioUsage, ...] = ()
 
     @property
     def total(self) -> int:
@@ -83,6 +100,15 @@ class SuiteReport:
                 {"name": r.scenario, "passed": r.passed, "failures": r.failures}
                 for r in self.results
             ],
+            "llm_usage": [
+                {
+                    "scenario": u.scenario,
+                    "llm_calls": u.llm_calls,
+                    "purposes": u.purposes,
+                    "tokens": u.tokens,
+                }
+                for u in self.usage
+            ],
         }
 
 
@@ -113,11 +139,15 @@ class EvalHarness:
 
     async def run(self, suite: EvalSuite, variables: dict[str, str] | None = None) -> SuiteReport:
         results: list[EvalResult] = []
+        usage: list[ScenarioUsage] = []
         merged = {**suite.variables, **(variables or {})}
         for scenario in suite.scenarios:
             executed: list[str] = []
             providers = {k: ExecutionSpy(p, executed) for k, p in self._providers().items()}
-            llm = FakeLLM(script_for([s for turn in scenario.turns for s in turn.llm]))
+            ledger = InMemoryLLMUsageStore()
+            llm = MeteredLLMProvider(
+                FakeLLM(script_for([s for turn in scenario.turns for s in turn.llm])), ledger
+            )
             agent = self._compiled.agent
             pipeline = CapabilityPipeline(
                 self._compiled, PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
@@ -132,14 +162,30 @@ class EvalHarness:
                 session_id=f"eval-{scenario.name}",
                 contact_id="eval-contact",
             )
-            results.append(
-                await run_scenario(
-                    scenario,
-                    engine,
-                    identity,
-                    turn_prefix=scenario.name,
-                    variables=merged,
-                    executed=lambda executed=executed: executed,  # type: ignore[misc]
+            with bind(tenant_id="eval"):  # so the ledger attributes the calls
+                results.append(
+                    await run_scenario(
+                        scenario,
+                        engine,
+                        identity,
+                        turn_prefix=scenario.name,
+                        variables=merged,
+                        executed=lambda executed=executed: executed,  # type: ignore[misc]
+                    )
+                )
+            purposes = Counter(r.purpose for r in ledger.records)
+            usage.append(
+                ScenarioUsage(
+                    scenario.name,
+                    len(ledger.records),
+                    dict(purposes),
+                    sum(
+                        r.input_tokens
+                        + r.output_tokens
+                        + r.cache_read_tokens
+                        + r.cache_write_tokens
+                        for r in ledger.records
+                    ),
                 )
             )
         return SuiteReport(
@@ -149,4 +195,5 @@ class EvalHarness:
             agent_version=self._compiled.version,
             agent_digest=self._compiled.digest,
             results=tuple(results),
+            usage=tuple(usage),
         )

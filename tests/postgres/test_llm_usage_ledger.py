@@ -187,3 +187,109 @@ async def test_the_usage_cli_prints_a_priced_report_and_flags_the_gap(
     assert await cli("--tenant", "t1") == 2 and await cli(*window, "--by", "color") == 2
     monkeypatch.delenv("DATABASE_URL")
     assert await cli(*window) == 2
+
+
+# --- comparing versions per turn (what a canary asks) ---
+
+
+def turn_call(
+    version: str, turn: int, *, calls: int = 1, tokens: int = 1_000_000, **kw: Any
+) -> list[Any]:
+    return [
+        call(
+            agent_version=version,
+            turn_id=f"{version}-turn-{turn}",
+            conversation_ref=f"conv-{version}-{turn % 5}",
+            input_tokens=tokens,
+            output_tokens=0,
+            **kw,
+        )
+        for _ in range(calls)
+    ]
+
+
+async def seed_versions(store: PostgresLLMUsageStore) -> None:
+    for turn in range(40):  # stable: one call per turn
+        for record in turn_call("1.0.0", turn):
+            await store.record(record)
+    for turn in range(40):  # candidate: three calls per turn (a chattier agent)
+        for record in turn_call("1.1.0", turn, calls=3):
+            await store.record(record)
+
+
+async def test_versions_are_compared_per_turn_not_by_total_spend(db: PostgresDatabase) -> None:
+    from conversation_agent.core.llm_compare import cost_regressions
+
+    store = PostgresLLMUsageStore(db)
+    await seed_versions(store)
+    q = query()
+    stable, candidate = await store.compare_versions(
+        "t1", "support", ["1.0.0", "1.1.0"], q.since, q.until, table()
+    )
+    assert (stable.turns, candidate.turns) == (40, 40) and stable.conversations == 5
+    assert (stable.calls_per_turn, candidate.calls_per_turn) == (1.0, 3.0)
+    assert candidate.cost_per_turn == pytest.approx(stable.cost_per_turn * 3)
+    problems = cost_regressions(stable, candidate)
+    assert any("cost per turn" in p for p in problems) and any(
+        "model calls per turn" in p for p in problems
+    )
+    assert cost_regressions(stable, stable) == []  # a version is never worse than itself
+    (nothing,) = await store.compare_versions("t1", "support", ["9.9.9"], q.since, q.until, table())
+    assert nothing.turns == 0 and nothing.cost_per_turn == 0.0
+
+
+def test_a_verdict_needs_enough_turns_and_flags_gaps_and_errors() -> None:
+    from conversation_agent.core.llm_compare import VersionCost, cost_regressions
+
+    few = VersionCost(agent_version="1.1.0", turns=5, calls=5, cost_usd=1.0)
+    full = VersionCost(agent_version="1.0.0", turns=100, calls=100, cost_usd=10.0)
+    assert any("only 5 turns" in p for p in cost_regressions(full, few))
+    unpriced = full.model_copy(update={"agent_version": "1.1.0", "unpriced_calls": 3})
+    assert any("lower bound" in p for p in cost_regressions(full, unpriced))
+    erroring = full.model_copy(update={"agent_version": "1.1.0", "errors": 30})
+    assert any("error rate" in p for p in cost_regressions(full, erroring))
+    assert (
+        cost_regressions(full, full.model_copy(update={"agent_version": "1.1.0", "cost_usd": 11.0}))
+        == []
+    )
+
+
+async def test_the_compare_cli_exits_one_when_the_candidate_is_worse(
+    db: PostgresDatabase,
+    pg_dsn: str,
+    tmp_path: Any,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    import asyncio
+
+    from conversation_agent.app.usage import main
+
+    await seed_versions(PostgresLLMUsageStore(db))
+    prices = tmp_path / "p.yaml"
+    prices.write_text(
+        "models:\n  anthropic/claude-x:\n    - {effective_from: 2026-01-01, input_per_mtok: 3, output_per_mtok: 15}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("DATABASE_URL", pg_dsn)
+    loop = asyncio.get_running_loop()
+
+    async def cli(*args: str) -> int:
+        return await loop.run_in_executor(None, main, list(args))
+
+    window = [
+        "--tenant",
+        "t1",
+        "--agent",
+        "support",
+        "--since",
+        "2026-01-01",
+        "--until",
+        "2026-03-01",
+    ]
+    assert await cli(*window, "--compare", "1.0.0,1.1.0", "--prices", str(prices)) == 1
+    out = capsys.readouterr().out
+    assert "candidate looks worse" in out and "model calls per turn" in out
+    assert await cli(*window, "--compare", "1.0.0,1.0.0", "--prices", str(prices)) == 0
+    assert "no regression found" in capsys.readouterr().out
+    assert await cli(*window, "--compare", "1.0.0") == 2  # needs STABLE,CANDIDATE

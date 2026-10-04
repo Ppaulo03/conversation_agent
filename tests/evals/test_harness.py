@@ -263,3 +263,12 @@ def test_load_suite_names_the_problem() -> None:
         load_suite(
             Path(__file__).parent.parent.parent / "examples" / "support-agent" / "agent.yaml"
         )
+
+
+async def test_the_report_says_how_many_model_calls_each_scenario_made_and_why() -> None:
+    report = await run(load_suite(SUITE))
+    usage = {u.scenario: u for u in report.usage}
+    faq = usage["faq-answered-from-the-base"]
+    assert faq.llm_calls == 2 and faq.purposes == {"agent": 2}  # tool use, then the answer
+    assert usage["a-ticket-is-collected-then-only-proposed"].llm_calls == 0  # the Flow answers
+    assert report.to_dict()["llm_usage"][0]["scenario"] == "faq-answered-from-the-base"
