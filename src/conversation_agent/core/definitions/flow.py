@@ -145,6 +145,7 @@ class Choose(_Frozen):
     max_options: int = 5
     prefer_time_slot: str | None = None  # a time the user already stated: auto-select if unique
     prefer_date_slot: str | None = None
+    no_match_text: str = ""  # shown first when a stated preference matches none of the options
 
 
 class Propose(_Frozen):
@@ -153,6 +154,7 @@ class Propose(_Frozen):
 
     kind: Literal["propose"] = "propose"
     id: str
+    intro: str = ""  # said before the runtime-owned confirmation question
     capability: str
     inputs: dict[str, Expr]
     on: dict[str, Transition] = Field(default_factory=dict)
@@ -169,7 +171,12 @@ class FlowDefinition(_Frozen):
     slots: tuple[SlotDefinition, ...]
     steps: tuple[Step, ...]
     cancelled_reply: str = "Ok, cancelei."
-    completed_reply: str | None = None
+    completed_reply: str = "Pronto!"
+    unclear_reply: str = "Não entendi."  # prefix when the answer fits nothing; the question repeats
+    giveup_reply: str = (
+        "Não consegui entender, então vou encerrar por aqui. Pode recomeçar quando quiser."
+    )
+    max_unclear: int = 3
     resume_reply: str = "Voltando ao que estávamos fazendo: {question}"
     digressions_allowed: bool = True
     digression_capabilities: tuple[str, ...] = ()  # read capabilities usable in a digression

@@ -21,7 +21,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Protocol
+from typing import Any, Literal, Protocol
 
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.definitions.agent import AgentDefinition
@@ -117,6 +117,9 @@ class StageResult:
     reply: str | None  # None -> not handled: continue as a normal turn
     reprompt_action_id: str | None = None
     llm_calls: int = 0
+    # Set when the action reached a final state this turn; a Flow that proposed it closes on it.
+    closed: Literal["executed", "rejected", "expired"] | None = None
+    status: str | None = None  # the executed capability's ToolStatus
 
 
 class ConfirmationStage:
@@ -181,14 +184,14 @@ class ConfirmationStage:
 
         if d["expired"]:
             await self._terminal(cursor, inp, d, PendingActionStatus.EXPIRED, record=False)
-            return StageResult(texts.expired, llm_calls=llm_calls)
+            return StageResult(texts.expired, llm_calls=llm_calls, closed="expired")
 
         verdict: ConfirmationDecision = d["decision"]
         eligibility = PromptEligibility(d["eligibility"])
 
         if verdict == "reject":
             await self._terminal(cursor, inp, d, PendingActionStatus.REJECTED)
-            return StageResult(texts.rejected, llm_calls=llm_calls)
+            return StageResult(texts.rejected, llm_calls=llm_calls, closed="rejected")
         if verdict == "modify":
             await self._terminal(cursor, inp, d, PendingActionStatus.INVALIDATED)
             return StageResult(None, llm_calls=llm_calls)  # the normal loop handles the change
@@ -296,7 +299,7 @@ class ConfirmationStage:
         texts = self._agent.confirmation
         if action.confirmation_attempts >= self._max_reprompts:
             await self._terminal(cursor, inp, d, PendingActionStatus.EXPIRED)
-            return StageResult(texts.gave_up, llm_calls=llm_calls)
+            return StageResult(texts.gave_up, llm_calls=llm_calls, closed="expired")
 
         async def payload() -> dict[str, Any]:
             return {"action_id": action.action_id, "reprompt": True}
@@ -409,7 +412,9 @@ class ConfirmationStage:
             )
         assert outcome.result is not None
         reply, calls = await self._compose(cursor, inp, outcome.result)
-        return StageResult(reply, llm_calls=llm_calls + calls)
+        return StageResult(
+            reply, llm_calls=llm_calls + calls, closed="executed", status=outcome.result.status
+        )
 
     async def _compose(
         self, cursor: TurnJournalCursor, inp: StageInput, result: CapabilityResult

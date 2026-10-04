@@ -25,9 +25,10 @@ def build_pipeline(
     api_base_url: str,
     providers: Mapping[str, ToolProvider] | None = None,
     policy: PolicyGate | None = None,
+    flows: bool = False,
 ) -> tuple[CapabilityPipeline, AgentDefinition, HTTPToolProvider | None]:
     """Capability -> Binding -> PolicyGate -> ToolRunner for the scheduling agent."""
-    agent = build_agent()
+    agent = build_agent(flows=flows)
     http: HTTPToolProvider | None = None
     if providers is None:
         http = HTTPToolProvider.static({CONNECTION: local_dev_connection(api_base_url)})
@@ -46,14 +47,15 @@ def build_engine(
     policy: PolicyGate | None = None,
     pipeline: CapabilityPipeline | None = None,
     executor_factory: Callable[[CapabilityPipeline], ToolStepExecutor] | None = None,
+    flows: bool = False,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
         pipeline, agent, http = build_pipeline(
-            api_base_url=api_base_url, providers=providers, policy=policy
+            api_base_url=api_base_url, providers=providers, policy=policy, flows=flows
         )
     else:
-        agent = build_agent()
+        agent = build_agent(flows=flows)
     engine = TurnEngine(
         agent,
         llm,

@@ -19,6 +19,7 @@ from conversation_agent.core.models.conversation import (
     ConversationState,
     TurnOutcome,
 )
+from conversation_agent.core.models.flow import FlowInstance
 from conversation_agent.core.models.journal import JournalStepType
 from conversation_agent.core.models.llm import (
     LLMMessage,
@@ -38,6 +39,7 @@ from conversation_agent.engine.capability_pipeline import (
     Evaluation,
 )
 from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
+from conversation_agent.engine.flow_runner import FlowRunner, FlowTurn
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
@@ -69,6 +71,7 @@ class TurnEngine:
         self._max_steps = max_steps
         self._executor: ToolStepExecutor = tool_executor or DirectToolExecutor(pipeline)
         self._confirmation: ConfirmationStage | None = None
+        self._flows = FlowRunner(agent) if agent.flows else None
 
     def attach_confirmation(self, stage: ConfirmationStage) -> None:
         """Enable the protected-action confirmation stage (needs the ledger executor)."""
@@ -126,27 +129,72 @@ class TurnEngine:
                 ),
             )
             if staged.reply is not None:  # handled by the confirmation protocol
+                stage_reply, stage_flows = staged.reply, state.flows
+                if self._flows is not None and staged.closed is not None:
+                    followed = self._flows.after_action(
+                        state.flows, staged.closed, staged.status, staged.reply
+                    )
+                    stage_reply, stage_flows = followed.reply, followed.flows
                 return await self._finish(
                     cursor,
                     turn_id,
                     state,
                     user_text,
-                    staged.reply,
+                    stage_reply,
                     {},
                     (),
                     staged.llm_calls,
                     None,
                     staged.reprompt_action_id,
+                    flows=stage_flows,
                 )
             # modify / not-a-reply: fall through and treat the message as a normal turn
 
         proposals: dict[str, CapabilityRequest] = {}
         proposed: list[ProposedAction] = []
+        policy_state = _PolicyTurnState()
+        if self._flows is not None:
+            flow_io = _EngineFlowIO(
+                self,
+                cursor,
+                identity,
+                turn_id,
+                proposals,
+                proposed,
+                guard,
+                policy_state,
+                reference_time,
+            )
+            flow_turn = await self._flows.handle(
+                FlowTurn(
+                    text=user_text,
+                    flows=state.flows,
+                    reference_time=reference_time,
+                    io=flow_io,
+                )
+            )
+            if flow_turn is not None:
+                flow_reply = flow_turn.reply
+                if proposed and self._agent.confirmation_prompt_enabled:
+                    flow_reply = self._with_confirmation(flow_reply, proposed[-1])
+                return await self._finish(
+                    cursor,
+                    turn_id,
+                    state,
+                    user_text,
+                    flow_reply,
+                    proposals,
+                    tuple(proposed),
+                    0,
+                    None,
+                    None,
+                    flows=flow_turn.flows,
+                )
+
         llm_calls = 0
         reply: str | None = None
         halted: Literal["step_limit", "llm_truncated", "token_budget"] | None = None
         tokens_used = 0
-        policy_state = _PolicyTurnState()
 
         for _ in range(self._max_steps):
             if guard is not None:
@@ -192,10 +240,7 @@ class TurnEngine:
         final_reply = reply or self._agent.fallback_reply
         if proposed and self._agent.confirmation_prompt_enabled:
             # The confirmation question is runtime-owned, not left to the model's wording.
-            line = self._agent.confirmation.prompt.format(
-                summary=proposed[-1].request.summary or proposed[-1].request.capability
-            )
-            final_reply = f"{reply}\n\n{line}" if reply else line
+            final_reply = self._with_confirmation(reply or "", proposed[-1])
             halted = None if reply or halted is None else halted
         return await self._finish(
             cursor,
@@ -210,6 +255,12 @@ class TurnEngine:
             None,
         )
 
+    def _with_confirmation(self, reply: str, proposal: ProposedAction) -> str:
+        line = self._agent.confirmation.prompt.format(
+            summary=proposal.request.summary or proposal.request.capability
+        )
+        return f"{reply}\n\n{line}" if reply else line
+
     async def _finish(
         self,
         cursor: TurnJournalCursor,
@@ -222,6 +273,8 @@ class TurnEngine:
         llm_calls: int,
         halted: Literal["step_limit", "llm_truncated", "token_budget"] | None,
         reprompt_action_id: str | None,
+        *,
+        flows: tuple[FlowInstance, ...] | None = None,
     ) -> TurnOutcome:
         await cursor.step(
             JournalStepType.TURN_COMPLETED,
@@ -235,6 +288,7 @@ class TurnEngine:
                 ConversationMessage(role="assistant", text=final_reply),
             ),
             proposals={**state.proposals, **proposals},
+            flows=state.flows if flows is None else flows,
         )
         return TurnOutcome(
             turn_id=turn_id,
@@ -298,7 +352,45 @@ class TurnEngine:
         policy_state: _PolicyTurnState,
         reference_time: datetime,
     ) -> ToolResultPart:
-        capability = self._pipeline.capability_name_for(tool_name)
+        """One LLM tool call: the shared capability path, rendered back to the model."""
+        outcome = await self.run_capability(
+            cursor,
+            identity,
+            turn_id,
+            self._pipeline.capability_name_for(tool_name),
+            arguments,
+            proposals,
+            proposed,
+            guard,
+            policy_state,
+            reference_time,
+        )
+        if outcome.proposal is not None:
+            return ToolResultPart(
+                tool_call_id=tool_call_id, content=render_proposal(outcome.proposal)
+            )
+        assert outcome.result is not None
+        return ToolResultPart(
+            tool_call_id=tool_call_id,
+            content=render_result(outcome.result),
+            is_error=outcome.result.status != "success",
+        )
+
+    async def run_capability(
+        self,
+        cursor: TurnJournalCursor,
+        identity: ConversationIdentity,
+        turn_id: str,
+        capability: str,
+        arguments: dict[str, Any],
+        proposals: dict[str, CapabilityRequest],
+        proposed: list[ProposedAction],
+        guard: Callable[[], None] | None,
+        policy_state: _PolicyTurnState,
+        reference_time: datetime,
+    ) -> CapabilityOutcome:
+        """The ONE path to a capability, used by the agent loop and by Flows alike: policy
+        decision, journal, side-effect protocol, proposal capture. A Flow gets no shortcut."""
         # tool_call_id is ephemeral and deliberately excluded from every identity (§9.1).
         request_hash = stable_hash(capability, arguments)
         logical_step_id = f"{turn_id}:{cursor.next_index}"
@@ -364,15 +456,7 @@ class TurnEngine:
                     tool_name=self._pipeline.resolve(outcome.proposal.capability).tool.name,
                 )
             )
-            return ToolResultPart(
-                tool_call_id=tool_call_id, content=render_proposal(outcome.proposal)
-            )
-        assert outcome.result is not None
-        return ToolResultPart(
-            tool_call_id=tool_call_id,
-            content=render_result(outcome.result),
-            is_error=outcome.result.status != "success",
-        )
+        return outcome
 
     def _tool_context(
         self,
@@ -397,6 +481,36 @@ class TurnEngine:
             )[:32],
             trace_id=f"trace-{turn_id}",
         )
+
+
+class _EngineFlowIO:
+    """Gives the FlowRunner exactly one thing: the engine's capability path."""
+
+    def __init__(
+        self,
+        engine: TurnEngine,
+        cursor: TurnJournalCursor,
+        identity: ConversationIdentity,
+        turn_id: str,
+        proposals: dict[str, CapabilityRequest],
+        proposed: list[ProposedAction],
+        guard: Callable[[], None] | None,
+        policy_state: _PolicyTurnState,
+        reference_time: datetime,
+    ) -> None:
+        self._engine = engine
+        self._args = (cursor, identity, turn_id)
+        self._rest = (proposals, proposed, guard, policy_state, reference_time)
+
+    async def invoke(self, capability: str, args: dict[str, Any]) -> CapabilityOutcome:
+        if self._rest[2] is not None:
+            self._rest[2]()  # safe boundary before every external step
+        cursor, identity, turn_id = self._args
+        proposals, proposed, guard, policy_state, reference_time = self._rest
+        return await self._engine.run_capability(
+            cursor, identity, turn_id, capability, args, proposals, proposed, guard,
+            policy_state, reference_time,
+        )  # fmt: skip
 
 
 class _PolicyTurnState:

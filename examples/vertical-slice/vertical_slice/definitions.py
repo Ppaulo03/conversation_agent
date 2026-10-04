@@ -17,6 +17,19 @@ from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 from conversation_agent.core.definitions.agent import AgentDefinition, ConfirmationTexts
 from conversation_agent.core.definitions.binding import CapabilityBinding, ErrorMap, ErrorRule
 from conversation_agent.core.definitions.capability import CapabilityDefinition
+from conversation_agent.core.definitions.flow import (
+    AddDays,
+    Ask,
+    Choose,
+    Collect,
+    FlowDefinition,
+    Invoke,
+    Propose,
+    Say,
+    SlotDefinition,
+    Table,
+)
+from conversation_agent.core.definitions.flow import Slot as FlowSlot
 from conversation_agent.core.definitions.mapping import Const, Each, Ref
 from conversation_agent.core.definitions.tool import HTTPRequestSpec, RecoverySpec, ToolDefinition
 
@@ -265,7 +278,103 @@ novo mais tarde; nunca finja que deu certo.
 """
 
 
-def build_agent() -> AgentDefinition:
+# --- The scheduling Flow: conversation only (collect, search, choose, propose) ----------------
+
+_RETRY = (
+    "Não consegui consultar a agenda agora. Me escreva de novo em instantes que eu tento outra vez."
+)
+
+SCHEDULING_FLOW = FlowDefinition(
+    name="scheduling",
+    description="Schedule a haircut or a consultation.",
+    triggers=(
+        "agendar",
+        "agendamento",
+        "marcar",
+        "marcar horario",
+        "cortar cabelo",
+        "corte de cabelo",
+        "consulta",
+    ),
+    slots=(
+        SlotDefinition(
+            name="service",
+            type="enum",
+            prompt="Qual serviço você quer: corte de cabelo (30 min) ou consulta (60 min)?",
+            choices={
+                "haircut": ("corte", "cortar", "cabelo", "corte de cabelo"),
+                "consultation": ("consulta", "consultar"),
+            },
+            invalidates=("start_at",),
+        ),
+        SlotDefinition(
+            name="date",
+            type="date",
+            prompt="Para qual dia você quer agendar?",
+            invalidates=("start_at",),
+        ),
+        # stated by the user, never asked: narrows the real options when it matches exactly one
+        SlotDefinition(
+            name="preferred_time", type="time", prompt="", required=False, invalidates=("start_at",)
+        ),
+        SlotDefinition(name="start_at", type="text", prompt="", required=False),
+    ),
+    steps=(
+        Collect(id="need", slots=("service", "date")),
+        Invoke(
+            id="search",
+            capability="scheduling.availability",
+            inputs={
+                "service_id": FlowSlot(name="service"),
+                "from_date": FlowSlot(name="date"),
+                "to_date": AddDays(base=FlowSlot(name="date"), days=0),
+            },
+            on={
+                "validation_error": Ask(slot="date", text="Não consegui usar essa data."),
+                "business_error": Say(text="Esse serviço não está disponível agora.", end=True),
+                "policy_denied": Say(
+                    text="Não posso consultar a agenda neste atendimento.", end=True
+                ),
+            },
+            default=Say(text=_RETRY),  # technical_error / timeout / unknown: stay, retry on reply
+        ),
+        Choose(
+            id="pick",
+            source="search",
+            list_field="slots",
+            value_field="start_at",
+            into="start_at",
+            prompt="Tenho estes horários para {date}:\n{options}\nQual você prefere?",
+            empty=Ask(slot="date", text="Não tenho horários livres em {date}."),
+            prefer_time_slot="preferred_time",
+            no_match_text="Não tenho exatamente esse horário.",
+        ),
+        Propose(
+            id="book",
+            capability="scheduling.create",
+            inputs={
+                "service_id": FlowSlot(name="service"),
+                "start_at": FlowSlot(name="start_at"),
+                "duration_minutes": Table(
+                    key=FlowSlot(name="service"), mapping={"haircut": 30, "consultation": 60}
+                ),
+            },
+            intro="Perfeito, vou registrar esse horário.",
+            on={
+                "business_error": Ask(
+                    slot="date", text="Esse horário acabou de ser ocupado. Vamos escolher outro."
+                ),
+                "policy_denied": Say(text="Não posso agendar neste atendimento.", end=True),
+            },
+            default=Say(text="Não consegui concluir o agendamento agora.", end=True),
+        ),
+    ),
+    cancelled_reply="Tudo bem, não vou agendar nada.",
+    digression_capabilities=("scheduling.availability",),
+)
+
+
+def build_agent(*, flows: bool = False) -> AgentDefinition:
     return AgentDefinition(
         agent_id="scheduling-demo",
         version="0.1.0",
@@ -275,6 +384,7 @@ def build_agent() -> AgentDefinition:
         tools=(ERP_GET_AVAILABLE_SLOTS, ERP_CREATE_RESERVATION, ERP_FIND_RESERVATION),
         bindings=(AVAILABILITY_BINDING, CREATE_BINDING, LOOKUP_BINDING),
         allowed_capabilities=frozenset({"scheduling.availability", "scheduling.create"}),
+        flows=(SCHEDULING_FLOW,) if flows else (),
         fallback_reply="Desculpe, não consegui concluir agora. Pode tentar novamente?",
         confirmation=ConfirmationTexts(
             prompt="Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar.",
