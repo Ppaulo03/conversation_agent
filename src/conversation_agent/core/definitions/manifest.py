@@ -22,6 +22,7 @@ from conversation_agent.core.definitions.flow import FlowDefinition
 from conversation_agent.core.definitions.schema_spec import ModelSpec, build_model
 from conversation_agent.core.definitions.tool import (
     HTTPRequestSpec,
+    MCPToolSpec,
     RecoverySpec,
     RetryPolicy,
     ToolDefinition,
@@ -54,6 +55,7 @@ class ToolManifest(_Strict):
     provider: str
     connection: str | None = None
     http: HTTPRequestSpec | None = None
+    mcp: MCPToolSpec | None = None
     idempotency_supported: bool = False
     retry: RetryPolicy = RetryPolicy()
     recovery: RecoverySpec | None = None
@@ -86,6 +88,28 @@ def _model_name(name: str, suffix: str) -> str:
     return "".join(part.capitalize() for part in name.replace(".", "_").split("_")) + suffix
 
 
+def build_tool(t: ToolManifest) -> ToolDefinition:
+    """One tool manifest -> its runtime definition (also what the importers emit)."""
+    return ToolDefinition(
+        name=t.name,
+        description=t.description,
+        input_model=build_model(_model_name(t.name, "Args"), t.input),
+        output_model=build_model(_model_name(t.name, "Response"), t.output, strict=False)
+        if t.output is not None
+        else None,
+        risk=t.risk,
+        confirmation_required=t.confirmation_required,
+        timeout_seconds=t.timeout_seconds,
+        provider=t.provider,
+        connection=t.connection,
+        http=t.http,
+        mcp=t.mcp,
+        idempotency_supported=t.idempotency_supported,
+        retry=t.retry,
+        recovery=t.recovery,
+    )
+
+
 def build_definition(manifest: AgentManifest) -> AgentDefinition:
     """Manifest -> the runtime objects (validates everything AgentDefinition validates)."""
     capabilities = tuple(
@@ -100,26 +124,7 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         )
         for c in manifest.capabilities
     )
-    tools = tuple(
-        ToolDefinition(
-            name=t.name,
-            description=t.description,
-            input_model=build_model(_model_name(t.name, "Args"), t.input),
-            output_model=build_model(_model_name(t.name, "Response"), t.output, strict=False)
-            if t.output is not None
-            else None,
-            risk=t.risk,
-            confirmation_required=t.confirmation_required,
-            timeout_seconds=t.timeout_seconds,
-            provider=t.provider,
-            connection=t.connection,
-            http=t.http,
-            idempotency_supported=t.idempotency_supported,
-            retry=t.retry,
-            recovery=t.recovery,
-        )
-        for t in manifest.tools
-    )
+    tools = tuple(build_tool(t) for t in manifest.tools)
     extra: dict[str, Any] = {}
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply

@@ -37,6 +37,10 @@ class ErrorMap(_Frozen):
     http_status: dict[int, ErrorRule] = Field(default_factory=dict)
     default_5xx: dict[Literal["read", "write"], ErrorRule] = Field(default_factory=dict)
     timeout: dict[Literal["read", "write"], ErrorRule] = Field(default_factory=dict)
+    # MCP only: a tool that RAN and answered `isError`. Unset: a read is a business_error and a
+    # write is `unknown` (the tool may have partly executed). An operator who knows the tool is
+    # atomic can say `business_error` here; it can never make a write safely retryable.
+    tool_error: ErrorRule | None = None
 
 
 class CapabilityBinding(_Frozen):

@@ -23,7 +23,7 @@ def binding_fingerprint(resolved: ResolvedToolBinding) -> str:
     connection, risk/idempotency flags and the input mapping. Output/error mapping and the
     recovery contract only decide how a result is read, so they are deliberately excluded."""
     tool, binding = resolved.tool, resolved.binding
-    return stable_hash(
+    parts: list[Any] = [
         resolved.capability.name,
         tool.name,
         tool.provider,
@@ -32,7 +32,10 @@ def binding_fingerprint(resolved: ResolvedToolBinding) -> str:
         tool.risk,
         tool.idempotency_supported,
         _dump(binding.input_map),
-    )
+    ]
+    if tool.mcp is not None:  # appended only when present: an HTTP tool keeps its fingerprint
+        parts.append(_dump(tool.mcp))
+    return stable_hash(*parts)
 
 
 def recovery_snapshot(resolved: ResolvedToolBinding) -> RecoverySnapshot:

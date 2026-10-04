@@ -170,6 +170,13 @@ COMPILERS: dict[str, Callable[[AgentManifest | dict[str, Any]], CompiledAgent]] 
 
 
 # --- digest ---
+def _binding_document(binding: CapabilityBinding) -> dict[str, Any]:
+    document = binding.model_dump(mode="json", by_alias=True)
+    if binding.error_map.tool_error is None:  # only MCP bindings carry it: others keep their digest
+        document["error_map"].pop("tool_error", None)
+    return document
+
+
 def agent_document(agent: AgentDefinition) -> dict[str, Any]:
     """Canonical JSON-able content of an agent, however it was written."""
     return {
@@ -190,15 +197,18 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         ],
         "tools": [
             {
-                **t.model_dump(mode="json", exclude={"input_model", "output_model"}),
+                # `mcp` only appears for MCP tools: an agent without any keeps its digest
+                **t.model_dump(
+                    mode="json",
+                    exclude={"input_model", "output_model"} | ({"mcp"} if t.mcp is None else set()),
+                ),
                 "input": schema_fingerprint(t.input_model),
                 "output": schema_fingerprint(t.output_model) if t.output_model else None,
             }
             for t in sorted(agent.tools, key=lambda t: t.name)
         ],
         "bindings": [
-            b.model_dump(mode="json", by_alias=True)
-            for b in sorted(agent.bindings, key=lambda b: b.capability)
+            _binding_document(b) for b in sorted(agent.bindings, key=lambda b: b.capability)
         ],
         "allowed_capabilities": sorted(agent.allowed_capabilities),
         "flows": [f.model_dump(mode="json") for f in agent.flows],

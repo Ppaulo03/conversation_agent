@@ -39,6 +39,7 @@ dev-mode-dirs = [
     "examples/vertical-slice",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
+    "examples/reference-mcp",
 ]
 
 [tool.pytest.ini_options]
@@ -57,6 +58,7 @@ src = [
     "examples/vertical-slice",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
+    "examples/reference-mcp",
     "tests",
 ]
 
@@ -72,6 +74,7 @@ mypy_path = [
     "examples/vertical-slice",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
+    "examples/reference-mcp",
 ]
 explicit_package_bases = true
 
@@ -80,7 +83,7 @@ module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim"]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -137,7 +140,7 @@ forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
 name = "framework never imports example/external-system code (INV-008)"
 type = "forbidden"
 source_modules = ["conversation_agent"]
-forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim"]
+forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp"]
 
 [[tool.importlinter.contracts]]
 name = "reference API is an external system: no framework imports"
@@ -149,4 +152,10 @@ forbidden_modules = ["conversation_agent"]
 name = "relayplane simulator is an external system: no framework imports"
 type = "forbidden"
 source_modules = ["relayplane_sim"]
+forbidden_modules = ["conversation_agent"]
+
+[[tool.importlinter.contracts]]
+name = "reference MCP server is an external system: no framework imports"
+type = "forbidden"
+source_modules = ["reference_mcp"]
 forbidden_modules = ["conversation_agent"]

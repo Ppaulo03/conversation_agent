@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 6 — RelayPlane + mídia + proativo (implementada contra o contrato publicado do RelayPlane; aguardando revisão/merge). Próxima: Fase 7.
+**Fase atual:** 7 — Tool ecosystem (implementada; aguardando revisão/merge). Fase 6 mergeada em `main`. Próxima: Fase 8.
 
 ## Phase 1
 
@@ -582,3 +582,43 @@ Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.p
 - Mensagens **template** não existem (nem no RelayPlane): fora da janela a política nega. `defer` do `ChannelPolicy` não existe.
 - Transcriber real (STT) não implementado (porta + fake); o download de mídia é `RelayPlaneMediaFetcher` (limite de tamanho + checksum), sem pinning de IP/SSRF (destino é configuração do operador).
 - Rate limit/backpressure do envio ficam para a Fase 10; delivery/read receipts não fazem parte da garantia mínima.
+
+
+## Phase 7 — Tool ecosystem
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos, 8 contratos). Novas invariantes **INV-037, INV-038, INV-039**.
+Escopo do ROADMAP: MCPToolProvider, discovery + allowlists, OpenAPI importer opcional, ReplayToolProvider, métricas/circuit breakers por provider.
+
+DoD (derivado do ROADMAP e do DESIGN §32/§37):
+
+- [✓] MCPToolProvider sobre a mesma proteção de transporte do HTTP (conexão pré-registrada por tenant, HTTPS, allowlist de host, SSRF/DNS pinning, sem redirect, resposta limitada, credencial do SecretProvider) — `tests/contracts/test_mcp_provider.py` (29); o HTTP continua passando a mesma suíte
+- [✓] discovery ≠ exposição; allowlist explícita com risco do operador — `tests/contracts/test_tool_import.py`
+- [✓] schema do servidor pinado por digest; mudança trava a chamada antes de enviar — `test_a_changed_input_schema_stops_the_call_before_anything_is_sent`, `test_the_pin_is_rechecked_after_its_ttl_and_not_on_every_call`
+- [✓] OpenAPI importer opcional (mesmas regras) — `test_an_allowed_operation_becomes_an_http_tool_with_its_own_transport`
+- [✓] ReplayToolProvider (+ gravação com redaction), métricas e circuit breaker por (tenant, conexão) — `tests/contracts/test_tool_resilience.py`
+- [✓] MCP no manifest/compiler sem alterar o digest de agentes existentes — `tests/compiler/test_mcp_manifest.py`
+
+Implementado: `adapters/tools/guard.py` (`GuardedTransport`, extraído do HTTP: uma única cópia da proteção), `adapters/tools/mcp.py` (`MCPToolProvider`: sessão, schema pin, discovery,
+classificação de erros), `core/definitions/json_schema.py` (JSON Schema → DSL do manifest, subset conservador, `schema_digest`), `core/definitions/tool_import.py`
+(`DiscoveredTool`, `ToolAllowlist`, `import_mcp_tools` → `ToolManifest`), `core/definitions/openapi_import.py`, `MCPToolSpec` em `ToolDefinition`/manifest,
+`ErrorMap.tool_error`, `adapters/tools/{replay,resilience,metrics}.py` + `ports/metrics.py`, `examples/reference-mcp` (servidor MCP de referência, sistema externo).
+
+### Decisões da Fase 7
+
+1. **MCP por Streamable HTTP, sem o SDK `mcp` e sem stdio.** O transporte HTTP já é o endurecido do projeto (SSRF, pinning, limites); o SDK traria um segundo cliente HTTP fora dessas garantias, e stdio (um processo por tenant) não é um transporte que o runtime consiga fazer fencing. JSON-RPC é pequeno e foi testado contra um servidor real.
+2. **Discovery não é exposição (INV-037):** só entra o que a allowlist nomeia; o risco é SEMPRE decisão do operador (campo obrigatório) e dica do servidor (`readOnlyHint`/`destructiveHint`) só pode aumentar o cuidado: allowlist `read` contra um servidor que diz "não é read-only" exige `accept_server_hint_conflict`. Idem para OpenAPI (`GET` vs método que muda estado).
+3. **Schema pinado:** o digest do `inputSchema` (sem documentação) vai em `MCPToolSpec`; antes da primeira chamada por sessão (e a cada `schema_check_ttl`) o provider compara com o schema atual: divergente ou ausente → `technical_error` sem enviar nada. Custo assumido: dentro do TTL uma mudança não é vista.
+4. **Conversão de schema recusa em vez de aproximar:** `pattern`, `oneOf/allOf`, `const`, objetos livres, enums não-string etc. são erro nomeado; todos os problemas são listados de uma vez. Descrições do servidor são cortadas/limpas (prosa de terceiro).
+5. **Resultado de MCP é dado:** `isError`/erro de protocolo seguem a taxonomia canônica: o que prova não-execução (params inválidos, método desconhecido) é seguro; `isError` ou erro interno de ESCRITA é `unknown` (pode ter executado parcialmente), salvo `error_map.tool_error` explícito, que nunca torna uma escrita retryable. O texto de erro do servidor não é repassado.
+6. **Circuit breaker é transparente (INV-038):** só barra ANTES de chamar o provider (`CIRCUIT_OPEN`, `technical_error` retryable = não enviado, seguro até para escrita); tudo que o provider responde passa inalterado. Só saúde conta (inalcançável, timeout, 5xx, resposta inutilizável, `unknown`); resposta de negócio/validação prova que está vivo e erro de configuração não é culpa do destino. Estado em memória, por processo.
+7. **Replay não tem transporte (INV-039):** chamada não gravada é `REPLAY_MISS`, nunca resposta inventada; respostas repetidas saem na ordem gravada e depois acabam; a gravação redige PII por padrão.
+8. **Compatibilidade de digest:** `mcp` e `error_map.tool_error` só entram no documento do agente/fingerprint quando presentes; agentes e intenções preparadas antes desta fase mantêm o mesmo digest/fingerprint.
+
+### Débitos conhecidos (Fase 7)
+
+- Sem stdio, sem SDK `mcp`, sem recursos/prompts/sampling de MCP: só `tools/list` e `tools/call`; conteúdo não-texto (imagem, resource) é ignorado.
+- Sem `OpenAPIToolProvider` dedicado nem gRPC (o importador gera tools HTTP comuns); OpenAPI: só path/query + corpo JSON objeto, sem header/cookie, sem `oneOf`.
+- Circuit breaker e métricas são por processo e em memória; backend real de métricas/dashboards e estado compartilhado ficam para a Fase 10.
+- Breaker e `MeteredToolProvider` não vêm ligados por padrão em nenhuma wiring (composição explícita pelo operador).
+- Sem CLI de discovery/import (as funções existem; falta um comando `tools import`).
+- Idempotência de MCP: o header `Idempotency-Key` e a declaração `idempotency_supported` são do operador; o MCP não padroniza isso.

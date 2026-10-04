@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from conversation_agent.core.definitions.capability import Risk
 from conversation_agent.core.definitions.mapping import MappingSpec
@@ -26,6 +26,20 @@ class HTTPRequestSpec(BaseModel):
     # Optional tool arguments that are deliberately NOT sent (runtime-only). Anything else the
     # binding can produce must travel in the path, query or body, or it would silently vanish.
     ignored: tuple[str, ...] = ()
+
+
+class MCPToolSpec(BaseModel):
+    """How a tool maps onto a tool published by an MCP server (DESIGN §32).
+
+    `remote_name` is the server's name for it. `schema_digest` PINS the server's input schema at
+    the moment the operator allowed the tool: a server that later changes what the tool accepts
+    is not the tool that was reviewed, so nothing is sent until someone looks again (INV-037).
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    remote_name: str
+    schema_digest: str = Field(pattern=r"^[0-9a-f]{64}$")
 
 
 class RecoverySpec(BaseModel):
@@ -77,9 +91,18 @@ class ToolDefinition(BaseModel):
     provider: str  # key resolved by ToolRunner, e.g. "http", "fake"
     connection: str | None = None
     http: HTTPRequestSpec | None = None
+    mcp: MCPToolSpec | None = None
     idempotency_supported: bool = False
     retry: RetryPolicy = RetryPolicy()
     recovery: RecoverySpec | None = None  # non-read tools default to human_handoff
+
+    @model_validator(mode="after")
+    def _mcp_requires_connection_and_spec(self) -> ToolDefinition:
+        if self.provider == "mcp" and (self.mcp is None or self.connection is None):
+            raise ValueError(f"mcp tool {self.name!r} requires `mcp` spec and `connection`")
+        if self.mcp is not None and self.provider != "mcp":
+            raise ValueError(f"tool {self.name!r} has an `mcp` spec but provider {self.provider!r}")
+        return self
 
     @model_validator(mode="after")
     def _http_requires_connection_and_spec(self) -> ToolDefinition:

@@ -5,6 +5,9 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
+from reference_mcp.main import DEFAULT_TOOLS as MCP_DEFAULT_TOOLS
+from reference_mcp.main import PROTOCOL_VERSION as MCP_PROTOCOL_VERSION
+from reference_mcp.main import create_app as create_mcp_app
 from relayplane_sim.main import create_app as create_relay_app
 from relayplane_sim.main import settle as relay_settle
 from scheduling_api.main import create_app
@@ -102,4 +105,49 @@ def relay(_live_relay: tuple[LiveServer, object, dict[str, datetime]]) -> RelayH
     state.sent.clear()
     state.media.clear()
     state.media_etag.clear()
+    return handle
+
+
+class McpHandle:
+    """Per-test view of the reference MCP server."""
+
+    def __init__(self, server: LiveServer, app: object) -> None:
+        self.base_url = f"{server.base_url}/mcp"
+        self.state = app.state  # type: ignore[attr-defined]
+
+    @property
+    def calls(self) -> list[tuple[str, dict[str, object]]]:
+        """Every `tools/call` that reached the server."""
+        return list(self.state.calls)
+
+    def methods(self) -> list[str]:
+        return [str(r["path"]) for r in self.state.requests]
+
+
+@pytest.fixture(scope="session")
+def _live_mcp() -> Iterator[tuple[LiveServer, object]]:
+    app = create_mcp_app()
+    server = LiveServer(app)
+    server.start()
+    yield server, app
+    server.stop()
+
+
+@pytest.fixture
+def mcp(_live_mcp: tuple[LiveServer, object]) -> McpHandle:
+    server, app = _live_mcp
+    handle = McpHandle(server, app)
+    state = handle.state
+    state.requests.clear()
+    state.fault = None
+    state.sessions = set()
+    state.tools = [dict(t) for t in MCP_DEFAULT_TOOLS]
+    state.calls.clear()
+    state.tickets.clear()
+    state.sse = False
+    state.page_size = 0
+    state.next_result = None
+    state.require_session = True
+    state.call_fault = None
+    state.protocol_version = MCP_PROTOCOL_VERSION
     return handle
