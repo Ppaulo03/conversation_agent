@@ -118,9 +118,13 @@ class World:
         self,
         providers: Mapping[str, ToolProvider] | None = None,
         policy: PolicyGate | None = None,
+        flows: bool = False,
     ) -> CapabilityPipeline:
         pipeline, _, _ = build_pipeline(
-            api_base_url="http://unused", providers=providers or {"http": self.tools}, policy=policy
+            api_base_url="http://unused",
+            providers=providers or {"http": self.tools},
+            policy=policy,
+            flows=flows,
         )
         return pipeline
 
@@ -160,8 +164,8 @@ class World:
                 )
                 return made[0]
 
-            shared = pipeline or self.pipeline(providers, policy)
-            engine, agent, _ = build_engine(
+            shared = pipeline or self.pipeline(providers, policy, flows)
+            engine, _, _ = build_engine(
                 llm,
                 api_base_url="http://unused",
                 journal=journal,
@@ -172,7 +176,7 @@ class World:
             )
             engine.attach_confirmation(
                 ConfirmationStage(
-                    agent=agent,
+                    agent=shared.compiled,
                     pipeline=shared,
                     uows=self.uows,
                     executor=made[0],
@@ -222,7 +226,7 @@ class World:
         ) -> TurnEngine:
             agent = compiled.agent
             gate = policy or PolicyGate(agent.allowed_capabilities)
-            pipeline = CapabilityPipeline(agent, gate, ToolRunner(providers))
+            pipeline = CapabilityPipeline(compiled, gate, ToolRunner(providers))
             executor = LedgerToolExecutor(
                 pipeline=pipeline,
                 uows=self.uows,
@@ -237,7 +241,7 @@ class World:
             )
             engine.attach_confirmation(
                 ConfirmationStage(
-                    agent=agent,
+                    agent=compiled,
                     pipeline=pipeline,
                     uows=self.uows,
                     executor=executor,
@@ -284,7 +288,7 @@ class World:
             registry=registry,
             agent_id=agent_id,
             pipeline_factory=lambda compiled: CapabilityPipeline(
-                compiled.agent,
+                compiled,
                 PolicyGate(compiled.agent.allowed_capabilities),
                 ToolRunner(providers),
             ),

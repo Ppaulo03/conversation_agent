@@ -65,7 +65,14 @@ class TurnEngine:
         max_steps: int = MAX_STEPS_DEFAULT,
         tool_executor: ToolStepExecutor | None = None,
     ) -> None:
-        # The engine only runs what the compiler produced (INV-029).
+        # The engine only runs what the compiler produced (INV-029), and every part of the graph
+        # must come from THAT compiled agent (INV-030): no split-brain between definitions.
+        if (pipeline.compiled.agent_id, pipeline.compiled.version, pipeline.compiled.digest) != (
+            agent.agent_id,
+            agent.version,
+            agent.digest,
+        ):
+            raise ValueError("the capability pipeline was built from a different compiled agent")
         self._compiled = agent
         self._agent: AgentDefinition = agent.agent
         self._llm = llm
@@ -87,6 +94,10 @@ class TurnEngine:
 
     def attach_confirmation(self, stage: ConfirmationStage) -> None:
         """Enable the protected-action confirmation stage (needs the ledger executor)."""
+        if stage.compiled.digest != self._compiled.digest or (
+            stage.compiled.version != self._compiled.version
+        ):
+            raise ValueError("the confirmation stage was built from a different compiled agent")
         self._confirmation = stage
 
     async def process_turn(

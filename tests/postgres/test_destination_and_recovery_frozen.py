@@ -26,6 +26,7 @@ from conversation_agent.core.models.runtime import InvocationStatus, ToolInvocat
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.tool_runner import ToolRunner
 from postgres.world import KEY, AllowWrites, World, event
+from support.builders import make_pipeline
 from vertical_slice.definitions import (
     CREATE_BINDING,
     ERP_CREATE_RESERVATION,
@@ -52,9 +53,7 @@ def posts(api: ApiHandle) -> list[dict[str, object]]:
 def pipeline_for(
     provider: HTTPToolProvider, agent: AgentDefinition | None = None
 ) -> CapabilityPipeline:
-    return CapabilityPipeline(
-        agent or build_agent(), AllowWrites(ALLOW), ToolRunner({"http": provider})
-    )
+    return make_pipeline(agent or build_agent(), AllowWrites(ALLOW), ToolRunner({"http": provider}))
 
 
 def provider_at(base_url: str) -> HTTPToolProvider:

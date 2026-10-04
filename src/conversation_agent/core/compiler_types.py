@@ -16,7 +16,11 @@ from pydantic import BaseModel
 
 from conversation_agent.core.definitions.mapping import TRANSFORM_SPECS, Const, Each, MapExpr, Ref
 
-Tag = str | tuple[str, frozenset[str]]  # ("enum", values) or one of the plain names
+# A Tag is a plain name ("string", "date", ...) or a structured tuple:
+#   ("enum", frozenset(values))
+#   ("list", element Tag)
+#   ("object", ((name, Tag, required), ...) | None, forbids_extra)   (None: untyped object)
+Tag = Any
 ANY = "any"
 _SEGMENT = re.compile(r"\.([A-Za-z_][\w-]*)|\[(\d+|\*)\]")
 
@@ -35,8 +39,10 @@ def unwrap(annotation: Any) -> Any:
         return annotation
 
 
-def tag_of_annotation(annotation: Any) -> Tag:
+def tag_of_annotation(annotation: Any, depth: int = 0) -> Tag:
     ann = unwrap(annotation)
+    if depth > 6:
+        return ANY  # recursive models: stop checking, never loop
     if get_origin(ann) is Literal:
         return ("enum", frozenset(str(v) for v in get_args(ann)))
     if ann is bool:
@@ -52,9 +58,14 @@ def tag_of_annotation(annotation: Any) -> Tag:
     if ann is date:
         return "date"
     if get_origin(ann) is list or ann is list:
-        return "list"
+        args = get_args(ann)
+        return ("list", tag_of_annotation(args[0], depth + 1) if args else ANY)
     if isinstance(ann, type) and issubclass(ann, BaseModel):
-        return "object"
+        fields = tuple(
+            (name, tag_of_annotation(f.annotation, depth + 1), f.is_required())
+            for name, f in sorted(ann.model_fields.items())
+        )
+        return ("object", fields, ann.model_config.get("extra") == "forbid")
     return ANY
 
 
@@ -68,9 +79,9 @@ def tag_of_value(value: Any) -> Tag:
     if isinstance(value, str):
         return "string"
     if isinstance(value, list):
-        return "list"
+        return ("list", ANY)
     if isinstance(value, dict):
-        return "object"
+        return ("object", None, False)
     return ANY
 
 
@@ -82,9 +93,15 @@ def compatible(source: Tag, target: Tag) -> bool:
     if ANY in (source, target) or source == target:
         return True
     if isinstance(source, tuple) and isinstance(target, tuple):
-        return source[1] <= target[1]
+        if source[0] != target[0]:
+            return False
+        if source[0] == "enum":
+            return bool(source[1] <= target[1])
+        if source[0] == "list":
+            return compatible(source[1], target[1])
+        return _object_compatible(source, target)
     if isinstance(source, tuple):
-        return target == "string"
+        return bool(source[0] == "enum" and target == "string")
     if isinstance(target, tuple):
         return False  # a free string/number is not known to be one of the allowed values
     plain = {
@@ -97,8 +114,40 @@ def compatible(source: Tag, target: Tag) -> bool:
     return (source, target) in plain
 
 
+def _object_compatible(source: Tag, target: Tag) -> bool:
+    """Assignable when every required target field is provided with a compatible type, optional
+    ones that are provided are compatible, and a strict target gets no field it does not know."""
+    if source[1] is None or target[1] is None:
+        return True  # untyped on either side: nothing to verify
+    have = {name: (tag, required) for name, tag, required in source[1]}
+    wanted = {name: (tag, required) for name, tag, required in target[1]}
+    for name, (tag, required) in wanted.items():
+        if name not in have:
+            if required:
+                return False
+            continue
+        provided, provided_required = have[name]
+        if required and not provided_required:
+            return False
+        if not compatible(provided, tag):
+            return False
+    return not (target[2] and set(have) - set(wanted))
+
+
+def is_list(tag: Tag) -> bool:
+    return isinstance(tag, tuple) and tag[0] == "list"
+
+
 def show(tag: Tag) -> str:
-    return f"enum{sorted(tag[1])}" if isinstance(tag, tuple) else tag
+    if isinstance(tag, tuple):
+        if tag[0] == "enum":
+            return f"enum{sorted(tag[1])}"
+        if tag[0] == "list":
+            return f"list[{show(tag[1])}]"
+        if tag[1] is None:
+            return "object"
+        return "object{" + ", ".join(f"{n}: {show(t)}" for n, t, _ in tag[1]) + "}"
+    return str(tag)
 
 
 # --- paths ---
@@ -160,7 +209,7 @@ def infer(expr: MapExpr, source: type[BaseModel]) -> tuple[Tag, list[str]]:
     if isinstance(expr, Const):
         return tag_of_value(expr.const), []
     if isinstance(expr, Each):
-        return "list", []
+        return ("list", ANY), []
     assert isinstance(expr, Ref)
     ann, err = resolve_path(source, expr.from_)
     if err:

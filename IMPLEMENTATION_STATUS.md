@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5.1 — hardening da Fase 5 concluído (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 5.2 — hardening da Fase 5 concluído (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -456,3 +456,24 @@ Aceito e documentado: o compiler ainda para entre estágios (versões/referênci
 problemas em estágios diferentes não os reporta todos numa só passada; dentro de cada estágio tudo é coletado.
 Política de compiler: `SUPPORTED_COMPILER_VERSIONS` é um conjunto; quando o compiler mudar de significado, a versão antiga precisa de um loader
 compatível (ou o agente histórico é re-publicado) — até lá, falhar explicitamente é o comportamento escolhido.
+
+
+## Phase 5.2 — fechamento da camada Definition → Compiler → Registry → Runtime
+
+Status: **PASS** (achados verificados no código antes de corrigir). Novas invariantes **INV-030** e **INV-031**.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| P0 protected `PendingAction` sem pergunta de confirmação (`confirmation_prompt_enabled: false`) | `AgentDefinition` rejeita `false` enquanto houver capability protegida permitida (vale para Python e manifest); permitido quando nada é protegido | `test_a_protected_agent_cannot_turn_the_confirmation_question_off`, `test_the_confirmation_question_can_be_off_when_nothing_is_protected` |
+| P0 templates de confirmação sem `{summary}` / com placeholder desconhecido explodiam em runtime | `core/templates.py`: bem formado, nomes simples, sem format spec; `prompt`/`reprompt` exigem `{summary}`, `executed_fallback` só `{status}`, `rejected/expired/gave_up` nenhum; o mesmo vale para todo texto de Flow (slots + `{options}`/`{question}`) | `test_confirmation_texts_must_be_formattable_*`, `test_flow_texts_cannot_hold_templates_*` |
+| P0 split-brain (`TurnEngine` com `CompiledAgent` A + `CapabilityPipeline` de B) | `CapabilityPipeline` é construído a partir do `CompiledAgent`; o engine confere versão+digest do pipeline e do `ConfirmationStage` (`ValueError` se diferirem); wiring usa o pipeline como raiz | `test_the_engine_refuses_a_pipeline_built_from_another_compiled_agent` |
+| P1 type check só por categoria (list/object) | tags estruturais recursivas: `list[A]→list[B]`, objeto→objeto (obrigatórios providos, tipos compatíveis, alvo estrito não recebe campo extra); limite de profundidade para modelos recursivos | `test_a_whole_list_cannot_fill_a_list_of_different_items`, `test_an_object_cannot_fill_*`, `test_structurally_compatible_objects_are_accepted`, `test_a_strict_target_object_rejects_*` |
+| P1 defaults de `FieldSpec` não validados | validados contra tipo/enum/limites/itens/objeto na construção do manifest e coagidos uma vez no `build_model` (Pydantic não valida defaults: um `date` ficava string); semântica de `required:false` ⇒ ausente e null aceitos, documentada | `test_a_default_must_satisfy_its_own_field`, `test_valid_defaults_are_accepted_and_applied`, `test_an_optional_field_accepts_an_explicit_null_as_documented` |
+| P1 remoção da allowlist não era breaking | `allowed_capabilities` removida exige MAJOR | `test_removing_a_capability_from_the_allowlist_is_a_breaking_change` |
+| P1 registry global vs tenant | **decisão: tenant-scoped** `(tenant_id, agent_id, version)` — API `publish/get/latest/versions` recebe `tenant_id`; migration 0009 recria a tabela (0007 nunca teve dados); lock advisory por `(tenant, agent)`; coordinator e reconciliation usam o tenant da conversa/invocação | `test_the_registry_is_tenant_scoped` |
+| P1 `RegistryIntegrity/Compatibility` derrubava o worker | turno: ALERT + `retry_later` (nada executa); reconciliation: só aquela invocação vai a `HUMAN_HANDOFF` (`AGENT_VERSION_UNAVAILABLE`) e o lote segue | `test_a_corrupt_agent_stops_that_conversation_not_the_worker`, `test_a_corrupt_definition_hands_that_invocation_to_a_human_and_the_batch_goes_on` |
+| P2 `min_framework` fora da identidade da publicação | `CompiledAgent.manifest_digest` (artefato publicado) separado de `digest` (o que o agente faz); mesma versão + outro manifest ⇒ `VersionConflictError` ("different metadata") | `test_two_manifests_that_differ_only_in_metadata_are_not_the_same_publication` |
+| P2 armadilha do primeiro bump de compiler | `COMPILERS: {versão → função de compile}` em `core/compiler.py`; o registry escolhe o loader pela `compiler_version` gravada (o antigo continua existindo no bump) | `test_an_agent_from_an_unknown_compiler_version_is_refused_explicitly` |
+
+Aceito: o compiler ainda reporta por estágio (já documentado na 5.1). Requisito explícito do primeiro bump de compiler: adicionar o
+loader novo em `COMPILERS` mantendo o anterior (ou republicar o histórico).

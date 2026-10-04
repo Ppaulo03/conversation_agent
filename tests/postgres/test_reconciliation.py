@@ -29,10 +29,10 @@ from conversation_agent.core.models.runtime import (
     ToolInvocation,
 )
 from conversation_agent.core.models.tooling import ToolResult
-from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.ports.llm import LLMRequest
 from postgres.world import KEY, TTL, AllowWrites, World, event
+from support.builders import make_pipeline
 from vertical_slice.definitions import ERP_CREATE_RESERVATION, build_agent
 
 BOOKING_ARGS = {
@@ -287,7 +287,7 @@ async def test_no_recovery_contract_means_human_handoff_and_an_honest_reply(
         update={"tools": tuple(bare if t.name == bare.name else t for t in agent.tools)}
     )
     providers = {"http": world.http_provider(api.base_url)}
-    pipeline = CapabilityPipeline(no_contract, AllowWrites(ALLOW), ToolRunner(providers))
+    pipeline = make_pipeline(no_contract, AllowWrites(ALLOW), ToolRunner(providers))
 
     await start(world)
     api.state.fault = {"status_after_effect": 503}
@@ -315,7 +315,7 @@ async def test_write_retry_requires_supported_idempotency_and_same_key(
     # ...and "not found" on a NON-idempotent tool escalates instead of re-sending
     agent = build_agent()
     risky = ERP_CREATE_RESERVATION.model_copy(update={"idempotency_supported": False})
-    pipeline = CapabilityPipeline(
+    pipeline = make_pipeline(
         agent.model_copy(
             update={"tools": tuple(risky if t.name == risky.name else t for t in agent.tools)}
         ),

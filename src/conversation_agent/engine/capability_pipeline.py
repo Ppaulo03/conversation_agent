@@ -10,7 +10,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, model_validator
 
-from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.errors import ConnectionNotFoundError
 from conversation_agent.core.models.llm import LLMToolDefinition
@@ -80,11 +80,19 @@ def llm_name_for(capability_name: str) -> str:
 
 
 class CapabilityPipeline:
-    def __init__(self, agent: AgentDefinition, policy: PolicyGate, runner: ToolRunner) -> None:
+    def __init__(self, compiled: CompiledAgent, policy: PolicyGate, runner: ToolRunner) -> None:
+        """Built from the COMPILED agent, so everything downstream (engine, confirmation stage,
+        reconciliation) can prove it works on the same definition (one compiled root)."""
+        self._compiled = compiled
+        agent = compiled.agent
         self._agent = agent
         self._policy = policy
         self._runner = runner
         self._by_tool_name = {c.llm_name: c.name for c in agent.capabilities}
+
+    @property
+    def compiled(self) -> CompiledAgent:
+        return self._compiled
 
     def exposed_tools(self, ctx: PolicyContext | None = None) -> tuple[LLMToolDefinition, ...]:
         """Capability schemas (never API schemas) for what THIS tenant may actually use: a

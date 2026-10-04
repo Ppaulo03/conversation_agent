@@ -12,6 +12,7 @@ post-build checks with `compile_agent`.
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, get_args, get_origin
 
@@ -23,6 +24,7 @@ from conversation_agent.core.compiler_types import (
     compatible,
     element_model,
     infer,
+    is_list,
     resolve_path,
     show,
     tag_of_annotation,
@@ -107,6 +109,15 @@ class CompiledAgent:
             raise TypeError("a CompiledAgent can only be produced by the compiler")
 
     @property
+    def manifest_digest(self) -> str:
+        """Identity of the PUBLISHED ARTIFACT (the manifest, metadata included), as opposed to
+        `digest`, the identity of what the agent does. Two manifests that differ only in
+        `min_framework` have the same `digest` but are different publications."""
+        if self.manifest is None:
+            return self.digest
+        return stable_hash(self.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True))
+
+    @property
     def agent_id(self) -> str:
         return self.agent.agent_id
 
@@ -145,6 +156,14 @@ def compile_agent(agent: AgentDefinition) -> CompiledAgent:
     if problems:
         raise CompileError(problems)
     return CompiledAgent(agent=agent, digest=agent_digest(agent), manifest=None, _seal=_SEAL)
+
+
+# One loader per compiler version that ever published a manifest. Bumping COMPILER_VERSION means
+# adding the new compile function HERE and keeping the old one, so history is never reinterpreted
+# by a newer compiler (the registry looks the loader up by the stored version).
+COMPILERS: dict[str, Callable[[AgentManifest | dict[str, Any]], CompiledAgent]] = {
+    COMPILER_VERSION: compile_manifest,
+}
 
 
 # --- digest ---
@@ -459,9 +478,8 @@ def _check_expr(
                     f"produces {show(produced)} but the target takes {show(wanted)}",
                 )
             )
-    elif target_annotation is not None and tag_of_annotation(target_annotation) not in (
-        "list",
-        ANY,
+    elif target_annotation is not None and not (
+        is_list(tag_of_annotation(target_annotation)) or tag_of_annotation(target_annotation) == ANY
     ):
         found.append(
             Diagnostic(

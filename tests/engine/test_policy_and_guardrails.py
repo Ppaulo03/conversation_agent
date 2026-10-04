@@ -22,7 +22,6 @@ from conversation_agent.core.models.llm import (
 from conversation_agent.core.models.runtime import Ownership
 from conversation_agent.core.models.tooling import CapabilityResult, ToolResult
 from conversation_agent.core.redaction import redact
-from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.policy_rules import (
     AllowedHoursRule,
@@ -35,7 +34,7 @@ from conversation_agent.engine.policy_rules import (
 from conversation_agent.engine.prompts import render_result
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.turn_engine import TurnEngine
-from support.builders import IDENTITY, availability_call, new_clock, new_journal
+from support.builders import IDENTITY, availability_call, make_pipeline, new_clock, new_journal
 from vertical_slice.definitions import build_agent
 
 ALL = frozenset({"scheduling.availability", "scheduling.create"})
@@ -52,7 +51,7 @@ def engine_for(
 ) -> tuple[TurnEngine, FakeToolProvider]:
     agent = build_agent().model_copy(update=agent_updates)
     tools = FakeToolProvider({"erp_get_available_slots": SLOTS, "erp_create_reservation": SLOTS})
-    pipeline = CapabilityPipeline(agent, gate, ToolRunner({"http": tools}))
+    pipeline = make_pipeline(agent, gate, ToolRunner({"http": tools}))
     return TurnEngine(compile_agent(agent), llm, pipeline, new_journal(), new_clock()), tools
 
 
@@ -215,7 +214,7 @@ def test_redaction_leaves_ordinary_text_alone() -> None:
 def test_a_capability_the_tenant_cannot_call_is_not_even_shown_to_the_model() -> None:
     gate = PolicyGate(ALL, tenant_allowlists={"acme": frozenset({"scheduling.availability"})})
     agent = build_agent()
-    pipeline = CapabilityPipeline(agent, gate, ToolRunner({}))
+    pipeline = make_pipeline(agent, gate, ToolRunner({}))
     shown = {t.name for t in pipeline.exposed_tools(PolicyContext(tenant_id="acme"))}
     assert shown == {"scheduling__availability"}  # no create schema for acme
     other = {t.name for t in pipeline.exposed_tools(PolicyContext(tenant_id="globex"))}
@@ -223,7 +222,7 @@ def test_a_capability_the_tenant_cannot_call_is_not_even_shown_to_the_model() ->
 
 
 def test_a_conversation_a_human_owns_exposes_no_tools() -> None:
-    pipeline = CapabilityPipeline(build_agent(), PolicyGate(ALL), ToolRunner({}))
+    pipeline = make_pipeline(build_agent(), PolicyGate(ALL), ToolRunner({}))
     assert pipeline.exposed_tools(PolicyContext(ownership=Ownership.HUMAN)) == ()
 
 

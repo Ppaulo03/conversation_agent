@@ -20,6 +20,7 @@ from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.faults import ChaosFaults, SimulatedCrash
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.postgres.db import PostgresDatabase
+from conversation_agent.core.compiler import compile_agent
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.tool import RecoverySpec
 from conversation_agent.core.errors import ConversationIdentityConflictError
@@ -28,7 +29,7 @@ from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.ports.llm import LLMRequest
 from postgres.world import KEY, TTL, AllowWrites, World, event
-from support.builders import IDENTITY, availability_call
+from support.builders import IDENTITY, availability_call, make_pipeline
 from vertical_slice.definitions import (
     CREATE_BINDING,
     ERP_CREATE_RESERVATION,
@@ -57,7 +58,7 @@ def book_first() -> FakeLLM:
 
 
 def pipeline_for(world: World, api: ApiHandle, agent: AgentDefinition) -> CapabilityPipeline:
-    return CapabilityPipeline(
+    return make_pipeline(
         agent, AllowWrites(ALLOW), ToolRunner({"http": world.http_provider(api.base_url)})
     )
 
@@ -174,7 +175,9 @@ async def test_a_deploy_between_prepare_and_execute_fails_closed_without_sending
             return False  # the deployed definitions no longer match what was prepared
 
     pipeline = Drifted(
-        build_agent(), AllowWrites(ALLOW), ToolRunner({"http": world.http_provider(api.base_url)})
+        compile_agent(build_agent()),
+        AllowWrites(ALLOW),
+        ToolRunner({"http": world.http_provider(api.base_url)}),
     )
     await world.inbox.insert_if_absent(event("e1", "terça 10h", clock=world.clock))
     seen: dict[str, Any] = {}

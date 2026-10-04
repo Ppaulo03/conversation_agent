@@ -34,12 +34,13 @@ def build_pipeline(
     """Capability -> Binding -> PolicyGate -> ToolRunner for the scheduling agent (the Python
     definition unless a compiled one is passed)."""
     agent = agent or build_agent(flows=flows)
+    compiled = compile_agent(agent)
     http: HTTPToolProvider | None = None
     if providers is None:
         http = HTTPToolProvider.static({CONNECTION: local_dev_connection(api_base_url)})
         providers = {"http": http}
     gate = policy or PolicyGate(agent.allowed_capabilities)
-    return CapabilityPipeline(agent, gate, ToolRunner(providers)), agent, http
+    return CapabilityPipeline(compiled, gate, ToolRunner(providers)), agent, http
 
 
 def build_engine(
@@ -60,10 +61,10 @@ def build_engine(
         pipeline, agent, http = build_pipeline(
             api_base_url=api_base_url, providers=providers, policy=policy, flows=flows, agent=agent
         )
-    else:
-        agent = agent or build_agent(flows=flows)
+    else:  # an existing pipeline fixes the agent: the engine must run the SAME compiled one
+        agent = pipeline.compiled.agent
     engine = TurnEngine(
-        compile_agent(agent),
+        pipeline.compiled,
         llm,
         pipeline,
         journal or InMemoryTurnJournal(),

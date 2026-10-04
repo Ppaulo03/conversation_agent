@@ -16,6 +16,7 @@ from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Inv
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
+from conversation_agent.core.templates import check_template, placeholders
 from conversation_agent.core.temporal_ptbr import fold
 
 
@@ -82,6 +83,7 @@ class AgentDefinition(BaseModel):
                     f"binding {b.capability!r}->{b.tool!r} declares risk {b.risk!r}, lower than "
                     f"{floor!r}: a binding can raise protection but never lower it"
                 )
+        self._check_texts(by_cap)
         self._check_flows(by_cap)
         self._check_retry_against_effective_risk(by_cap, by_tool)
         self._check_recovery_lookups(by_cap, by_tool)
@@ -90,6 +92,32 @@ class AgentDefinition(BaseModel):
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_texts(self, by_cap: dict[str, CapabilityDefinition]) -> None:
+        """Every runtime template must format, and a protected capability must always be asked
+        about explicitly: the runtime-owned confirmation question is what a later "yes" answers."""
+        c = self.confirmation
+        summary = frozenset({"summary"})
+        check_template("confirmation.prompt", c.prompt, {"summary"}, required=summary)
+        check_template("confirmation.reprompt", c.reprompt, {"summary"}, required=summary)
+        check_template("confirmation.executed_fallback", c.executed_fallback, {"status"})
+        for label in ("rejected", "expired", "gave_up"):
+            check_template(f"confirmation.{label}", getattr(c, label), set())
+        for cap in self.capabilities:
+            if cap.summary_template:
+                placeholders(cap.summary_template)  # well formed (field names: compiler)
+        if not self.confirmation_prompt_enabled:
+            protected = [
+                n
+                for n in sorted(self.allowed_capabilities)
+                if (r := self.resolve(n)) is not None and r.requires_protection
+            ]
+            if protected:
+                raise DefinitionError(
+                    f"confirmation_prompt_enabled=false is not allowed while protected "
+                    f"capabilities are allowed ({protected}): a pending action without an "
+                    "explicit confirmation question could be confirmed by an unrelated yes"
+                )
 
     def _check_flows(self, by_cap: dict[str, CapabilityDefinition]) -> None:
         """A flow only ever talks to Capabilities this agent has. Protection is decided by the

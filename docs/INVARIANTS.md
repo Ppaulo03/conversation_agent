@@ -36,6 +36,8 @@ INV-026  provider_accepted_at é o horário de aceite no domínio do canal ou NU
 INV-027  uma operação PREPARED não muda de destino: a conexão resolvida (fingerprint sem segredos) e, em status_lookup, o próprio lookup (args + destino) são congelados no PREPARE; mudança de destino/lookup falha fechado (nada é enviado ou decidido).
 INV-028  uma versão publicada de agente é imutável (mesmo conteúdo = no-op, outro conteúdo na mesma versão = erro; versões só avançam; mudança incompatível exige bump MAJOR, avaliada sobre o risco/proteção EFETIVOS). Uma conversa fica fixada em (agent_id, versão) enquanto há algo em andamento (outro agente com trabalho aberto falha fechado) e uma invocação é reconciliada com a versão que a preparou; versão ausente falha fechado (nunca outra versão).
 INV-029  um agente só roda depois de compilado (o runtime só aceita CompiledAgent, que só o compiler produz): referências, risco, mapeamentos, schemas, error_map e versões inválidos são rejeitados antes do runtime, e o conteúdo carregado deve bater com o digest publicado.
+INV-030  o grafo de runtime tem exatamente um CompiledAgent como raiz de definição: engine, pipeline, estágio de confirmação e reconciliation derivam do mesmo agente compilado (versão + digest conferidos); uma protected action nunca existe sem a pergunta de confirmação do runtime (`confirmation_prompt_enabled=false` é rejeitado quando há capability protegida; os templates de confirmação precisam conter `{summary}`).
+INV-031  o registry de agentes é tenant-scoped: `(tenant_id, agent_id, version)` é a identidade; um tenant nunca lê nem sombreia agentes de outro.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -75,6 +77,8 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-027 | `test_a_prepared_write_is_never_sent_to_a_destination_it_was_not_prepared_for`, `test_a_changed_lookup_binding_refuses_to_decide_absence`, `test_the_execution_path_refuses_a_stale_destination_without_sending` |
 | INV-028 | `test_a_published_version_is_immutable`, `test_published_rows_are_immutable_in_the_database_itself`, `test_a_conversation_stays_on_its_version_while_something_is_in_progress`, `test_an_unknown_write_is_reconciled_with_the_version_that_prepared_it`, `test_reconciliation_never_substitutes_another_version`, `test_a_minor_version_cannot_lower_the_effective_risk`, `test_a_minor_version_cannot_remove_effective_protection`, `test_a_conversation_is_pinned_to_the_agent_not_just_the_version` |
 | INV-029 | `tests/compiler/test_compiler.py` (refs, schemas, risco, bindings, versões), `test_a_stored_agent_that_no_longer_matches_its_digest_is_refused`, `test_only_the_compiler_can_produce_a_compiled_agent`, `test_a_mapping_cannot_feed_a_value_of_the_wrong_type` |
+| INV-030 | `test_the_engine_refuses_a_pipeline_built_from_another_compiled_agent`, `test_a_protected_agent_cannot_turn_the_confirmation_question_off`, `test_confirmation_texts_must_be_formattable_and_say_what_is_confirmed` |
+| INV-031 | `test_the_registry_is_tenant_scoped` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

@@ -23,7 +23,11 @@ from typing import Any
 from pydantic import ValidationError
 
 from conversation_agent.core.compiler import CompiledAgent
-from conversation_agent.core.errors import ExecutionFencingError, MappingError
+from conversation_agent.core.errors import (
+    ExecutionFencingError,
+    MappingError,
+    RegistryIntegrityError,
+)
 from conversation_agent.core.models.runtime import (
     ExecutionClaim,
     InvocationStatus,
@@ -162,14 +166,20 @@ class ReconciliationWorker:
         if self._registry is None or self._pipeline_factory is None:
             return self._pipeline
         version = invocation.context.agent_version
-        cached = self._pipelines.get(version)
+        key = f"{invocation.tenant_id}/{invocation.context.agent_id}/{version}"
+        cached = self._pipelines.get(key)
         if cached is not None:
             return cached
-        compiled = await self._registry.get(invocation.context.agent_id, version)
+        try:
+            compiled = await self._registry.get(
+                invocation.tenant_id, invocation.context.agent_id, version
+            )
+        except RegistryIntegrityError:
+            return None  # corrupt/incompatible definition: THIS invocation goes to a human
         if compiled is None:
             return None
-        self._pipelines[version] = self._pipeline_factory(compiled)
-        return self._pipelines[version]
+        self._pipelines[key] = self._pipeline_factory(compiled)
+        return self._pipelines[key]
 
     def _adopt(
         self,

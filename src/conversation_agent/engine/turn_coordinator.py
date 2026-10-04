@@ -25,6 +25,7 @@ from conversation_agent.core.errors import (
     FencingError,
     JournalDivergenceError,
     LLMProviderError,
+    RegistryIntegrityError,
     StaleWorkerError,
     ToolResultPendingError,
     TurnCancelledError,
@@ -206,7 +207,7 @@ class TurnCoordinator:
                 engine = self._versioned_engine_factory(fence, journal, compiled)
             else:
                 engine = self._engine_factory(fence, journal)
-        except (AgentVersionUnavailableError, AgentMismatchError) as exc:
+        except (AgentVersionUnavailableError, AgentMismatchError, RegistryIntegrityError) as exc:
             # Never run a conversation on a version it was not pinned to: wait for an operator.
             log.error("ALERT agent not runnable, turn left open: %s", redact(str(exc)))
             return "retry"
@@ -284,7 +285,7 @@ class TurnCoordinator:
             pinned = None  # idle: an explicit re-assignment to the routed agent
         target = pinned
         if pinned is None or idle:
-            latest = await self._registry.latest(self._agent_id)
+            latest = await self._registry.latest(fence.tenant_id, self._agent_id)
             if latest is not None and (pinned is None or Version(latest.version) > Version(pinned)):
                 target = latest.version
         if target is None:
@@ -293,7 +294,7 @@ class TurnCoordinator:
             async with self._uows.begin(fence) as uow:
                 await uow.state.pin_agent(self._agent_id, target)
                 await uow.commit()
-        compiled = await self._registry.get(self._agent_id, target)
+        compiled = await self._registry.get(fence.tenant_id, self._agent_id, target)
         if compiled is None:
             raise AgentVersionUnavailableError(f"{self._agent_id!r} {target} is not published")
         return compiled

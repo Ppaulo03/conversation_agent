@@ -44,6 +44,8 @@ def breaking_changes(old: CompiledAgent, new: CompiledAgent) -> tuple[str, ...]:
             found.append(f"capability {name!r} changed its input schema")
         if current["output"] != cap["output"]:
             found.append(f"capability {name!r} changed its output schema")
+    for name in sorted(set(before["allowed_capabilities"]) - set(after["allowed_capabilities"])):
+        found.append(f"capability {name!r} is no longer allowed for the agent")
     old_flows = {f["name"] for f in before["flows"]}
     for name in sorted(old_flows - {f["name"] for f in after["flows"]}):
         found.append(f"flow {name!r} was removed")
@@ -74,10 +76,11 @@ def _protection_changes(
 def plan_publish(existing: list[CompiledAgent], new: CompiledAgent) -> PublishPlan:
     same = next((e for e in existing if e.version == new.version), None)
     if same is not None:
-        if same.digest == new.digest:
+        if same.manifest_digest == new.manifest_digest:
             return PublishPlan("idempotent")
+        what = "different metadata" if same.digest == new.digest else "different content"
         raise VersionConflictError(
-            f"{new.agent_id} {new.version} is already published with different content; "
+            f"{new.agent_id} {new.version} is already published with {what}; "
             "published versions are immutable: publish a new version"
         )
     if not existing:

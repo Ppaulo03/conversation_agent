@@ -27,10 +27,12 @@ from conversation_agent.core.errors import (
 )
 from conversation_agent.core.models.runtime import InvocationStatus
 from postgres.world import KEY, AllowWrites, World, event
+from support.builders import IDENTITY
 from vertical_slice.definitions import build_agent
 from vertical_slice.wiring import MANIFEST_PATH
 
 AGENT_ID = "scheduling-demo"
+TENANT = IDENTITY.tenant_id
 BOOKING = {
     "service_id": "haircut",
     "start_at": "2026-10-06T10:00:00-03:00",
@@ -59,27 +61,27 @@ def world(db: PostgresDatabase, clock: FixedClock) -> World:
 
 async def test_publishing_the_same_content_twice_is_a_noop() -> None:
     registry = InMemoryAgentRegistry()
-    first = await registry.publish(compiled("1.0.0"))
-    again = await registry.publish(compiled("1.0.0"))
+    first = await registry.publish(TENANT, compiled("1.0.0"))
+    again = await registry.publish(TENANT, compiled("1.0.0"))
     assert first.created and not again.created and again.digest == first.digest
 
 
 async def test_a_published_version_is_immutable() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("1.0.0"))
+    await registry.publish(TENANT, compiled("1.0.0"))
     with pytest.raises(VersionConflictError):
-        await registry.publish(compiled("1.0.0", persona="Outra persona."))
+        await registry.publish(TENANT, compiled("1.0.0", persona="Outra persona."))
 
 
 async def test_versions_only_move_forward_and_order_numerically() -> None:
     registry = InMemoryAgentRegistry()
     for version in ("0.9.0", "0.10.0"):
-        await registry.publish(compiled(version))
-    assert await registry.versions(AGENT_ID) == ["0.9.0", "0.10.0"]  # not string order
-    latest = await registry.latest(AGENT_ID)
+        await registry.publish(TENANT, compiled(version))
+    assert await registry.versions(TENANT, AGENT_ID) == ["0.9.0", "0.10.0"]  # not string order
+    latest = await registry.latest(TENANT, AGENT_ID)
     assert latest is not None and latest.version == "0.10.0"
     with pytest.raises(VersionRegressionError):
-        await registry.publish(compiled("0.9.5"))
+        await registry.publish(TENANT, compiled("0.9.5"))
 
 
 def without_capability(version: str) -> dict[str, Any]:
@@ -96,16 +98,16 @@ def without_capability(version: str) -> dict[str, Any]:
 
 async def test_a_breaking_change_needs_a_major_bump() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("1.0.0"))
+    await registry.publish(TENANT, compiled("1.0.0"))
     with pytest.raises(IncompatibleUpgradeError, match="was removed"):
-        await registry.publish(compile_manifest(without_capability("1.1.0")))
-    published = await registry.publish(compile_manifest(without_capability("2.0.0")))
+        await registry.publish(TENANT, compile_manifest(without_capability("1.1.0")))
+    published = await registry.publish(TENANT, compile_manifest(without_capability("2.0.0")))
     assert published.created and any("was removed" in c for c in published.breaking_changes)
 
 
 async def test_lowering_a_capability_risk_is_a_breaking_change() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("1.0.0"))
+    await registry.publish(TENANT, compiled("1.0.0"))
     raw = manifest("1.1.0")
     create = next(c for c in raw["capabilities"] if c["name"] == "scheduling.create")
     create["risk"] = "write"
@@ -113,7 +115,7 @@ async def test_lowering_a_capability_risk_is_a_breaking_change() -> None:
         if tool["name"] == "erp_create_reservation":
             tool["risk"] = "write"
     with pytest.raises(IncompatibleUpgradeError, match="lowered its effective risk"):
-        await registry.publish(compile_manifest(raw))
+        await registry.publish(TENANT, compile_manifest(raw))
 
 
 # --- durable registry ---
@@ -122,15 +124,15 @@ async def test_lowering_a_capability_risk_is_a_breaking_change() -> None:
 async def test_the_durable_registry_roundtrips_and_checks_the_digest(world: World) -> None:
     registry = PostgresAgentRegistry(world.db)
     original = compiled("1.0.0")
-    await registry.publish(original)
-    fresh = await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")  # another process
+    await registry.publish(TENANT, original)
+    fresh = await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")  # another process
     assert fresh is not None and fresh.digest == original.digest
     assert fresh.agent.agent_id == AGENT_ID and len(fresh.agent.flows) == 1
 
 
 async def test_published_rows_are_immutable_in_the_database_itself(world: World) -> None:
     registry = PostgresAgentRegistry(world.db)
-    await registry.publish(compiled("1.0.0"))
+    await registry.publish(TENANT, compiled("1.0.0"))
     with pytest.raises(asyncpg.PostgresError, match="immutable"):
         await world.db.pool.execute("UPDATE published_agents SET digest = 'x'")
     with pytest.raises(asyncpg.PostgresError, match="immutable"):
@@ -141,27 +143,30 @@ async def test_a_stored_agent_that_no_longer_matches_its_digest_is_refused(world
     good = compiled("1.0.0")
     assert good.manifest is not None
     await world.db.pool.execute(
-        "INSERT INTO published_agents (agent_id, version, digest, manifest_json, schema_version, "
-        "compiler_version) VALUES ($1,$2,$3,$4,1,'1')",
+        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_json, "
+        "schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,1,'1')",
+        TENANT,
         AGENT_ID,
         "1.0.0",
         "0" * 64,  # not what this manifest compiles to
-        good.manifest.model_dump(mode="json", by_alias=True),
+        good.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
     )
     with pytest.raises(RegistryIntegrityError):
-        await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")
+        await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")
 
 
 async def test_python_agents_cannot_be_published_durably(world: World) -> None:
     with pytest.raises(PublishError, match="manifest"):
-        await PostgresAgentRegistry(world.db).publish(compile_agent(build_agent(flows=True)))
+        await PostgresAgentRegistry(world.db).publish(
+            TENANT, compile_agent(build_agent(flows=True))
+        )
 
 
 async def test_concurrent_publishers_cannot_both_win_the_same_version(world: World) -> None:
     a, b = PostgresAgentRegistry(world.db), PostgresAgentRegistry(world.db)
     results = await asyncio.gather(
-        a.publish(compiled("1.0.0", persona="A")),
-        b.publish(compiled("1.0.0", persona="B")),
+        a.publish(TENANT, compiled("1.0.0", persona="A")),
+        b.publish(TENANT, compiled("1.0.0", persona="B")),
         return_exceptions=True,
     )
     assert sum(isinstance(r, VersionConflictError) for r in results) == 1
@@ -193,11 +198,11 @@ async def test_a_conversation_stays_on_its_version_while_something_is_in_progres
     world: World, api: ApiHandle
 ) -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("0.1.0"))
+    await registry.publish(TENANT, compiled("0.1.0"))
     await say(world, api, registry, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
     assert await pinned_version(world) == "0.1.0"  # pinned on the first turn
 
-    await registry.publish(compiled("0.2.0", persona="PERSONA NOVA."))  # a deploy mid-flow
+    await registry.publish(TENANT, compiled("0.2.0", persona="PERSONA NOVA."))  # a deploy mid-flow
     await world.outbox_worker("sender").run_once()  # the confirmation prompt reaches the channel
     world.clock.set(world.clock.now() + __import__("datetime").timedelta(seconds=30))
     llm = FakeLLM([text_response("Agendado!")])
@@ -216,7 +221,7 @@ async def test_a_missing_pinned_version_leaves_the_turn_open_and_runs_nothing(
     world: World, api: ApiHandle
 ) -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("0.1.0"))
+    await registry.publish(TENANT, compiled("0.1.0"))
     await say(world, api, registry, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
     await world.db.pool.execute("UPDATE conversation_states SET agent_version = '9.9.9'")
     llm = FakeLLM([])
@@ -229,7 +234,7 @@ async def test_a_missing_pinned_version_leaves_the_turn_open_and_runs_nothing(
 
 
 async def unknown_write_on_v1(world: World, api: ApiHandle, registry: Any) -> None:
-    await registry.publish(compiled("0.1.0"))
+    await registry.publish(TENANT, compiled("0.1.0"))
     await world.inbox.insert_if_absent(event("w1", "quero terça 10h", clock=world.clock))
     api.state.fault = {"status_after_effect": 503}  # the booking exists, the answer is lost
     coordinator = world.versioned_coordinator(
@@ -254,7 +259,7 @@ async def test_an_unknown_write_is_reconciled_with_the_version_that_prepared_it(
     next(t for t in v2["tools"] if t["name"] == "erp_create_reservation")["http"]["path"] = (
         "/v2/bookings"
     )
-    await registry.publish(compile_manifest(v2))
+    await registry.publish(TENANT, compile_manifest(v2))
 
     (resolved,) = await world.versioned_reconciler(
         "r", registry, AGENT_ID, providers={"http": world.http_provider(api.base_url)}
@@ -269,7 +274,7 @@ async def test_reconciliation_never_substitutes_another_version(
     registry = InMemoryAgentRegistry()
     await unknown_write_on_v1(world, api, registry)
     other = InMemoryAgentRegistry()  # a registry that does not have 0.1.0
-    await other.publish(compiled("0.2.0"))
+    await other.publish(TENANT, compiled("0.2.0"))
     (resolved,) = await world.versioned_reconciler(
         "r", other, AGENT_ID, providers={"http": world.http_provider(api.base_url)}
     ).run_once()
@@ -326,32 +331,34 @@ def tiny(
 
 async def test_a_minor_version_cannot_lower_the_effective_risk() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(tiny("1.0.0", tool_risk="irreversible"))
+    await registry.publish(TENANT, tiny("1.0.0", tool_risk="irreversible"))
     with pytest.raises(IncompatibleUpgradeError, match="lowered its effective risk"):
-        await registry.publish(tiny("1.1.0", tool_risk="read"))  # capability label never changed
-    published = await registry.publish(tiny("2.0.0", tool_risk="read"))
+        await registry.publish(
+            TENANT, tiny("1.1.0", tool_risk="read")
+        )  # capability label never changed
+    published = await registry.publish(TENANT, tiny("2.0.0", tool_risk="read"))
     assert published.created and published.breaking_changes
 
 
 async def test_a_minor_version_cannot_remove_effective_protection() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(tiny("1.0.0", tool_confirmation=True))
+    await registry.publish(TENANT, tiny("1.0.0", tool_confirmation=True))
     with pytest.raises(IncompatibleUpgradeError, match="no longer requires"):
-        await registry.publish(tiny("1.1.0", tool_confirmation=False))
+        await registry.publish(TENANT, tiny("1.1.0", tool_confirmation=False))
 
 
 async def test_raising_protection_in_a_minor_version_is_fine() -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(tiny("1.0.0"))
-    assert (await registry.publish(tiny("1.1.0", tool_confirmation=True))).created
+    await registry.publish(TENANT, tiny("1.0.0"))
+    assert (await registry.publish(TENANT, tiny("1.1.0", tool_confirmation=True))).created
 
 
 async def test_a_conversation_is_pinned_to_the_agent_not_just_the_version(
     world: World, api: ApiHandle
 ) -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("0.1.0"))
-    await registry.publish(compiled("0.1.0", agent_id="other-agent"))  # same version number
+    await registry.publish(TENANT, compiled("0.1.0"))
+    await registry.publish(TENANT, compiled("0.1.0", agent_id="other-agent"))  # same version number
     await say(world, api, registry, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
     row = await world.db.pool.fetchrow("SELECT agent_id, agent_version FROM conversation_states")
     assert (row["agent_id"], row["agent_version"]) == (AGENT_ID, "0.1.0")
@@ -375,8 +382,8 @@ async def test_an_idle_conversation_can_be_reassigned_to_another_agent(
     world: World, api: ApiHandle
 ) -> None:
     registry = InMemoryAgentRegistry()
-    await registry.publish(compiled("0.1.0"))
-    await registry.publish(compiled("0.1.0", agent_id="other-agent"))
+    await registry.publish(TENANT, compiled("0.1.0"))
+    await registry.publish(TENANT, compiled("0.1.0", agent_id="other-agent"))
     await say(world, api, registry, "oi", FakeLLM([text_response("Olá!")]), 1)  # idle: no flow
     await world.inbox.insert_if_absent(event("x2", "oi de novo", clock=world.clock))
     other = world.versioned_coordinator(
@@ -395,6 +402,7 @@ async def insert_row(world: World, **overrides: Any) -> None:
     good = compiled("1.0.0")
     assert good.manifest is not None
     values: dict[str, Any] = {
+        "tenant_id": TENANT,
         "agent_id": AGENT_ID,
         "version": "1.0.0",
         "digest": good.digest,
@@ -403,8 +411,8 @@ async def insert_row(world: World, **overrides: Any) -> None:
         "compiler_version": "1",
     } | overrides
     await world.db.pool.execute(
-        "INSERT INTO published_agents (agent_id, version, digest, manifest_json, schema_version, "
-        "compiler_version) VALUES ($1,$2,$3,$4,$5,$6)",
+        "INSERT INTO published_agents (tenant_id, agent_id, version, digest, manifest_json, "
+        "schema_version, compiler_version) VALUES ($1,$2,$3,$4,$5,$6,$7)",
         *values.values(),
     )
 
@@ -417,7 +425,7 @@ async def test_the_row_identity_must_match_the_manifest_it_holds(world: World) -
         manifest_json=other.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
     )
     with pytest.raises(RegistryIntegrityError, match="not what was published"):
-        await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")
+        await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")
 
 
 async def test_an_agent_from_an_unknown_compiler_version_is_refused_explicitly(
@@ -427,4 +435,80 @@ async def test_an_agent_from_an_unknown_compiler_version_is_refused_explicitly(
 
     await insert_row(world, compiler_version="2")
     with pytest.raises(RegistryCompatibilityError, match="compiler 2"):
-        await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")
+        await PostgresAgentRegistry(world.db).get(TENANT, AGENT_ID, "1.0.0")
+
+
+# --- Phase 5.2 ---
+
+
+async def test_removing_a_capability_from_the_allowlist_is_a_breaking_change() -> None:
+    registry = InMemoryAgentRegistry()
+
+    def no_flows(version: str, allowed: list[str]) -> CompiledAgent:
+        return compiled(version, flows=[], allowed_capabilities=allowed)
+
+    both = ["scheduling.availability", "scheduling.create"]
+    await registry.publish(TENANT, no_flows("1.0.0", both))
+    with pytest.raises(IncompatibleUpgradeError, match="no longer allowed"):
+        await registry.publish(TENANT, no_flows("1.1.0", ["scheduling.availability"]))
+    assert (await registry.publish(TENANT, no_flows("2.0.0", ["scheduling.availability"]))).created
+
+
+async def test_two_manifests_that_differ_only_in_metadata_are_not_the_same_publication() -> None:
+    registry = InMemoryAgentRegistry()
+    first = compiled("1.0.0")
+    await registry.publish(TENANT, first)
+    assert not (await registry.publish(TENANT, compiled("1.0.0"))).created  # identical: no-op
+    other = compiled("1.0.0", min_framework="0.5.0")
+    assert other.digest == first.digest and other.manifest_digest != first.manifest_digest
+    with pytest.raises(VersionConflictError, match="different metadata"):
+        await registry.publish(TENANT, other)
+
+
+async def test_the_registry_is_tenant_scoped(world: World) -> None:
+    for registry in (InMemoryAgentRegistry(), PostgresAgentRegistry(world.db)):
+        await registry.publish("acme", compiled("1.0.0", persona="Persona da Acme."))
+        await registry.publish("globex", compiled("1.0.0", persona="Persona da Globex."))  # same id
+        acme = await registry.get("acme", AGENT_ID, "1.0.0")
+        globex = await registry.get("globex", AGENT_ID, "1.0.0")
+        assert acme is not None and globex is not None
+        assert acme.agent.persona != globex.agent.persona  # no shadowing, no leakage
+        assert await registry.get("initech", AGENT_ID, "1.0.0") is None
+        assert await registry.versions("initech", AGENT_ID) == []
+        assert await registry.latest("initech", AGENT_ID) is None
+        await world.db.pool.execute("TRUNCATE published_agents")
+
+
+class BrokenRegistry(InMemoryAgentRegistry):
+    """Every lookup of a stored agent fails its integrity check."""
+
+    async def get(self, tenant_id: str, agent_id: str, version: str) -> CompiledAgent | None:
+        raise RegistryIntegrityError("digest mismatch")
+
+
+async def test_a_corrupt_agent_stops_that_conversation_not_the_worker(
+    world: World, api: ApiHandle
+) -> None:
+    good = InMemoryAgentRegistry()
+    await good.publish(TENANT, compiled("0.1.0"))
+    await say(world, api, good, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
+    broken = BrokenRegistry()
+    await broken.publish(TENANT, compiled("0.1.0"))
+    llm = FakeLLM([])
+    run = await say(world, api, broken, "outra coisa", llm, 2)
+    assert run.status == "retry_later" and llm.calls == 0  # an alert, nothing executed, no crash
+    assert await world.count("turns", "status='PROCESSING'") == 1
+
+
+async def test_a_corrupt_definition_hands_that_invocation_to_a_human_and_the_batch_goes_on(
+    world: World, api: ApiHandle
+) -> None:
+    registry = InMemoryAgentRegistry()
+    await unknown_write_on_v1(world, api, registry)
+    broken = BrokenRegistry()
+    await broken.publish(TENANT, compiled("0.1.0"))
+    (resolved,) = await world.versioned_reconciler(
+        "r", broken, AGENT_ID, providers={"http": world.http_provider(api.base_url)}
+    ).run_once()
+    assert resolved.status is InvocationStatus.HUMAN_HANDOFF
+    assert resolved.error is not None and resolved.error["code"] == "AGENT_VERSION_UNAVAILABLE"

@@ -19,6 +19,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.models.tooling import ToolStatus
+from conversation_agent.core.templates import check_template
 
 SlotType = Literal["enum", "date", "time", "duration_minutes", "text"]
 # Every non-success outcome must lead somewhere safe (DESIGN §23.4). `success` simply continues.
@@ -201,6 +202,13 @@ class FlowDefinition(_Frozen):
         for slot in self.slots:
             for derived in slot.invalidates:
                 need(derived, f"slot {slot.name!r}.invalidates")
+            check_template(f"flow {self.name!r} slot {slot.name!r}.prompt", slot.prompt, known)
+        check_template(
+            f"flow {self.name!r}.resume_reply",
+            self.resume_reply,
+            {"question"},
+            required=frozenset({"question"}),
+        )
         seen_invokes: set[str] = set()
         for step in self.steps:
             if isinstance(step, Collect):
@@ -234,6 +242,11 @@ class FlowDefinition(_Frozen):
                     if ref is not None:
                         need(ref, f"choose {step.id!r}")
                 self._check_transition(step.empty, known)
+                check_template(
+                    f"flow {self.name!r} choose {step.id!r}.prompt",
+                    step.prompt,
+                    known | {"options"},
+                )
         proposals = [i for i, s in enumerate(self.steps) if isinstance(s, Propose)]
         if len(proposals) > 1 or (proposals and proposals[0] != len(self.steps) - 1):
             # v1 semantics: once the proposed action reaches a final state the flow ends, so a
@@ -256,6 +269,10 @@ class FlowDefinition(_Frozen):
         if isinstance(transition, Ask) and transition.slot not in known:
             raise DefinitionError(
                 f"flow {self.name!r}: ask transition refers to unknown slot {transition.slot!r}"
+            )
+        if transition.text is not None:  # formatted with the flow slots when it is said
+            check_template(
+                f"flow {self.name!r} {transition.kind} transition", transition.text, known
             )
 
     def slot(self, name: str) -> SlotDefinition:

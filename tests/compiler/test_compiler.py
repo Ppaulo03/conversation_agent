@@ -387,3 +387,143 @@ def test_only_the_compiler_can_produce_a_compiled_agent() -> None:
 
     with pytest.raises(TypeError, match="only be produced by the compiler"):
         CompiledAgent(agent=build_agent(), digest="x", manifest=None)
+
+
+# --- Phase 5.2: confirmation texts, structural types, defaults ---
+
+
+def test_a_protected_agent_cannot_turn_the_confirmation_question_off() -> None:
+    m = raw() | {"confirmation_prompt_enabled": False}
+    with pytest.raises(CompileError, match="confirmation_prompt_enabled=false"):
+        compile_manifest(m)
+
+
+def test_the_confirmation_question_can_be_off_when_nothing_is_protected() -> None:
+    m = raw() | {"confirmation_prompt_enabled": False}
+    m["allowed_capabilities"] = ["scheduling.availability"]
+    m["flows"] = []
+    assert compile_manifest(m).agent.confirmation_prompt_enabled is False
+
+
+@pytest.mark.parametrize(
+    ("key", "text", "message"),
+    [
+        ("prompt", "Pode confirmar?", "must contain"),  # says nothing about WHAT
+        ("prompt", "{foo}", "unknown placeholder"),
+        ("reprompt", "Não entendi. Responda SIM ou NÃO.", "must contain"),
+        ("prompt", "Confirma {summary", "malformed"),
+        ("prompt", "Confirma {summary.x}?", "plain name"),
+        ("executed_fallback", "Feito: {summary}", "unknown placeholder"),
+        ("rejected", "Cancelado {x}", "unknown placeholder"),
+    ],
+)
+def test_confirmation_texts_must_be_formattable_and_say_what_is_confirmed(
+    key: str, text: str, message: str
+) -> None:
+    m = raw()
+    m["confirmation"][key] = text
+    with pytest.raises(CompileError, match=message):
+        compile_manifest(m)
+
+
+@pytest.mark.parametrize("text", ["Oi {nope}", "Dia {date", "Dia {date.year}", "{0}"])
+def test_flow_texts_cannot_hold_templates_that_would_raise_in_a_conversation(text: str) -> None:
+    m = raw()
+    m["flows"][0]["steps"][1]["default"]["text"] = text
+    assert "MANIFEST_INVALID" in codes_of(m)
+
+
+def test_flow_prompts_may_use_slots_and_the_options_placeholder() -> None:
+    m = raw()
+    m["flows"][0]["slots"][1]["prompt"] = "Qual dia para {service}?"
+    assert compile_manifest(m).digest
+
+
+def test_a_whole_list_cannot_fill_a_list_of_different_items() -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["slots"] = (
+        "$.items"  # {start,end}->{start_at,end_at}
+    )
+    with pytest.raises(CompileError) as caught:
+        compile_manifest(m)
+    assert "MAPPING_TYPE_MISMATCH" in caught.value.codes
+    m = raw()
+    tool(m, "erp_get_available_slots")["output"]["items"] = {
+        "type": "list",
+        "items": {"type": "string"},
+    }
+    binding(m, "scheduling.availability")["output_map"]["slots"] = "$.items"
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)
+
+
+def test_an_object_cannot_fill_a_scalar_or_an_object_of_other_fields() -> None:
+    m = raw()
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = "$.pagination"
+    with pytest.raises(CompileError, match="MAPPING_TYPE_MISMATCH"):
+        compile_manifest(m)
+
+
+def test_structurally_compatible_objects_are_accepted() -> None:
+    m = raw()
+    capability(m, "scheduling.availability")["output"]["next_cursor"] = {
+        "type": "object",
+        "required": False,
+        "fields": {"next_cursor": {"type": "string", "required": False}},
+    }
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = "$.pagination"
+    assert compile_manifest(m).digest  # same fields: assignable
+
+
+@pytest.mark.parametrize(
+    "field",
+    [
+        {"type": "integer", "required": False, "default": "twenty"},
+        {"type": "integer", "gt": 0, "default": 0},
+        {"type": "integer", "required": False, "default": True},
+        {"type": "string", "max_length": 2, "default": "abc"},
+        {"type": "enum", "values": ["a", "b"], "default": "c"},
+        {"type": "datetime", "default": "2026-10-06T10:00:00"},
+        {"type": "date", "default": "amanhã"},
+        {"type": "list", "items": {"type": "integer"}, "default": [1, "x"]},
+        {"type": "integer", "default": None},
+    ],
+)
+def test_a_default_must_satisfy_its_own_field(field: dict[str, Any]) -> None:
+    with pytest.raises(ValueError, match="default"):
+        FieldSpec.model_validate(field)
+
+
+def test_valid_defaults_are_accepted_and_applied() -> None:
+    spec = {
+        "n": FieldSpec(type="integer", required=False, default=20, ge=1),
+        "s": FieldSpec(type="string", required=False, default="x"),
+        "d": FieldSpec(type="date", required=False, default="2026-10-06"),
+        "z": FieldSpec(type="string", required=False, default=None),
+    }
+    model = build_model("D", spec)
+    assert model.model_validate({}).model_dump()["n"] == 20
+
+
+def test_an_optional_field_accepts_an_explicit_null_as_documented() -> None:
+    model = build_model("O", {"x": FieldSpec(type="string", required=False)})
+    assert model.model_validate({"x": None}).model_dump() == {"x": None}
+    required = build_model("R", {"x": FieldSpec(type="string")})
+    with pytest.raises(ValueError):
+        required.model_validate({"x": None})  # required and not nullable: null is refused
+
+
+def test_a_strict_target_object_rejects_fields_the_source_would_add() -> None:
+    m = raw()
+    tool(m, "erp_get_available_slots")["output"]["pagination"]["fields"]["extra"] = {
+        "type": "string",
+        "required": False,
+    }
+    capability(m, "scheduling.availability")["output"]["next_cursor"] = {
+        "type": "object",
+        "required": False,
+        "fields": {"next_cursor": {"type": "string", "required": False}},
+    }
+    binding(m, "scheduling.availability")["output_map"]["next_cursor"] = "$.pagination"
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(
+        m
+    )  # the extra field would fail validation at runtime

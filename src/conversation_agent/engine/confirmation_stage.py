@@ -24,6 +24,7 @@ from datetime import datetime, timedelta
 from typing import Any, Literal, Protocol
 
 from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.errors import ConfirmationConflictError
 from conversation_agent.core.models.actions import (
@@ -126,7 +127,7 @@ class ConfirmationStage:
     def __init__(
         self,
         *,
-        agent: AgentDefinition,
+        agent: CompiledAgent,
         pipeline: CapabilityPipeline,
         uows: ConversationUnitOfWorkFactory,
         executor: LedgerToolExecutor,
@@ -137,7 +138,8 @@ class ConfirmationStage:
         max_reprompts: int = 3,
         confidence_threshold: float = 0.85,
     ) -> None:
-        self._agent = agent
+        self._compiled = agent
+        self._agent: AgentDefinition = agent.agent
         self._pipeline = pipeline
         self._uows = uows
         self._executor = executor
@@ -147,6 +149,10 @@ class ConfirmationStage:
         self._tolerance = skew_tolerance
         self._max_reprompts = max_reprompts
         self._threshold = confidence_threshold
+
+    @property
+    def compiled(self) -> CompiledAgent:
+        return self._compiled
 
     # ------------------------------------------------------------------ entry point
 

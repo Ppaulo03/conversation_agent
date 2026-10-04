@@ -8,8 +8,13 @@ from zoneinfo import ZoneInfo
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.llm.fake import tool_call_response
+from conversation_agent.core.compiler import compile_agent
+from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.core.models.llm import LLMRequest, LLMResponse, ToolResultPart
+from conversation_agent.engine.capability_pipeline import CapabilityPipeline
+from conversation_agent.engine.policy_gate import PolicyGate
+from conversation_agent.engine.tool_runner import ToolRunner
 
 SP = ZoneInfo("America/Sao_Paulo")
 # Monday 2026-10-05 08:00 in Sao Paulo: slots start at 09:00 the same day.
@@ -55,3 +60,10 @@ def availability_call(service: str, day_from: str, day_to: str | None = None) ->
         "scheduling__availability",
         {"service_id": service, "from_date": day_from, "to_date": day_to or day_from},
     )
+
+
+def make_pipeline(
+    agent: AgentDefinition, gate: PolicyGate, runner: ToolRunner
+) -> CapabilityPipeline:
+    """A pipeline for a (possibly hand-modified) agent: it is compiled first, like in production."""
+    return CapabilityPipeline(compile_agent(agent), gate, runner)

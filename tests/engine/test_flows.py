@@ -19,7 +19,6 @@ from conversation_agent.adapters.llm.fake import (
     tool_call_response,
 )
 from conversation_agent.adapters.tools.fake import FakeToolProvider
-from conversation_agent.core.compiler import compile_agent
 from conversation_agent.core.definitions.flow import Collect, FlowDefinition, SlotDefinition
 from conversation_agent.core.definitions.flow import Slot as FlowSlot
 from conversation_agent.core.errors import DefinitionError
@@ -65,33 +64,21 @@ class Chat:
         self.state = ConversationState()
         self.journal = new_journal()
         self.n = 0
+        override = None
         if extra_flows:
-            engine, agent, _ = build_engine(
-                self.llm,
-                api_base_url=api.base_url,
-                journal=self.journal,
-                clock=new_clock(),
-                flows=True,
-            )
-            agent = agent.model_copy(
+            override = build_agent(flows=True).model_copy(
                 update={"flows": (SCHEDULING_FLOW, PRICES), "max_flow_depth": max_depth}
             )
-            engine = TurnEngine(
-                compile_agent(agent),
-                self.llm,
-                engine._pipeline,
-                self.journal,
-                new_clock(),
-            )
-        else:
-            engine, _, _ = build_engine(
-                self.llm,
-                api_base_url=api.base_url,
-                journal=self.journal,
-                clock=new_clock(),
-                flows=True,
-                agent=load_compiled_agent().agent if from_manifest else None,
-            )
+        elif from_manifest:
+            override = load_compiled_agent().agent
+        engine, _, _ = build_engine(
+            self.llm,
+            api_base_url=api.base_url,
+            journal=self.journal,
+            clock=new_clock(),
+            flows=True,
+            agent=override,
+        )
         self.engine = engine
 
     async def say(self, text: str, turn_id: str | None = None) -> TurnOutcome:

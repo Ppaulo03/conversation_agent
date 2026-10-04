@@ -231,3 +231,30 @@ async def test_depth_limit_ignores_a_new_flow_instead_of_growing_state(api: ApiH
     out = await chat.say("quanto custa?")  # would need depth 2
     assert [f.flow_name for f in chat.state.flows] == ["scheduling"]
     assert out.reply.startswith("Não entendi")
+
+
+# --- INV-030: one compiled root for the whole runtime graph ---
+
+
+def test_the_engine_refuses_a_pipeline_built_from_another_compiled_agent() -> None:
+    from types import SimpleNamespace
+
+    from conversation_agent.adapters.llm.fake import FakeLLM
+    from conversation_agent.core.compiler import compile_agent
+    from conversation_agent.engine.turn_engine import TurnEngine
+    from support.builders import new_clock, new_journal
+    from vertical_slice.wiring import build_pipeline
+
+    pipeline, _, _ = build_pipeline(api_base_url="x", providers={})  # compiled WITHOUT flows
+    with pytest.raises(ValueError, match="different compiled agent"):
+        TurnEngine(
+            compile_agent(build_agent(flows=True)),
+            FakeLLM([]),
+            pipeline,
+            new_journal(),
+            new_clock(),
+        )
+    engine = TurnEngine(pipeline.compiled, FakeLLM([]), pipeline, new_journal(), new_clock())
+    other = SimpleNamespace(compiled=compile_agent(build_agent(flows=True)))
+    with pytest.raises(ValueError, match="confirmation stage"):
+        engine.attach_confirmation(other)  # type: ignore[arg-type]

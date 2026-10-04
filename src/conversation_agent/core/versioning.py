@@ -14,8 +14,6 @@ _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 MANIFEST_SCHEMA_VERSION = 1
 FRAMEWORK_VERSION = "0.5.0"
 COMPILER_VERSION = "1"
-# Compiler versions whose published manifests this build still loads with identical meaning.
-SUPPORTED_COMPILER_VERSIONS = frozenset({COMPILER_VERSION})
 
 
 @total_ordering
