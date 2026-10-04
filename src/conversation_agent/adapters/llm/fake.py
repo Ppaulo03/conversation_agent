@@ -61,3 +61,13 @@ class FakeLLM:
     @property
     def calls(self) -> int:
         return len(self.requests)
+
+
+def structured_response(data: dict[str, Any]) -> LLMResponse:
+    """A model answer that is structured output (flow understanding, confirmation decisions)."""
+    return LLMResponse(
+        parts=(),
+        stop_reason=LLMStopReason.END_TURN,
+        usage=LLMUsage(input_tokens=1, output_tokens=1),
+        structured=data,
+    )

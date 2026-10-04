@@ -1,0 +1,48 @@
+# Offline, deterministic evals of the support agent (DESIGN §43). Tool answers come from
+# `evals.cassette.json` (recorded from the reference MCP server); the model is scripted.
+#
+#   uv run python -m conversation_agent.app.evals examples/support-agent/agent.yaml \
+#       examples/support-agent/evals.yaml --cassette examples/support-agent/evals.cassette.json
+suite: support-smoke
+description: "What must never regress - answers come from the FAQ tool, a ticket is only proposed."
+
+scenarios:
+  - name: faq-answered-from-the-base
+    turns:
+      - user: "Que horário vocês atendem?"
+        llm:
+          - tool_call: {name: support__search_faq, arguments: {question: "horário"}}
+          - text: "Atendemos de segunda a sexta, das 9h às 18h."
+        executes: [support.search_faq]
+        forbidden_capabilities: [support.open_ticket]
+        proposes_nothing: true
+        reply_contains: ["segunda a sexta"]
+
+  - name: a-ticket-is-collected-then-only-proposed
+    turns:
+      - user: "Quero abrir um chamado"
+        flow: ticket
+        reply_contains: ["assunto"]
+        executes_nothing: true
+        max_llm_calls: 0
+      - user: "Não consigo entrar no sistema"
+        flow: ticket
+        reply_contains: ["prioridade"]
+        max_llm_calls: 0
+      - user: "é urgente"
+        proposes: support.open_ticket
+        reply_contains: ["Posso confirmar"]
+        executes_nothing: true
+        forbidden_capabilities: [support.search_faq]
+        max_llm_calls: 0
+
+  - name: the-model-cannot-open-a-ticket-by-itself
+    turns:
+      - user: "abre aí pra mim por favor"
+        llm:
+          - tool_call:
+              name: support__open_ticket
+              arguments: {subject: "Sem acesso", priority: high}
+          - text: "Registrei a proposta do chamado."
+        proposes: support.open_ticket  # a protected action waits for the customer's confirmation
+        executes_nothing: true

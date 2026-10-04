@@ -1,0 +1,20 @@
+[
+  {
+    "tool": "mcp_search_faq",
+    "key": "f178a623ecc7b3df10280f3c4f87adae4aaa924e04d0e6ac9fe04349cdb7af83",
+    "results": [
+      {
+        "status": "success",
+        "data": {
+          "results": [
+            {
+              "answer": "Atendemos de segunda a sexta, das 9h às 18h."
+            }
+          ]
+        },
+        "error": null,
+        "provider_metadata": {}
+      }
+    ]
+  }
+]

@@ -21,8 +21,21 @@ from typing import Any, Literal
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.definitions.evals import EvalScenario, EvalTurn
 from conversation_agent.core.definitions.schema_spec import FieldSpec
 
+__all__ = [
+    "KEYS",
+    "BindingRequirement",
+    "EvalScenario",
+    "EvalTurn",
+    "PackLock",
+    "PackManifest",
+    "PackUse",
+    "ParameterSpec",
+    "PromptFragment",
+    "param_references",
+]
 PACK_SCHEMA_VERSION = 1
 _NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _PARAM_NAME = re.compile(r"^[a-z][a-z0-9_]*$")
@@ -69,25 +82,6 @@ class BindingRequirement(_Strict):
 class PromptFragment(_Strict):
     name: str = Field(min_length=1, max_length=80)
     text: str = Field(min_length=1, max_length=8000)
-
-
-class EvalTurn(_Strict):
-    """One user message and what must be true of the answer. `capture` stores a regex match of
-    the reply (group 1, else the whole match) for later turns: `{name}` in `user` is replaced."""
-
-    user: str
-    reply_contains: tuple[str, ...] = ()
-    reply_not_contains: tuple[str, ...] = ()
-    reply_matches: tuple[str, ...] = ()
-    capture: dict[str, str] = Field(default_factory=dict)
-    proposes: str | None = None  # this turn must leave exactly this capability proposed
-    proposes_nothing: bool = False
-
-
-class EvalScenario(_Strict):
-    name: str
-    description: str = ""
-    turns: tuple[EvalTurn, ...] = Field(min_length=1)
 
 
 class PackManifest(_Strict):
