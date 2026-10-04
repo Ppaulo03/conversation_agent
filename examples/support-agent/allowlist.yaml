@@ -1,0 +1,27 @@
+# What this agent allows from the MCP server (discovery is not exposure: the server also offers
+# `list_tickets` and `reopen_ticket`, which are deliberately NOT here). The risk is OUR decision.
+connection: support_mcp
+prefix: mcp
+tools:
+  - remote_name: search_faq
+    risk: read
+    description: Search the FAQ.
+    output:
+      results:
+        type: list
+        items:
+          type: object
+          fields:
+            answer: {type: string}
+
+  - remote_name: create_ticket
+    risk: write
+    description: Open a support ticket.
+    confirmation_required: true
+    idempotency_supported: true
+    retry: {max_attempts: 2, mode: same_idempotency_key}
+    recovery: {strategy: retry_same_key}
+    output:
+      ticket_id: {type: string}
+      subject: {type: string}
+      priority: {type: string}

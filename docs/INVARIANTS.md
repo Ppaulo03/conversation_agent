@@ -48,6 +48,7 @@ INV-038  um circuit breaker só falha rápido ANTES de chamar o provider (result
 INV-039  o replay de tools não tem transporte: chamada não gravada é `REPLAY_MISS` explícito, nunca uma resposta inventada; a gravação redige PII por padrão.
 INV-040  um Pack só contribui definições (capabilities, flows, fragmentos de prompt, requisitos, evals): não carrega tools, bindings, connections nem secrets, não amplia o que o modelo pode chamar (só o `allow` explícito do agente), nunca sombreia nem sobrescreve uma definição do agente ou de outro Pack, e o que exige do agente (binding, idempotência, recuperação) é verificado na instalação. Depois da compilação o agente é autocontido: o runtime nunca depende do Pack e a procedência fica em `pack_lock`.
 INV-041  uma preferência declarada pelo contato (horário/data) é casada contra TODAS as opções reais que a tool devolveu, não só as que couberam na mensagem; um número ou ordinal refere-se apenas ao que foi mostrado.
+INV-042  quando um Flow diz que vai chamar uma pessoa (`Handoff`), a conversa realmente passa a HANDOFF_PENDING, também quando o handoff vem depois da execução de uma ação protegida (caminho da confirmação), na mesma transação que grava a resposta.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -99,6 +100,7 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-039 | `test_an_unrecorded_call_is_an_explicit_miss_never_an_invented_answer`, `test_recording_redacts_personal_data_and_drops_operational_metadata` |
 | INV-040 | `test_the_pack_never_widens_what_the_model_may_call`, `test_a_pack_never_shadows_or_overrides_what_the_agent_defines`, `test_what_the_pack_requires_of_the_agent_is_checked_before_anything_runs`, `test_a_pack_has_no_place_for_tools_bindings_connections_or_secrets`, `test_the_compiled_agent_is_self_contained_and_records_what_it_installed`, `test_a_host_binding_cannot_lower_what_the_pack_demands`, `test_every_eval_of_the_pack_passes_on_each_host_against_its_real_api` |
 | INV-041 | `test_a_stated_time_beyond_the_listed_options_is_still_found`, `test_a_time_said_while_choosing_can_pick_an_option_that_was_not_listed`, `test_a_number_never_picks_an_option_that_was_not_listed` |
+| INV-042 | `test_a_server_that_changed_its_tool_after_the_proposal_is_not_called`, `test_a_flow_can_hand_the_conversation_to_a_person` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

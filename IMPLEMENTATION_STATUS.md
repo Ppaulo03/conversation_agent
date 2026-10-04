@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 8 — Primeiro Pack (implementada; aguardando revisão/merge). Fases 1–7 em `main`. Próxima: Fase 9.
+**Fase atual:** 9 — Segundo domínio (implementada; aguardando revisão/merge). Fases 1–8 em `main`. Próxima: Fase 10.
 
 ## Phase 1
 
@@ -663,3 +663,34 @@ O Flow só comparava o horário pedido ("às 16h") com as **5 opções exibidas*
 - Sem registry de Packs (só `DirectoryPackLoader`; "registry de Packs" segue em aberto no DESIGN), sem faixas de versão (versão exata) e sem assinatura/verificação de origem.
 - Evals não rodam o LLM (o Pack é determinístico via Flow); o harness completo é da Fase 10.
 - O texto de persona do Pack é anexado ao do agente sem checagem de contradição com a persona dele.
+
+
+## Phase 9 — Segundo domínio (FAQ / suporte / ticket)
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos). Nova invariante **INV-042**.
+ROADMAP: FAQ/suporte/ticket, sem alterar core/engine.
+
+**O agente funcionou sem nenhuma mudança no framework**: `examples/support-agent/agent.yaml` (+ `allowlist.yaml`) compila e roda com o que já existia (capabilities, Flow, bindings, `MCPToolProvider`
+da Fase 7, registry, protocolo de ações protegidas). O gate "sem alterar core/engine" foi medido, não presumido:
+`git diff main -- src/conversation_agent/{core,ports,tools}` é vazio e o único arquivo de `src/` tocado é um defeito de engine descoberto pelo domínio novo (abaixo, commit à parte).
+O teste de arquitetura agora também proíbe o vocabulário `ticket/faq/chamado` em `src/`.
+
+DoD:
+
+- [✓] agente de FAQ + ticket por manifest, com tools vindas do MCP via allowlist — `test_the_tools_in_the_manifest_are_exactly_what_the_allowlist_imports` (guarda contra deriva: schemas pinados == importados; `list_tickets`/`reopen_ticket` oferecidos pelo servidor e nunca expostos)
+- [✓] FAQ respondida a partir do que a tool devolveu; sem resultado, diz isso e oferece chamado — `tests/domains/test_support_agent.py`
+- [✓] Flow de chamado determinístico (assunto, prioridade → proposta, nunca escrita), digressão de FAQ no meio do chamado, digressão não consegue abrir chamado
+- [✓] protocolo completo sobre PostgreSQL: confirmação → criação com `Idempotency-Key` estável, rejeição não cria, resposta perdida reconciliada por `retry_same_key` sem duplicar, servidor que mudou o schema da tool depois da proposta não é chamado e a conversa vai para um atendente — `tests/postgres/test_support_domain.py`
+- [✓] dois domínios no mesmo registry/runtime (agendamento e suporte, mesmo tenant)
+
+### O que o segundo domínio revelou no framework
+
+1. **Defeito corrigido (INV-042):** quando uma ação protegida falhava depois da confirmação e o Flow seguia uma transição `Handoff`, o bot dizia "vou chamar um atendente" mas a conversa continuava com o BOT: `TurnEngine` ignorava `handoff` no caminho da confirmação (só o caminho normal do Flow o respeitava, Fase 6). Corrigido em `engine/turn_engine.py` (commit separado); coberto por `test_a_server_that_changed_its_tool_after_the_proposal_is_not_called`.
+2. **Limite conhecido, NÃO corrigido (por decisão de escopo):** enquanto o Flow espera um slot de **texto livre** (o assunto do chamado), qualquer mensagem vira o assunto, inclusive uma pergunta de FAQ ("quanto custa?"); slots estruturados (a prioridade) não têm o problema e aceitam a digressão. Caracterizado em `test_known_limit_a_free_text_slot_takes_whatever_is_said_next`. Correção exigiria uma regra nova no engine (p. ex. um slot de texto que rejeita perguntas ou deixa o modelo decidir); fica como achado para o framework.
+3. **Lacuna de capacidade:** não existe "falar com um atendente" pedido diretamente pelo contato: `Handoff` só existe como transição de um passo de Flow (falha de invoke/propose). Um pedido espontâneo de atendente humano precisa de um gatilho de Flow/intent que entregue a conversa, ainda inexistente.
+
+### Débitos conhecidos (Fase 9)
+
+- Os itens 2 e 3 acima.
+- A base de FAQ é a do servidor de referência (busca por substring); não há RAG/embeddings (DESIGN §"FAQ/RAG" segue fora do escopo).
+- Sem segunda língua nem Pack para suporte: o comportamento só deve virar Pack quando um segundo agente de suporte o reutilizar (regra do DESIGN §1.3).
