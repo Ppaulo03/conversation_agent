@@ -12,17 +12,36 @@ post-build checks with `compile_agent`.
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
-from types import UnionType
-from typing import Any, Literal, Union, get_args, get_origin
+from dataclasses import dataclass, field
+from typing import Any, Literal, get_args, get_origin
 
 from pydantic import BaseModel, ValidationError
 
 from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.compiler_types import (
+    ANY,
+    compatible,
+    element_model,
+    infer,
+    resolve_path,
+    show,
+    tag_of_annotation,
+    tag_of_value,
+    unify,
+    unwrap,
+)
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER
-from conversation_agent.core.definitions.flow import Invoke, Propose, Slot
+from conversation_agent.core.definitions.flow import (
+    AddDays,
+    FlowDefinition,
+    Invoke,
+    Lit,
+    Propose,
+    Slot,
+    Table,
+)
 from conversation_agent.core.definitions.manifest import AgentManifest, build_definition
 from conversation_agent.core.definitions.mapping import (
     TRANSFORM_NAMES,
@@ -67,6 +86,9 @@ class CompileError(DefinitionError):
         return {d.code for d in self.diagnostics}
 
 
+_SEAL = object()
+
+
 @dataclass(frozen=True)
 class CompiledAgent:
     """A validated, immutable, versioned agent: the unit that is published and pinned."""
@@ -76,6 +98,13 @@ class CompiledAgent:
     manifest: AgentManifest | None  # present when it came from a manifest (so it is storable)
     schema_version: int = MANIFEST_SCHEMA_VERSION
     compiler_version: str = COMPILER_VERSION
+    _seal: object = field(default=None, repr=False, compare=False)
+
+    def __post_init__(self) -> None:
+        # The runtime accepts only agents the compiler produced (INV-029): there is no way to
+        # wrap a hand-built AgentDefinition and skip the checks.
+        if self._seal is not _SEAL:
+            raise TypeError("a CompiledAgent can only be produced by the compiler")
 
     @property
     def agent_id(self) -> str:
@@ -103,7 +132,7 @@ def compile_manifest(raw: AgentManifest | dict[str, Any]) -> CompiledAgent:
     diagnostics += check_agent(agent)
     if diagnostics:
         raise CompileError(diagnostics)
-    return CompiledAgent(agent=agent, digest=agent_digest(agent), manifest=manifest)
+    return CompiledAgent(agent=agent, digest=agent_digest(agent), manifest=manifest, _seal=_SEAL)
 
 
 def compile_agent(agent: AgentDefinition) -> CompiledAgent:
@@ -115,7 +144,7 @@ def compile_agent(agent: AgentDefinition) -> CompiledAgent:
         problems.append(Diagnostic("INVALID_VERSION", "version", str(exc)))
     if problems:
         raise CompileError(problems)
-    return CompiledAgent(agent=agent, digest=agent_digest(agent), manifest=None)
+    return CompiledAgent(agent=agent, digest=agent_digest(agent), manifest=None, _seal=_SEAL)
 
 
 # --- digest ---
@@ -314,11 +343,19 @@ def _check_binding(resolved: ResolvedToolBinding, binding: CapabilityBinding) ->
 
     # input_map: capability input -> tool args
     found += _check_targets(f"{name}.input_map", binding.input_map, tool_in)
-    found += _check_sources(f"{name}.input_map", binding.input_map, cap_in)
+    found += _check_map(f"{name}.input_map", binding.input_map, cap_in, tool_in)
     # output_map: tool response -> capability output
     found += _check_targets(f"{name}.output_map", binding.output_map, cap_out)
     if tool_out is not None:
-        found += _check_sources(f"{name}.output_map", binding.output_map, tool_out)
+        found += _check_map(f"{name}.output_map", binding.output_map, tool_out, cap_out)
+    elif any(not isinstance(e, Const) for e in binding.output_map.values()):
+        found.append(
+            Diagnostic(
+                "TOOL_HAS_NO_OUTPUT",
+                f"{name}.output_map",
+                f"tool {resolved.tool.name!r} declares no output, so nothing can be read from it",
+            )
+        )
 
     # error_map
     for status in binding.error_map.http_status:
@@ -363,25 +400,30 @@ def _check_targets(path: str, spec: dict[str, MapExpr], model: type[BaseModel]) 
     for target, expr in spec.items():
         field = model.model_fields.get(target)
         if isinstance(expr, Each) and field is not None:
-            item = _item_model(field.annotation)
+            item = element_model(field.annotation)
             if item is not None:
                 found += _check_targets(f"{path}.{target}", expr.map, item)
     return found
 
 
-def _check_sources(path: str, spec: dict[str, MapExpr], model: type[BaseModel]) -> list[Diagnostic]:
+def _check_map(
+    path: str, spec: dict[str, MapExpr], source: type[BaseModel], target: type[BaseModel]
+) -> list[Diagnostic]:
+    """Every expression must read something that exists, with the right transform, and what it
+    produces must be able to go into the target field."""
     found: list[Diagnostic] = []
-    for target, expr in spec.items():
-        found += _check_expr(f"{path}.{target}", expr, model)
+    for name, expr in spec.items():
+        where = f"{path}.{name}"
+        field = target.model_fields.get(name)
+        found += _check_expr(where, expr, source, field.annotation if field else None)
     return found
 
 
-def _check_expr(path: str, expr: MapExpr, model: type[BaseModel]) -> list[Diagnostic]:
+def _check_expr(
+    path: str, expr: MapExpr, source: type[BaseModel], target_annotation: Any
+) -> list[Diagnostic]:
     found: list[Diagnostic] = []
-    if isinstance(expr, str):
-        found += _check_path(path, expr, model)
-    elif isinstance(expr, Ref):
-        found += _check_path(path, expr.from_, model)
+    if isinstance(expr, Ref):
         if expr.transform is not None and expr.transform not in TRANSFORM_NAMES:
             found.append(
                 Diagnostic(
@@ -389,21 +431,59 @@ def _check_expr(path: str, expr: MapExpr, model: type[BaseModel]) -> list[Diagno
                 )
             )
         if expr.enum is not None:
-            found += _check_enum_map(path, expr, model)
-    elif isinstance(expr, Each):
-        found += _check_path(path, expr.from_each, model)
-        item = _walk(model, expr.from_each)
-        if isinstance(item, type) and issubclass(item, BaseModel):
-            for target, inner in expr.map.items():
-                found += _check_expr(f"{path}.{target}", inner, item)
-    elif not isinstance(expr, Const):  # pragma: no cover
-        found.append(Diagnostic("MAPPING_INVALID", path, f"unsupported expression {expr!r}"))
+            found += _check_enum_map(path, expr, source)
+    if isinstance(expr, Each):
+        ann, err = resolve_path(source, expr.from_each)
+        if err:
+            found.append(Diagnostic(_path_code(err), path, err))
+        item = element_model(ann) if ann is not None else None
+        target_item = element_model(target_annotation) if target_annotation is not None else None
+        if item is not None and target_item is not None:
+            found += _check_map(path, expr.map, item, target_item)
+        elif item is not None:
+            for key, inner in expr.map.items():
+                found += _check_expr(f"{path}.{key}", inner, item, None)
+    else:
+        _, problems = infer(expr, source)
+        for problem in problems:
+            code = "MAPPING_TRANSFORM_INPUT" if "takes" in problem else _path_code(problem)
+            found.append(Diagnostic(code, path, problem))
+    if target_annotation is not None and not isinstance(expr, Each):
+        produced, _ = infer(expr, source)
+        wanted = tag_of_annotation(target_annotation)
+        if not compatible(produced, wanted):
+            found.append(
+                Diagnostic(
+                    "MAPPING_TYPE_MISMATCH",
+                    path,
+                    f"produces {show(produced)} but the target takes {show(wanted)}",
+                )
+            )
+    elif target_annotation is not None and tag_of_annotation(target_annotation) not in (
+        "list",
+        ANY,
+    ):
+        found.append(
+            Diagnostic(
+                "MAPPING_TYPE_MISMATCH",
+                path,
+                f"a list mapping cannot fill a {show(tag_of_annotation(target_annotation))}",
+            )
+        )
     return found
 
 
+def _path_code(message: str) -> str:
+    if "is not a field" in message:
+        return "MAPPING_UNKNOWN_SOURCE"
+    if "cannot read" in message or "cannot index" in message:
+        return "MAPPING_SCALAR_TRAVERSAL"
+    return "MAPPING_INVALID_PATH"
+
+
 def _check_enum_map(path: str, ref: Ref, model: type[BaseModel]) -> list[Diagnostic]:
-    leaf = _walk(model, ref.from_)
-    values = _literal_values(leaf)
+    ann, _ = resolve_path(model, ref.from_)
+    values = _literal_values(ann)
     if values is None or ref.enum is None:
         return []
     found = [
@@ -417,85 +497,45 @@ def _check_enum_map(path: str, ref: Ref, model: type[BaseModel]) -> list[Diagnos
     return found
 
 
-_SEGMENT = re.compile(r"\.([A-Za-z_][\w-]*)|\[(\d+|\*)\]")
-
-
-def _check_path(path: str, expr: str, model: type[BaseModel]) -> list[Diagnostic]:
-    """Walks `$.a.b[*].c` through the model; a key the model does not have is an error."""
-    if not expr.startswith("$"):
-        return [Diagnostic("MAPPING_INVALID_PATH", path, f"{expr!r} must start with '$'")]
-    rest, pos, current = expr[1:], 0, model
-    while pos < len(rest):
-        m = _SEGMENT.match(rest, pos)
-        if m is None:
-            return [Diagnostic("MAPPING_INVALID_PATH", path, f"bad path syntax {expr!r}")]
-        pos = m.end()
-        if m.group(1) is None:
-            continue  # list index: the element type is what matters, handled by _step
-        nxt = _step(current, m.group(1))
-        if nxt is _UNKNOWN_KEY:
-            return [
-                Diagnostic(
-                    "MAPPING_UNKNOWN_SOURCE",
-                    path,
-                    f"{expr!r}: {m.group(1)!r} is not a field of {current.__name__}",
-                )
-            ]
-        if not (isinstance(nxt, type) and issubclass(nxt, BaseModel)):
-            return []  # reached a leaf/untyped value: nothing more to verify
-        current = nxt
-    return []
-
-
-_UNKNOWN_KEY = object()
-
-
-def _step(model: type[BaseModel], key: str) -> Any:
-    field = model.model_fields.get(key)
-    if field is None:
-        return _UNKNOWN_KEY
-    annotation = _unwrap_optional(field.annotation)
-    item = _item_model(annotation)
-    if item is not None:
-        return item
-    return annotation
-
-
-def _walk(model: type[BaseModel], expr: str) -> Any:
-    """Type at the end of a path, or None when it cannot be determined."""
-    current: Any = model
-    for key in re.findall(r"\.([A-Za-z_][\w-]*)", expr):
-        if not (isinstance(current, type) and issubclass(current, BaseModel)):
-            return None
-        current = _step(current, key)
-        if current is _UNKNOWN_KEY:
-            return None
-    return current
-
-
-def _unwrap_optional(annotation: Any) -> Any:
-    if get_origin(annotation) in (Union, UnionType):
-        args = [a for a in get_args(annotation) if a is not type(None)]
-        if len(args) == 1:
-            return args[0]
-    return annotation
-
-
-def _item_model(annotation: Any) -> type[BaseModel] | None:
-    annotation = _unwrap_optional(annotation)
-    if get_origin(annotation) is list:
-        args = get_args(annotation)
-        inner = _unwrap_optional(args[0]) if args else None
-        if isinstance(inner, type) and issubclass(inner, BaseModel):
-            return inner
-    return None
-
-
 def _literal_values(annotation: Any) -> set[str] | None:
-    annotation = _unwrap_optional(annotation)
+    annotation = unwrap(annotation)
     if get_origin(annotation) is Literal:
         return {str(v) for v in get_args(annotation)}
     return None
+
+
+_SLOT_TAGS = {"date": "date", "time": "string", "duration_minutes": "integer", "text": "string"}
+
+
+def _check_flow_type(
+    where: str, flow: FlowDefinition, key: str, expr: Any, annotation: Any
+) -> list[Diagnostic]:
+    """What a flow feeds into a capability input must be able to go into it."""
+    if isinstance(expr, Slot):
+        slot = flow.slot(expr.name)
+        produced: Any = (
+            ("enum", frozenset(slot.choices)) if slot.type == "enum" else _SLOT_TAGS[slot.type]
+        )
+    elif isinstance(expr, AddDays):
+        produced = "date"
+    elif isinstance(expr, Table):
+        produced = unify([tag_of_value(v) for v in expr.mapping.values()])
+    elif isinstance(expr, Lit):
+        produced = tag_of_value(expr.value)
+    else:  # pragma: no cover
+        return []
+    wanted = tag_of_annotation(annotation)
+    if isinstance(produced, tuple) and isinstance(wanted, tuple):
+        return []  # enum vs enum is reported precisely by FLOW_ENUM_MISMATCH
+    if compatible(produced, wanted):
+        return []
+    return [
+        Diagnostic(
+            "FLOW_TYPE_MISMATCH",
+            where,
+            f"{key!r}: the flow provides {show(produced)} but the capability takes {show(wanted)}",
+        )
+    ]
 
 
 def _check_flow_inputs(agent: AgentDefinition) -> list[Diagnostic]:
@@ -522,6 +562,8 @@ def _check_flow_inputs(agent: AgentDefinition) -> list[Diagnostic]:
                 if f.is_required() and k not in step.inputs
             ]
             for key, expr in step.inputs.items():
+                if key in fields:
+                    found += _check_flow_type(where, flow, key, expr, fields[key].annotation)
                 if not isinstance(expr, Slot) or key not in fields:
                     continue
                 accepted = _literal_values(fields[key].annotation)

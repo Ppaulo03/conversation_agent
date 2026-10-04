@@ -19,6 +19,7 @@ from conversation_agent.adapters.llm.fake import (
     tool_call_response,
 )
 from conversation_agent.adapters.tools.fake import FakeToolProvider
+from conversation_agent.core.compiler import compile_agent
 from conversation_agent.core.definitions.flow import Collect, FlowDefinition, SlotDefinition
 from conversation_agent.core.definitions.flow import Slot as FlowSlot
 from conversation_agent.core.errors import DefinitionError
@@ -76,7 +77,7 @@ class Chat:
                 update={"flows": (SCHEDULING_FLOW, PRICES), "max_flow_depth": max_depth}
             )
             engine = TurnEngine(
-                agent,
+                compile_agent(agent),
                 self.llm,
                 engine._pipeline,
                 self.journal,

@@ -327,3 +327,63 @@ def test_the_compile_command_reports_ok_and_diagnostics(
     assert main([str(bad)]) == 1
     assert "error(s)" in capsys.readouterr().err
     assert main([str(tmp_path / "missing.yaml")]) == 2
+
+
+# --- Phase 5.1: types, scalars, outputs, sealing ---
+
+
+def tool(manifest: dict[str, Any], name: str) -> dict[str, Any]:
+    return next(t for t in manifest["tools"] if t["name"] == name)
+
+
+def test_a_mapping_cannot_feed_a_value_of_the_wrong_type() -> None:
+    m = raw()
+    tool(m, "erp_get_available_slots")["input"]["start"] = {"type": "integer"}  # date -> integer
+    with pytest.raises(CompileError) as caught:
+        compile_manifest(m)
+    mismatches = [d for d in caught.value.diagnostics if d.code == "MAPPING_TYPE_MISMATCH"]
+    assert mismatches and "date" in mismatches[0].message and "integer" in mismatches[0].message
+
+
+def test_a_transform_only_accepts_the_types_it_is_defined_for() -> None:
+    m = raw()
+    capability(m, "scheduling.create")["input"]["duration_minutes"] = {"type": "string"}
+    assert "MAPPING_TRANSFORM_INPUT" in codes_of(m)  # minutes_to_hours needs a number
+
+
+def test_a_transform_changes_the_type_that_reaches_the_target() -> None:
+    m = raw()
+    tool(m, "erp_create_reservation")["input"]["hours"] = {"type": "string"}  # hours is a number
+    assert "MAPPING_TYPE_MISMATCH" in codes_of(m)
+
+
+def test_compatible_coercions_are_not_errors() -> None:
+    m = raw()  # datetime -> ISO string, string -> datetime, integer -> number are all in use
+    assert compile_manifest(m).digest
+
+
+def test_a_mapping_cannot_walk_beyond_a_scalar() -> None:
+    m = raw()
+    binding(m, "scheduling.create")["output_map"]["status"] = "$.state.foo"
+    assert "MAPPING_SCALAR_TRAVERSAL" in codes_of(m)
+    binding(m, "scheduling.create")["output_map"]["status"] = "$.state[0]"
+    assert "MAPPING_SCALAR_TRAVERSAL" in codes_of(m)  # and a scalar is not a list either
+
+
+def test_a_tool_without_output_cannot_feed_a_capability_that_needs_one() -> None:
+    m = raw()
+    tool(m, "erp_create_reservation")["output"] = None
+    assert "TOOL_HAS_NO_OUTPUT" in codes_of(m)
+
+
+def test_a_flow_cannot_feed_a_capability_the_wrong_type() -> None:
+    m = raw()
+    capability(m, "scheduling.availability")["input"]["to_date"] = {"type": "integer"}
+    assert "FLOW_TYPE_MISMATCH" in codes_of(m)
+
+
+def test_only_the_compiler_can_produce_a_compiled_agent() -> None:
+    from conversation_agent.core.compiler import CompiledAgent
+
+    with pytest.raises(TypeError, match="only be produced by the compiler"):
+        CompiledAgent(agent=build_agent(), digest="x", manifest=None)

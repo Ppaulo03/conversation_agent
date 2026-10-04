@@ -112,7 +112,7 @@ async def test_lowering_a_capability_risk_is_a_breaking_change() -> None:
     for tool in raw["tools"]:
         if tool["name"] == "erp_create_reservation":
             tool["risk"] = "write"
-    with pytest.raises(IncompatibleUpgradeError, match="lowered its risk"):
+    with pytest.raises(IncompatibleUpgradeError, match="lowered its effective risk"):
         await registry.publish(compile_manifest(raw))
 
 
@@ -276,3 +276,155 @@ async def test_reconciliation_never_substitutes_another_version(
     assert resolved.status is InvocationStatus.HUMAN_HANDOFF  # a person decides, nothing guessed
     assert resolved.error is not None and resolved.error["code"] == "AGENT_VERSION_UNAVAILABLE"
     assert len([r for r in api.requests if r["method"] == "POST"]) == 1
+
+
+# --- Phase 5.1 ---
+
+
+def tiny(
+    version: str, *, tool_risk: str = "read", tool_confirmation: bool = False
+) -> CompiledAgent:
+    """capability says `read`; the TOOL decides how protected it really is."""
+    return compile_manifest(
+        {
+            "agent_id": "tiny",
+            "version": version,
+            "persona": "x",
+            "capabilities": [
+                {
+                    "name": "demo.ping",
+                    "description": "ping",
+                    "input": {"x": {"type": "string"}},
+                    "output": {"y": {"type": "string"}},
+                }
+            ],
+            "tools": [
+                {
+                    "name": "ping_tool",
+                    "description": "ping",
+                    "risk": tool_risk,
+                    "confirmation_required": tool_confirmation,
+                    "provider": "http",
+                    "connection": "c",
+                    "http": {"method": "GET", "path": "/ping", "query": ["x"]},
+                    "input": {"x": {"type": "string"}},
+                    "output": {"y": {"type": "string"}},
+                }
+            ],
+            "bindings": [
+                {
+                    "capability": "demo.ping",
+                    "tool": "ping_tool",
+                    "input_map": {"x": "$.x"},
+                    "output_map": {"y": "$.y"},
+                }
+            ],
+            "allowed_capabilities": ["demo.ping"],
+        }
+    )
+
+
+async def test_a_minor_version_cannot_lower_the_effective_risk() -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(tiny("1.0.0", tool_risk="irreversible"))
+    with pytest.raises(IncompatibleUpgradeError, match="lowered its effective risk"):
+        await registry.publish(tiny("1.1.0", tool_risk="read"))  # capability label never changed
+    published = await registry.publish(tiny("2.0.0", tool_risk="read"))
+    assert published.created and published.breaking_changes
+
+
+async def test_a_minor_version_cannot_remove_effective_protection() -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(tiny("1.0.0", tool_confirmation=True))
+    with pytest.raises(IncompatibleUpgradeError, match="no longer requires"):
+        await registry.publish(tiny("1.1.0", tool_confirmation=False))
+
+
+async def test_raising_protection_in_a_minor_version_is_fine() -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(tiny("1.0.0"))
+    assert (await registry.publish(tiny("1.1.0", tool_confirmation=True))).created
+
+
+async def test_a_conversation_is_pinned_to_the_agent_not_just_the_version(
+    world: World, api: ApiHandle
+) -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(compiled("0.1.0"))
+    await registry.publish(compiled("0.1.0", agent_id="other-agent"))  # same version number
+    await say(world, api, registry, "Quero marcar um corte amanhã às 10h", FakeLLM([]), 1)
+    row = await world.db.pool.fetchrow("SELECT agent_id, agent_version FROM conversation_states")
+    assert (row["agent_id"], row["agent_version"]) == (AGENT_ID, "0.1.0")
+
+    # routing now sends this conversation to ANOTHER agent while a flow is open: fail closed
+    await world.inbox.insert_if_absent(event("x1", "oi", clock=world.clock))
+    llm = FakeLLM([])
+    other = world.versioned_coordinator(
+        "w2",
+        llm,
+        registry,
+        "other-agent",
+        providers={"http": world.http_provider(api.base_url)},
+    )
+    assert (await other.process_conversation(KEY)).status == "retry_later" and llm.calls == 0
+    row = await world.db.pool.fetchrow("SELECT agent_id FROM conversation_states")
+    assert row["agent_id"] == AGENT_ID  # nothing was swapped under the flow
+
+
+async def test_an_idle_conversation_can_be_reassigned_to_another_agent(
+    world: World, api: ApiHandle
+) -> None:
+    registry = InMemoryAgentRegistry()
+    await registry.publish(compiled("0.1.0"))
+    await registry.publish(compiled("0.1.0", agent_id="other-agent"))
+    await say(world, api, registry, "oi", FakeLLM([text_response("Olá!")]), 1)  # idle: no flow
+    await world.inbox.insert_if_absent(event("x2", "oi de novo", clock=world.clock))
+    other = world.versioned_coordinator(
+        "w2",
+        FakeLLM([text_response("Olá, sou outro.")]),
+        registry,
+        "other-agent",
+        providers={"http": world.http_provider(api.base_url)},
+    )
+    assert (await other.process_conversation(KEY)).status == "done"
+    row = await world.db.pool.fetchrow("SELECT agent_id, agent_version FROM conversation_states")
+    assert (row["agent_id"], row["agent_version"]) == ("other-agent", "0.1.0")
+
+
+async def insert_row(world: World, **overrides: Any) -> None:
+    good = compiled("1.0.0")
+    assert good.manifest is not None
+    values: dict[str, Any] = {
+        "agent_id": AGENT_ID,
+        "version": "1.0.0",
+        "digest": good.digest,
+        "manifest_json": good.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
+        "schema_version": 1,
+        "compiler_version": "1",
+    } | overrides
+    await world.db.pool.execute(
+        "INSERT INTO published_agents (agent_id, version, digest, manifest_json, schema_version, "
+        "compiler_version) VALUES ($1,$2,$3,$4,$5,$6)",
+        *values.values(),
+    )
+
+
+async def test_the_row_identity_must_match_the_manifest_it_holds(world: World) -> None:
+    other = compiled("2.0.0")  # same content, so the same digest, but another version label
+    assert other.manifest is not None
+    await insert_row(
+        world,
+        manifest_json=other.manifest.model_dump(mode="json", by_alias=True, exclude_unset=True),
+    )
+    with pytest.raises(RegistryIntegrityError, match="not what was published"):
+        await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")
+
+
+async def test_an_agent_from_an_unknown_compiler_version_is_refused_explicitly(
+    world: World,
+) -> None:
+    from conversation_agent.core.errors import RegistryCompatibilityError
+
+    await insert_row(world, compiler_version="2")
+    with pytest.raises(RegistryCompatibilityError, match="compiler 2"):
+        await PostgresAgentRegistry(world.db).get(AGENT_ID, "1.0.0")

@@ -9,7 +9,7 @@ from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
-from conversation_agent.core.compiler import CompiledAgent, compile_manifest
+from conversation_agent.core.compiler import CompiledAgent, compile_agent, compile_manifest
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
@@ -63,7 +63,7 @@ def build_engine(
     else:
         agent = agent or build_agent(flows=flows)
     engine = TurnEngine(
-        agent,
+        compile_agent(agent),
         llm,
         pipeline,
         journal or InMemoryTurnJournal(),

@@ -12,6 +12,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from conversation_agent.core.compiler import CompiledAgent, agent_document
+from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER
 from conversation_agent.core.errors import (
     IncompatibleUpgradeError,
@@ -38,8 +39,7 @@ def breaking_changes(old: CompiledAgent, new: CompiledAgent) -> tuple[str, ...]:
         if current is None:
             found.append(f"capability {name!r} was removed")
             continue
-        if RISK_ORDER[current["risk"]] < RISK_ORDER[cap["risk"]]:
-            found.append(f"capability {name!r} lowered its risk {cap['risk']} -> {current['risk']}")
+        found += _protection_changes(name, old.agent.resolve(name), new.agent.resolve(name))
         if current["input"] != cap["input"]:
             found.append(f"capability {name!r} changed its input schema")
         if current["output"] != cap["output"]:
@@ -48,6 +48,27 @@ def breaking_changes(old: CompiledAgent, new: CompiledAgent) -> tuple[str, ...]:
     for name in sorted(old_flows - {f["name"] for f in after["flows"]}):
         found.append(f"flow {name!r} was removed")
     return tuple(found)
+
+
+def _protection_changes(
+    name: str, old: ResolvedToolBinding | None, new: ResolvedToolBinding | None
+) -> list[str]:
+    """Compares the RESOLVED security envelope (max of capability/tool/binding), never the label
+    on one layer: a tool that stops being irreversible lowers protection even if the
+    capability still says `read`."""
+    if old is None or new is None:
+        return [] if old is None else [f"capability {name!r} is no longer bound to a tool"]
+    found: list[str] = []
+    if RISK_ORDER[new.effective_risk] < RISK_ORDER[old.effective_risk]:
+        found.append(
+            f"capability {name!r} lowered its effective risk "
+            f"{old.effective_risk} -> {new.effective_risk}"
+        )
+    if old.requires_protection and not new.requires_protection:
+        found.append(f"capability {name!r} no longer requires protection/confirmation")
+    elif old.effective_confirmation_required and not new.effective_confirmation_required:
+        found.append(f"capability {name!r} no longer requires confirmation")
+    return found
 
 
 def plan_publish(existing: list[CompiledAgent], new: CompiledAgent) -> PublishPlan:

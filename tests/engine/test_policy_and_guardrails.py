@@ -10,6 +10,7 @@ import pytest
 
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.tools.fake import FakeToolProvider
+from conversation_agent.core.compiler import compile_agent
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import (
     LLMResponse,
@@ -52,7 +53,7 @@ def engine_for(
     agent = build_agent().model_copy(update=agent_updates)
     tools = FakeToolProvider({"erp_get_available_slots": SLOTS, "erp_create_reservation": SLOTS})
     pipeline = CapabilityPipeline(agent, gate, ToolRunner({"http": tools}))
-    return TurnEngine(agent, llm, pipeline, new_journal(), new_clock()), tools
+    return TurnEngine(compile_agent(agent), llm, pipeline, new_journal(), new_clock()), tools
 
 
 def seen_results(llm: FakeLLM) -> list[dict[str, Any]]:

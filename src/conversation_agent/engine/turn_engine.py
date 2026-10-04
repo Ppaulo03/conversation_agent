@@ -11,6 +11,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from conversation_agent.core.canonical import stable_hash
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.errors import TurnCancelledError
 from conversation_agent.core.models.actions import PendingAction
@@ -55,7 +56,7 @@ MAX_STEPS_DEFAULT = 8
 class TurnEngine:
     def __init__(
         self,
-        agent: AgentDefinition,
+        agent: CompiledAgent,
         llm: LLMProvider,
         pipeline: CapabilityPipeline,
         journal: TurnJournal,
@@ -64,7 +65,9 @@ class TurnEngine:
         max_steps: int = MAX_STEPS_DEFAULT,
         tool_executor: ToolStepExecutor | None = None,
     ) -> None:
-        self._agent = agent
+        # The engine only runs what the compiler produced (INV-029).
+        self._compiled = agent
+        self._agent: AgentDefinition = agent.agent
         self._llm = llm
         self._pipeline = pipeline
         self._journal = journal
@@ -72,7 +75,7 @@ class TurnEngine:
         self._max_steps = max_steps
         self._executor: ToolStepExecutor = tool_executor or DirectToolExecutor(pipeline)
         self._confirmation: ConfirmationStage | None = None
-        self._flows = FlowRunner(agent) if agent.flows else None
+        self._flows = FlowRunner(agent.agent) if agent.agent.flows else None
 
     @property
     def pipeline(self) -> CapabilityPipeline:

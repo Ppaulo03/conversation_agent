@@ -232,7 +232,9 @@ class World:
                 clock=self.clock,
                 owner=owner,
             )
-            engine = TurnEngine(agent, llm, pipeline, journal, self.clock, tool_executor=executor)
+            engine = TurnEngine(
+                compiled, llm, pipeline, journal, self.clock, tool_executor=executor
+            )
             engine.attach_confirmation(
                 ConfirmationStage(
                     agent=agent,

@@ -12,9 +12,13 @@ from typing import Any
 
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.compiler import CompiledAgent, compile_manifest
-from conversation_agent.core.errors import PublishError, RegistryIntegrityError
+from conversation_agent.core.errors import (
+    PublishError,
+    RegistryCompatibilityError,
+    RegistryIntegrityError,
+)
 from conversation_agent.core.publishing import plan_publish
-from conversation_agent.core.versioning import Version
+from conversation_agent.core.versioning import SUPPORTED_COMPILER_VERSIONS, Version
 from conversation_agent.ports.registry import PublishedAgent
 
 
@@ -82,7 +86,8 @@ class PostgresAgentRegistry:
         if cached is not None:
             return cached
         row = await conn.fetchrow(
-            "SELECT digest, manifest_json FROM published_agents WHERE agent_id=$1 AND version=$2",
+            "SELECT digest, manifest_json, schema_version, compiler_version FROM published_agents "
+            "WHERE agent_id=$1 AND version=$2",
             agent_id,
             version,
         )
@@ -90,7 +95,21 @@ class PostgresAgentRegistry:
             if missing_ok:
                 return None  # type: ignore[return-value]
             raise RegistryIntegrityError(f"{agent_id} {version} vanished from the registry")
+        if row["compiler_version"] not in SUPPORTED_COMPILER_VERSIONS:
+            raise RegistryCompatibilityError(
+                f"{agent_id} {version} was published with compiler {row['compiler_version']}; "
+                f"this build supports {sorted(SUPPORTED_COMPILER_VERSIONS)}"
+            )
         compiled = compile_manifest(row["manifest_json"])
+        if (compiled.agent_id, compiled.version, compiled.schema_version) != (
+            agent_id,
+            version,
+            row["schema_version"],
+        ):
+            raise RegistryIntegrityError(
+                f"row {agent_id} {version} holds a manifest for {compiled.agent_id} "
+                f"{compiled.version} (format {compiled.schema_version}): not what was published"
+            )
         if compiled.digest != row["digest"]:
             raise RegistryIntegrityError(
                 f"{agent_id} {version} no longer compiles to its published digest: refusing to "

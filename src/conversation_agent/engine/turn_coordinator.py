@@ -20,6 +20,7 @@ from typing import Literal
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.errors import (
+    AgentMismatchError,
     AgentVersionUnavailableError,
     FencingError,
     JournalDivergenceError,
@@ -205,9 +206,9 @@ class TurnCoordinator:
                 engine = self._versioned_engine_factory(fence, journal, compiled)
             else:
                 engine = self._engine_factory(fence, journal)
-        except AgentVersionUnavailableError as exc:
+        except (AgentVersionUnavailableError, AgentMismatchError) as exc:
             # Never run a conversation on a version it was not pinned to: wait for an operator.
-            log.error("ALERT agent version unavailable, turn left open: %s", redact(str(exc)))
+            log.error("ALERT agent not runnable, turn left open: %s", redact(str(exc)))
             return "retry"
         try:
             outcome = await engine.process_turn(
@@ -272,17 +273,25 @@ class TurnCoordinator:
         only when it is idle does it move to the latest published one."""
         assert self._registry is not None and self._agent_id is not None
         pinned = stored.agent_version
-        target = pinned
         idle = not stored.state.flows and pending is None and not opened.resumed
+        if pinned is not None and stored.agent_id not in (None, self._agent_id):
+            # pinned to ANOTHER agent (a legacy row with no agent_id is taken as this one)
+            if not idle:
+                raise AgentMismatchError(
+                    f"conversation is pinned to {stored.agent_id!r} {pinned} with work in "
+                    f"progress; refusing to continue it as {self._agent_id!r}"
+                )
+            pinned = None  # idle: an explicit re-assignment to the routed agent
+        target = pinned
         if pinned is None or idle:
             latest = await self._registry.latest(self._agent_id)
             if latest is not None and (pinned is None or Version(latest.version) > Version(pinned)):
                 target = latest.version
         if target is None:
             raise AgentVersionUnavailableError(f"no published version of {self._agent_id!r}")
-        if target != pinned:
+        if target != pinned or stored.agent_id != self._agent_id:
             async with self._uows.begin(fence) as uow:
-                await uow.state.pin_agent_version(target)
+                await uow.state.pin_agent(self._agent_id, target)
                 await uow.commit()
         compiled = await self._registry.get(self._agent_id, target)
         if compiled is None:

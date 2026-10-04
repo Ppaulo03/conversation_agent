@@ -71,7 +71,7 @@ class _StateRepo(_Repo):
     async def load(self) -> StoredConversation:
         r = await self._c.fetchrow(
             "SELECT channel_id, contact_id, session_id, state_json, ownership, version, "
-            "last_event_at, agent_version FROM conversation_states "
+            "last_event_at, agent_id, agent_version FROM conversation_states "
             "WHERE tenant_id=$1 AND conversation_id=$2",
             self._f.tenant_id,
             self._f.conversation_id,
@@ -89,15 +89,17 @@ class _StateRepo(_Repo):
             ownership=Ownership(r["ownership"]),
             version=r["version"],
             last_event_at=r["last_event_at"],
+            agent_id=r["agent_id"],
             agent_version=r["agent_version"],
         )
 
-    async def pin_agent_version(self, version: str) -> None:
+    async def pin_agent(self, agent_id: str, version: str) -> None:
         await self._c.execute(
-            "UPDATE conversation_states SET agent_version=$3 "
+            "UPDATE conversation_states SET agent_id=$3, agent_version=$4 "
             "WHERE tenant_id=$1 AND conversation_id=$2",
             self._f.tenant_id,
             self._f.conversation_id,
+            agent_id,
             version,
         )
 

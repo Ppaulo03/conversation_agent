@@ -40,8 +40,12 @@ Each.model_rebuild()
 
 MappingSpec = dict[str, MapExpr]
 
-# Names the runtime implements (`tools.mapping.TRANSFORMS`; a test keeps both in sync). The
-# compiler rejects any other name before the agent can run.
-TRANSFORM_NAMES: frozenset[str] = frozenset(
-    {"minutes_to_hours", "hours_to_minutes", "datetime_to_utc"}
-)
+# Transforms the runtime implements (`tools.mapping.TRANSFORMS`; a test keeps both in sync):
+# name -> (accepted input types, output type). The compiler type-checks mappings with this and
+# rejects any other name before the agent can run.
+TRANSFORM_SPECS: dict[str, tuple[frozenset[str], str]] = {
+    "minutes_to_hours": (frozenset({"integer", "number"}), "number"),
+    "hours_to_minutes": (frozenset({"integer", "number"}), "integer"),
+    "datetime_to_utc": (frozenset({"datetime", "string"}), "string"),
+}
+TRANSFORM_NAMES: frozenset[str] = frozenset(TRANSFORM_SPECS)

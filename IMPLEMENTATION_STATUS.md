@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5 — AgentDefinition + Compiler concluída (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 5.1 — hardening da Fase 5 concluído (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -436,3 +436,23 @@ e reconciliation por versão (`ReconciliationWorker(registry=, agent_id=, pipeli
 - Dry-run de migração de conversas entre versões (simular o estado dos flows contra a nova definição) não existe; a migração só acontece com a conversa ociosa.
 - Compatibilidade de *flows* entre versões é só "removido": mudança de slots/steps não é classificada.
 - Os checks de `Choose.value_field` e fluxos olham schemas, não a semântica dos valores (ex.: um datetime sem fuso).
+
+
+## Phase 5.1 — hardening pós-revisão da Fase 5
+
+Status: **PASS** (achados verificados no código antes de corrigir). Suíte completa verde (ver contagem abaixo).
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| P0 compatibilidade de versões olhava o risco da *capability* | `breaking_changes` compara o envelope resolvido (`effective_risk`, `requires_protection`, confirmação efetiva) por capability | `test_a_minor_version_cannot_lower_the_effective_risk`, `test_a_minor_version_cannot_remove_effective_protection`, `test_raising_protection_in_a_minor_version_is_fine` |
+| P0 pin só por versão | `conversation_states.agent_id` (migration 0008); pin `(agent_id, version)`; outro agente com flow/ação/turno em andamento → `AgentMismatchError` (turno fica aberto); ociosa → reatribuição explícita | `test_a_conversation_is_pinned_to_the_agent_not_just_the_version`, `test_an_idle_conversation_can_be_reassigned_*` |
+| P0 INV-029 contornável (o engine aceitava `AgentDefinition`) | `TurnEngine` só aceita `CompiledAgent`, selado: só `compile_manifest`/`compile_agent` o constroem | `test_only_the_compiler_can_produce_a_compiled_agent` |
+| P1 compiler só checava existência, não tipos | `core/compiler_types.py`: inferência de tipos (path → transform → alvo), `TRANSFORM_SPECS` com tipos de entrada/saída; `MAPPING_TYPE_MISMATCH`, `MAPPING_TRANSFORM_INPUT`, `FLOW_TYPE_MISMATCH`; coerções legítimas (datetime↔string ISO, int→number, enum→string) continuam válidas | `test_a_mapping_cannot_feed_a_value_of_the_wrong_type`, `test_a_transform_*`, `test_compatible_coercions_are_not_errors`, `test_a_flow_cannot_feed_a_capability_the_wrong_type` |
+| P1 path continuava "dentro" de um escalar | `resolve_path`: `.key`/`[i]` em escalar/lista é `MAPPING_SCALAR_TRAVERSAL` | `test_a_mapping_cannot_walk_beyond_a_scalar` |
+| P1 tool sem output alimentando capability com output | `TOOL_HAS_NO_OUTPUT` | `test_a_tool_without_output_cannot_feed_a_capability_that_needs_one` |
+| P2 `compiler_version`/`schema_version` colunas mortas | o registry recusa versão de compilador não suportada (`RegistryCompatibilityError`) e confere `agent_id`/`version`/`schema_version` da linha contra o manifest carregado, além do digest | `test_the_row_identity_must_match_the_manifest_it_holds`, `test_an_agent_from_an_unknown_compiler_version_is_refused_explicitly` |
+
+Aceito e documentado: o compiler ainda para entre estágios (versões/referências → construção → checagens de mapping/flow), então um manifest com
+problemas em estágios diferentes não os reporta todos numa só passada; dentro de cada estágio tudo é coletado.
+Política de compiler: `SUPPORTED_COMPILER_VERSIONS` é um conjunto; quando o compiler mudar de significado, a versão antiga precisa de um loader
+compatível (ou o agente histórico é re-publicado) — até lá, falhar explicitamente é o comportamento escolhido.

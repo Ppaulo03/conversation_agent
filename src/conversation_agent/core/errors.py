@@ -99,3 +99,13 @@ class AgentVersionUnavailableError(ConversationAgentError):
 
 class RegistryIntegrityError(ConversationAgentError):
     """A stored agent no longer compiles to the digest it was published with."""
+
+
+class AgentMismatchError(ConversationAgentError):
+    """The conversation is pinned to another agent and still has something in progress: the
+    runtime never silently swaps the agent under a flow or a pending confirmation."""
+
+
+class RegistryCompatibilityError(RegistryIntegrityError):
+    """A stored agent was published with a compiler/manifest format this build cannot load.
+    Loading it with today's compiler would reinterpret history, so it is refused explicitly."""

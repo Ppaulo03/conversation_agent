@@ -31,13 +31,14 @@ class StoredConversation(BaseModel):
     ownership: Ownership
     version: int
     last_event_at: datetime | None  # watermark: events at/before it are "late" for new turns
-    agent_version: str | None = None  # the published agent version this conversation is pinned to
+    agent_id: str | None = None  # the agent this conversation is pinned to (None: legacy row)
+    agent_version: str | None = None  # ... and its published version
 
 
 class ConversationStateRepository(Protocol):
     async def load(self) -> StoredConversation: ...
     async def save(self, state: ConversationState, *, last_event_at: datetime | None) -> None: ...
-    async def pin_agent_version(self, version: str) -> None: ...
+    async def pin_agent(self, agent_id: str, version: str) -> None: ...
 
 
 class TurnRepository(Protocol):
