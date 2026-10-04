@@ -114,6 +114,7 @@ class OpenedTurn(_Frozen):
     event_ids: tuple[str, ...]
     late_event_ids: tuple[str, ...] = ()
     last_event_at: AwareDatetime | None = None  # newest occurred_at among the turn's events
+    first_received_at: AwareDatetime | None = None  # when the OLDEST event reached us (queue wait)
     inbound: tuple[InboundRef, ...] = ()  # channel evidence per event, in burst order
     resumed: bool = False  # True when an earlier owner had already opened this turn
     attempts: int = 0  # failed processing attempts so far (NOT waits for tool results)

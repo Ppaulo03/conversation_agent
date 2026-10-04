@@ -159,8 +159,8 @@ class _TurnRepo(_Repo):
         )
         if open_turn is not None:
             rows = await self._c.fetch(
-                "SELECT event_id, occurred_at, provider_occurred_at, reply_to_provider_message_id, "
-                "media, kind FROM inbox_events "
+                "SELECT event_id, occurred_at, received_at, provider_occurred_at, "
+                "reply_to_provider_message_id, media, kind FROM inbox_events "
                 "WHERE tenant_id=$1 AND conversation_id=$2 AND turn_id=$3 "
                 "ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id",
                 f.tenant_id,
@@ -169,6 +169,7 @@ class _TurnRepo(_Repo):
             )
             return OpenedTurn(
                 last_event_at=max((r["occurred_at"] for r in rows), default=None),
+                first_received_at=min((r["received_at"] for r in rows), default=None),
                 inbound=_refs(rows),
                 turn_id=open_turn["turn_id"],
                 identity=identity,
@@ -183,7 +184,7 @@ class _TurnRepo(_Repo):
 
         events = await self._c.fetch(
             """
-            SELECT event_id, text, occurred_at, provider_occurred_at,
+            SELECT event_id, text, occurred_at, received_at, provider_occurred_at,
                    reply_to_provider_message_id, media, kind FROM inbox_events
              WHERE tenant_id=$1 AND conversation_id=$2 AND status='READY'
              ORDER BY source_sequence NULLS LAST, occurred_at, received_at, event_id
@@ -243,6 +244,7 @@ class _TurnRepo(_Repo):
         )
         return OpenedTurn(
             last_event_at=max(e["occurred_at"] for e in events),
+            first_received_at=min(e["received_at"] for e in events),
             inbound=_refs(events),
             turn_id=turn_id,
             identity=identity,

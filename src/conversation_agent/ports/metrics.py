@@ -47,3 +47,25 @@ class LLMMetrics(Protocol):
         ...
 
     def record_usage_write_failure(self) -> None: ...
+
+
+class RuntimeMetrics(Protocol):
+    """Operational counters of the conversation runtime itself (the hot path)."""
+
+    def record_turn(
+        self,
+        *,
+        agent_id: str,
+        agent_version: str,
+        outcome: str,
+        processing_seconds: float,
+        queue_seconds: float | None,
+        llm_calls: int,
+        proposed: int,
+    ) -> None:
+        """One finished pass over a turn. `outcome`: completed | failed | retry | waiting |
+        cancelled | silent | proactive | blocked. `queue_seconds` is how long the contact's
+        oldest message waited before processing began (None when unknown)."""
+        ...
+
+    def record_handoff(self, *, agent_id: str, agent_version: str) -> None: ...

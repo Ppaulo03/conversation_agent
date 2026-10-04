@@ -12,6 +12,7 @@ write is a short fenced UoW. A crash at any point leaves the turn open; the next
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import timedelta
@@ -60,6 +61,7 @@ from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.inbox import InboxStore
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.lease import ConversationLeaseStore
+from conversation_agent.ports.metrics import RuntimeMetrics
 from conversation_agent.ports.registry import AgentRegistry
 from conversation_agent.ports.releases import ReleaseResolver
 from conversation_agent.ports.uow import (
@@ -69,6 +71,18 @@ from conversation_agent.ports.uow import (
 )
 
 log = logging.getLogger(__name__)
+
+
+@dataclass
+class _TurnTrace:
+    """What one pass over a turn learned, for the metrics (filled where it is known)."""
+
+    agent: tuple[str, str] = ("unknown", "unknown")
+    outcome: str | None = None
+    llm_calls: int = 0
+    proposed: int = 0
+    handoff: bool = False
+
 
 RunStatus = Literal["idle", "busy", "done", "retry_later", "waiting", "stale"]
 
@@ -115,7 +129,9 @@ class TurnCoordinator:
         versioned_engine_factory: Callable[[FenceToken, TurnJournal, CompiledAgent], TurnEngine]
         | None = None,
         releases: ReleaseResolver | None = None,
+        metrics: RuntimeMetrics | None = None,
     ) -> None:
+        self._metrics = metrics
         if (registry is None) != (versioned_engine_factory is None) or (
             registry is not None and agent_id is None
         ):
@@ -222,12 +238,61 @@ class TurnCoordinator:
         pending: PendingAction | None,
         opened: OpenedTurn,
     ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
+        trace = _TurnTrace(agent=(stored.agent_id or "unknown", stored.agent_version or "unknown"))
+        started = time.monotonic()
+        queue = (
+            (self._clock.now() - opened.first_received_at).total_seconds()
+            if opened.first_received_at is not None
+            else None
+        )
+        result = await self._run_turn_body(handle, fence, stored, pending, opened, trace)
+        self._observe_turn(trace, result, started, queue)
+        return result
+
+    def _observe_turn(
+        self,
+        trace: _TurnTrace,
+        result: str,
+        started: float,
+        queue_seconds: float | None,
+    ) -> None:
+        """What the hot path reports about one pass over a turn. Never raises into the turn."""
+        if self._metrics is None:
+            return
+        outcome = trace.outcome if result == "completed" and trace.outcome else result
+        agent_id, agent_version = trace.agent
+        try:
+            self._metrics.record_turn(
+                agent_id=agent_id,
+                agent_version=agent_version,
+                outcome=outcome,
+                processing_seconds=time.monotonic() - started,
+                queue_seconds=queue_seconds,
+                llm_calls=trace.llm_calls,
+                proposed=trace.proposed,
+            )
+            if trace.handoff:
+                self._metrics.record_handoff(agent_id=agent_id, agent_version=agent_version)
+        except Exception:  # metrics never change what a turn does
+            return
+
+    async def _run_turn_body(
+        self,
+        handle: LeaseHandle,
+        fence: FenceToken,
+        stored: StoredConversation,
+        pending: PendingAction | None,
+        opened: OpenedTurn,
+        trace: _TurnTrace,
+    ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         journal = self._journal_factory(fence)
         if opened.system_only:  # a timer, not the contact: policy-gated, never an agent turn
             await self._proactive_turn(fence, journal, opened, stored)
+            trace.outcome = "proactive"
             return "completed"
         if stored.ownership is not Ownership.BOT:
             await self._record_silent_turn(fence, journal, opened, stored.state, stored.ownership)
+            trace.outcome = "silent"
             return "completed"
 
         try:
@@ -242,10 +307,12 @@ class TurnCoordinator:
                 "turn.agent_not_runnable",
                 extra={"fields": {"alert": True, "reason": redact(str(exc))}},
             )
+            trace.outcome = "blocked"
             return "retry"
         agent_id, agent_version = engine.agent_ref
+        trace.agent = (agent_id, agent_version)
         with bind(agent_id=agent_id, agent_version=agent_version):
-            return await self._drive_turn(handle, fence, stored, pending, opened, engine)
+            return await self._drive_turn(handle, fence, stored, pending, opened, engine, trace)
 
     async def _drive_turn(
         self,
@@ -255,6 +322,7 @@ class TurnCoordinator:
         pending: PendingAction | None,
         opened: OpenedTurn,
         engine: TurnEngine,
+        trace: _TurnTrace,
     ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         try:
             outcome = await engine.process_turn(
@@ -283,6 +351,7 @@ class TurnCoordinator:
                 extra={"fields": {"alert": True, "reason": redact(str(exc))}},
             )
             await self._fail_turn(fence, opened, f"journal_divergence: {exc}")
+            trace.outcome = "failed"
             return "completed"
         except ToolResultPendingError:
             return "waiting"
@@ -303,6 +372,7 @@ class TurnCoordinator:
                     },
                 )
                 await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
+                trace.outcome = "failed"
                 return "completed"
             return "retry"  # the turn stays open; the next pass resumes it from the journal
 
@@ -316,6 +386,10 @@ class TurnCoordinator:
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()
         handle.acknowledge_cancel()  # completing the turn answered any restart request
+        trace.outcome = "completed"
+        trace.llm_calls = outcome.llm_calls
+        trace.proposed = len(outcome.proposed)
+        trace.handoff = outcome.handoff_requested
         return "completed"
 
     async def _resolve_agent(

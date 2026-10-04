@@ -123,3 +123,39 @@ slos:
     for: 1m
     severity: critical
     runbook: llm-usage-records
+
+  - name: TurnLatencyP95High
+    description: "The p95 time to process a turn is above 30 s for an agent version."
+    expr: >-
+      histogram_quantile(0.95, sum by (agent_id, agent_version, le) (rate(conversation_agent_turn_processing_seconds_bucket[10m]))) > 30
+    for: 10m
+    severity: warning
+    runbook: turn-latency
+    unit: s
+
+  - name: TurnQueueWaitHigh
+    description: "The p95 wait before a message is picked up is above 60 s (workers cannot keep up)."
+    expr: >-
+      histogram_quantile(0.95, sum by (agent_id, le) (rate(conversation_agent_turn_queue_wait_seconds_bucket[10m]))) > 60
+    for: 10m
+    severity: warning
+    runbook: inbox-latency
+    unit: s
+
+  - name: TurnFailureRateHigh
+    description: "More than 5 % of turns fail permanently for an agent version."
+    expr: >-
+      sum by (agent_id, agent_version) (rate(conversation_agent_turns_total{outcome="failed"}[15m]))
+      / sum by (agent_id, agent_version) (rate(conversation_agent_turns_total[15m])) > 0.05
+    for: 10m
+    severity: critical
+    runbook: turn-failures
+
+  - name: HandoffRateHigh
+    description: "More than 30 % of turns of an agent version hand the conversation to a person."
+    expr: >-
+      sum by (agent_id, agent_version) (rate(conversation_agent_handoffs_total[30m]))
+      / sum by (agent_id, agent_version) (rate(conversation_agent_turns_total{outcome="completed"}[30m])) > 0.3
+    for: 30m
+    severity: warning
+    runbook: handoff-rate

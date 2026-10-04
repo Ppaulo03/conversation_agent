@@ -86,6 +86,23 @@ The usage ledger (`llm_usage`) rejected writes: calls happened and were not reco
 are incomplete for that window. Check the database; the answers to customers were NOT affected (a failed
 record never fails a call). Estimate the gap from the provider's own invoice for the same window.
 
+### turn-latency
+Turns take long to process. `conversation_agent_turn_processing_seconds` is the time from taking the
+conversation lease to committing the reply; compare by `agent_version` (a release that got slower), then by
+what the turn did: many `turn_llm_calls_total` per turn means a long agent loop, slow tools show in
+`tool_call_duration_seconds`, slow models in `llm_call_duration_seconds` by `purpose`.
+
+### turn-failures
+Turns fail permanently (`turn.failed_permanently` in the logs, filter by `agent_version`): almost always the
+LLM provider failing past `max_turn_attempts` (see *llm-errors*) or a journal divergence
+(`turn.journal_divergence`: a deploy changed what a turn does while it was open; the turn fails closed on
+purpose). A rate that started with a release is a reason to roll it back.
+
+### handoff-rate
+Many turns end by handing the conversation to a person. Compare by `agent_version`: a release that makes the
+agent give up more is a regression the eval suite did not cover; if it is a tool failing, the flows' fallback
+is a handoff, so look at *tool-failures* first.
+
 ## Releases
 
 Publishing a version makes it available; a **release** decides who gets it (`ReleaseManager`).

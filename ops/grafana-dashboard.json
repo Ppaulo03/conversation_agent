@@ -370,6 +370,102 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 16,
+      "type": "timeseries",
+      "title": "TurnLatencyP95High",
+      "description": "The p95 time to process a turn is above 30 s for an agent version.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (agent_id, agent_version, le) (rate(conversation_agent_turn_processing_seconds_bucket[10m]))) > 30",
+          "legendFormat": "TurnLatencyP95High",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 17,
+      "type": "timeseries",
+      "title": "TurnQueueWaitHigh",
+      "description": "The p95 wait before a message is picked up is above 60 s (workers cannot keep up).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (agent_id, le) (rate(conversation_agent_turn_queue_wait_seconds_bucket[10m]))) > 60",
+          "legendFormat": "TurnQueueWaitHigh",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 18,
+      "type": "timeseries",
+      "title": "TurnFailureRateHigh",
+      "description": "More than 5 % of turns fail permanently for an agent version.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 56
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (agent_id, agent_version) (rate(conversation_agent_turns_total{outcome=\"failed\"}[15m])) / sum by (agent_id, agent_version) (rate(conversation_agent_turns_total[15m])) > 0.05",
+          "legendFormat": "TurnFailureRateHigh",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 19,
+      "type": "timeseries",
+      "title": "HandoffRateHigh",
+      "description": "More than 30 % of turns of an agent version hand the conversation to a person.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 63
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (agent_id, agent_version) (rate(conversation_agent_handoffs_total[30m])) / sum by (agent_id, agent_version) (rate(conversation_agent_turns_total{outcome=\"completed\"}[30m])) > 0.3",
+          "legendFormat": "HandoffRateHigh",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

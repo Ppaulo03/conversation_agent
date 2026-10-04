@@ -15,6 +15,7 @@ from typing import Any
 
 from conversation_agent.adapters.llm.metrics import InMemoryLLMMetrics
 from conversation_agent.adapters.observability.prometheus import render
+from conversation_agent.adapters.observability.runtime_metrics import InMemoryRuntimeMetrics
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.health import collect_health
 from conversation_agent.adapters.postgres.migrator import Migrator
@@ -30,6 +31,7 @@ def ops_app(
     db: PostgresDatabase,
     tools: InMemoryToolMetrics | None = None,
     llm: InMemoryLLMMetrics | None = None,
+    runtime: InMemoryRuntimeMetrics | None = None,
 ) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
     async def respond(send: Send, status: int, body: bytes, content_type: str) -> None:
         await send(
@@ -67,7 +69,7 @@ def ops_app(
                 await json_response(send, 200, {"status": "ready"})
         elif path == "/metrics":
             try:
-                body = render(await collect_health(db), tools, llm).encode()
+                body = render(await collect_health(db), tools, llm, runtime).encode()
             except Exception:
                 await json_response(send, 503, {"error": "metrics_unavailable"})
             else:

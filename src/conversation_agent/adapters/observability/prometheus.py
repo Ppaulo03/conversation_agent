@@ -6,7 +6,8 @@
 
 from __future__ import annotations
 
-from conversation_agent.adapters.llm.metrics import InMemoryLLMMetrics
+from conversation_agent.adapters.llm.metrics import Histogram, InMemoryLLMMetrics
+from conversation_agent.adapters.observability.runtime_metrics import InMemoryRuntimeMetrics
 from conversation_agent.adapters.postgres.health import HealthSnapshot
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 
@@ -75,6 +76,24 @@ LLM_COST = "llm_cost_usd_total"
 LLM_UNPRICED = "llm_unpriced_calls_total"
 LLM_DURATION = "llm_call_duration_seconds"
 LLM_WRITE_FAILURES = "llm_usage_write_failures_total"
+TURNS = "turns_total"
+TURN_PROCESSING = "turn_processing_seconds"
+TURN_QUEUE = "turn_queue_wait_seconds"
+TURN_LLM_CALLS = "turn_llm_calls_total"
+TURN_PROPOSALS = "turn_proposals_total"
+HANDOFFS = "handoffs_total"
+RUNTIME_METRICS = {
+    TURNS,
+    f"{TURN_PROCESSING}_bucket",
+    f"{TURN_PROCESSING}_sum",
+    f"{TURN_PROCESSING}_count",
+    f"{TURN_QUEUE}_bucket",
+    f"{TURN_QUEUE}_sum",
+    f"{TURN_QUEUE}_count",
+    TURN_LLM_CALLS,
+    TURN_PROPOSALS,
+    HANDOFFS,
+}
 LLM_METRICS = {
     LLM_CALLS,
     LLM_TOKENS,
@@ -99,8 +118,51 @@ def available_metrics() -> set[str]:
     """Every metric name the exporter can emit (full names, no suffix games)."""
     names = {PREFIX + g for g in GAUGES}
     names |= {PREFIX + c for c in COUNTERS} | {PREFIX + f"{TOOL_DURATION}_max"}
-    names |= {PREFIX + m for m in LLM_METRICS}
+    names |= {PREFIX + m for m in LLM_METRICS} | {PREFIX + m for m in RUNTIME_METRICS}
     return names
+
+
+def _histogram_lines(
+    name: str, help_text: str, series: dict[tuple[str, str], Histogram]
+) -> list[str]:
+    lines = [f"# HELP {PREFIX}{name} {help_text}", f"# TYPE {PREFIX}{name} histogram"]
+    for (agent_id, version), hist in sorted(series.items()):
+        base = {"agent_id": agent_id, "agent_version": version}
+        for bound, count in zip((*hist.buckets, float("inf")), hist.counts, strict=True):
+            le = "+Inf" if bound == float("inf") else f"{bound:g}"
+            lines.append(f"{PREFIX}{name}_bucket{_labels(**base, le=le)} {count}")
+        lines.append(f"{PREFIX}{name}_sum{_labels(**base)} {hist.total:g}")
+        lines.append(f"{PREFIX}{name}_count{_labels(**base)} {hist.count}")
+    return lines
+
+
+def _render_runtime(rt: InMemoryRuntimeMetrics) -> list[str]:
+    lines = [
+        f"# HELP {PREFIX}{TURNS} Turns by outcome (completed, failed, retry, waiting, silent).",
+        f"# TYPE {PREFIX}{TURNS} counter",
+    ]
+    for (agent_id, version, outcome), count in sorted(rt.turns.items()):
+        labels = _labels(agent_id=agent_id, agent_version=version, outcome=outcome)
+        lines.append(f"{PREFIX}{TURNS}{labels} {count}")
+    lines += _histogram_lines(
+        TURN_PROCESSING, "Time spent processing a turn (lease to commit).", rt.processing
+    )
+    lines += _histogram_lines(
+        TURN_QUEUE,
+        "How long the oldest message of a turn waited before processing began.",
+        rt.queue_wait,
+    )
+    for name, help_text, counter in (
+        (TURN_LLM_CALLS, "LLM calls made by turns.", rt.llm_calls),
+        (TURN_PROPOSALS, "Protected actions proposed by turns.", rt.proposals),
+        (HANDOFFS, "Conversations handed to a person by a turn.", rt.handoffs),
+    ):
+        lines += [f"# HELP {PREFIX}{name} {help_text}", f"# TYPE {PREFIX}{name} counter"]
+        for (agent_id, version), count in sorted(counter.items()):
+            lines.append(
+                f"{PREFIX}{name}{_labels(agent_id=agent_id, agent_version=version)} {count}"
+            )
+    return lines
 
 
 def _render_llm(llm: InMemoryLLMMetrics) -> list[str]:
@@ -156,6 +218,7 @@ def render(
     snapshot: HealthSnapshot,
     tools: InMemoryToolMetrics | None = None,
     llm: InMemoryLLMMetrics | None = None,
+    runtime: InMemoryRuntimeMetrics | None = None,
 ) -> str:
     lines: list[str] = []
     values = snapshot.as_dict()
@@ -199,6 +262,8 @@ def render(
         for (provider, scope, state), count in sorted(transitions.items()):
             labels = _labels(provider=provider, scope=scope, state=state)
             lines.append(f"{PREFIX}{CIRCUIT_COUNTER}{labels} {count}")
+    if runtime is not None:
+        lines += _render_runtime(runtime)
     if llm is not None:
         lines += _render_llm(llm)
     return "\n".join(lines) + "\n"
