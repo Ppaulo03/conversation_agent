@@ -82,6 +82,12 @@ class ResolvedConnection(_Frozen):
             raise ValueError("base_url cannot carry a query string (use the tool's query spec)")
         if parts.fragment or "#" in value:
             raise ValueError("base_url cannot carry a fragment")
+        try:
+            port = parts.port  # parsing the port is what raises on `:abc` and `:99999`
+        except ValueError as exc:
+            raise ValueError(f"base_url {value!r} has an invalid port: {exc}") from exc
+        if port is not None and not 1 <= port <= 65535:
+            raise ValueError(f"base_url port {port} is out of range (1-65535)")
         return value
 
     def fingerprint(self) -> str:

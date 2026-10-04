@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 5.4 — Fase 5 fechada, pronta para a borda (aguardando merge). Próxima: Fase 6.
+**Fase atual:** 5.5 — Fase 5 fechada, pronta para a borda (aguardando merge). Próxima: Fase 6.
 
 ## Phase 1
 
@@ -518,3 +518,17 @@ Status: **PASS** (achados reproduzidos antes de corrigir). Novas invariantes **I
 
 Nota de teste: o teste que prova que o runtime recusa um `result_map` inválido (`LOOKUP_RESULT_UNUSABLE`) agora constrói o pipeline com
 `make_pipeline(..., unchecked=True)`, porque o compiler passou a recusar essa definição antes (defesa em profundidade, não substituição).
+
+
+## Phase 5.5 — o que o binding produz chega ao fio; conexões inválidas são erro canônico
+
+Status: **PASS** (reproduzido antes de corrigir). Suíte completa verde.
+
+| Achado | Resolução | Teste |
+|---|---|---|
+| Alta: um argumento OPCIONAL produzido pelo binding podia não ser enviado pelo transporte HTTP (a API externa aplicaria o default dela: operação executada ≠ operação confirmada) | `MAPPED_TOOL_ARG_NOT_SENT`: todo argumento que algum binding da tool pode produzir precisa estar em path/query/body, ou ser declarado em `HTTPRequestSpec.ignored` (decisão explícita); `ignored` não pode esconder argumento obrigatório nem contradizer o spec | `test_a_mapped_optional_tool_argument_cannot_be_silently_dropped`, `test_an_optional_argument_can_be_declared_ignored_explicitly`, `test_ignored_cannot_hide_*`, `test_an_argument_no_binding_produces_may_stay_unsent` |
+| P1: `base_url` com porta inválida (`:99999`, `:abc`) passava na construção e explodia no fingerprint | o validator avalia a porta (1–65535); defesa em profundidade: `InvalidConnectionError` → resultado pré-I/O `INVALID_CONNECTION_CONFIGURATION` no PREPARE (nada é preparado) e no envio | `test_a_malformed_port_is_refused_when_the_connection_is_built`, `test_an_invalid_connection_is_a_canonical_pre_io_error_never_a_raw_exception` |
+
+Registrado, sem mudança: `status_lookup` é hoje *lookup por `idempotency_key`* (não genérico: referência externa/negócio fica para a Fase 7);
+a compatibilidade SemVer é por igualdade de fingerprint (conservadora: adicionar campo opcional exige MAJOR) — direcionalidade fica para quando
+a ergonomia incomodar.

@@ -12,7 +12,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
-from conversation_agent.core.errors import ConnectionNotFoundError
+from conversation_agent.core.errors import ConnectionNotFoundError, InvalidConnectionError
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.core.models.runtime import ExecutionIntent
 from conversation_agent.core.models.tooling import (
@@ -159,6 +159,8 @@ class CapabilityPipeline:
             destination = await self._runner.destination_fingerprint(resolved, context)
         except ConnectionNotFoundError:
             return _pre_io("CONNECTION_NOT_CONFIGURED", "No connection for this tool.")
+        except InvalidConnectionError:
+            return _pre_io("INVALID_CONNECTION_CONFIGURATION", "The connection is invalid.")
         intent = frozen.model_copy(update={"connection_fingerprint": destination})
 
         recovery = intent.recovery
@@ -189,6 +191,8 @@ class CapabilityPipeline:
             destination = await self._runner.destination_fingerprint(resolved, context)
         except ConnectionNotFoundError:
             return _pre_io("CONNECTION_NOT_CONFIGURED", "No connection for the recovery lookup.")
+        except InvalidConnectionError:
+            return _pre_io("INVALID_CONNECTION_CONFIGURATION", "The connection is invalid.")
         return frozen.model_copy(update={"connection_fingerprint": destination})
 
     def intent_matches(self, intent: ExecutionIntent) -> bool:

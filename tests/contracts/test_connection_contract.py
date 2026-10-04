@@ -89,3 +89,54 @@ def test_a_clean_base_url_is_accepted_and_fully_covered_by_the_fingerprint() -> 
     b = ResolvedConnection(connection_id="c", base_url="https://api.example.com:8443/v1")
     other = ResolvedConnection(connection_id="c", base_url="https://api.example.com:8443/v2")
     assert a.fingerprint() == b.fingerprint() != other.fingerprint()
+
+
+@pytest.mark.parametrize(
+    "url",
+    ["https://example.com:99999/api", "https://example.com:abc/api", "https://example.com:0/api",
+     "https://example.com:-1/api"],
+)  # fmt: skip
+def test_a_malformed_port_is_refused_when_the_connection_is_built(url: str) -> None:
+    with pytest.raises(ValidationError, match="port"):
+        ResolvedConnection(connection_id="c", base_url=url)
+
+
+def forged(url: str) -> ResolvedConnection:
+    """Built WITHOUT validation, as a buggy resolver or a bad restore could."""
+    return ResolvedConnection.model_construct(
+        connection_id=CONNECTION,
+        base_url=url,
+        allowed_hosts=frozenset(),
+        allow_private_networks=False,
+        tls_required=True,
+        max_timeout_seconds=10.0,
+        max_request_bytes=256 * 1024,
+        max_response_bytes=1024 * 1024,
+        auth=None,
+    )
+
+
+async def test_an_invalid_connection_is_a_canonical_pre_io_error_never_a_raw_exception() -> None:
+    from conversation_agent.core.models.runtime import ExecutionIntent
+    from conversation_agent.core.models.tooling import CapabilityResult
+    from conversation_agent.engine.policy_gate import PolicyGate
+    from conversation_agent.engine.tool_runner import ToolRunner
+    from conversation_agent.tools.requests import build_capability_request
+    from support.builders import make_pipeline
+
+    cap = Capture()
+    http = provider(forged("https://example.com:99999/api"), cap)
+    agent = build_agent()
+    pipeline = make_pipeline(
+        agent, PolicyGate(agent.allowed_capabilities), ToolRunner({"http": http})
+    )
+    resolved = agent.resolve("scheduling.create")
+    assert resolved is not None
+    request = build_capability_request(
+        resolved.capability,
+        {"service_id": "haircut", "start_at": "2026-10-06T10:00:00-03:00", "duration_minutes": 30},
+    )
+    prepared = await pipeline.prepare_intent(request, CONTEXT)
+    assert isinstance(prepared, CapabilityResult) and not isinstance(prepared, ExecutionIntent)
+    assert prepared.error is not None and prepared.error.code == "INVALID_CONNECTION_CONFIGURATION"
+    assert cap.requests == []  # and the operation was never prepared, let alone sent

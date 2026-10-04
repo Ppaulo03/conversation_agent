@@ -342,7 +342,8 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
             continue
         found += _check_binding(resolved, binding)
     for tool in agent.tools:
-        found += _check_transport(tool)
+        mapped = frozenset(k for b in agent.bindings if b.tool == tool.name for k in b.input_map)
+        found += _check_transport(tool, mapped)
         found += _check_result_map(agent, tool)
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
@@ -353,9 +354,12 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
 _PATH_VAR = re.compile(r"\{(\w+)\}")
 
 
-def _check_transport(tool: ToolDefinition) -> list[Diagnostic]:
-    """The HTTP spec must carry the tool arguments: a required argument that is never sent
-    leaves the external system to apply ITS default (a 2-hour request becomes 1 hour)."""
+def _check_transport(
+    tool: ToolDefinition, mapped: frozenset[str] = frozenset()
+) -> list[Diagnostic]:
+    """The HTTP spec must carry every tool argument that matters: one that is never sent leaves
+    the external system to apply ITS default (a 2-hour request becomes 1 hour). That includes
+    OPTIONAL arguments a binding can produce (`mapped`), unless declared `ignored`."""
     spec = tool.http
     if spec is None:
         return []
@@ -364,11 +368,40 @@ def _check_transport(tool: ToolDefinition) -> list[Diagnostic]:
     path_vars = set(_PATH_VAR.findall(spec.path))
     found = [
         Diagnostic("HTTP_UNKNOWN_ARGUMENT", where, f"{part} {name!r} is not an input of the tool")
-        for part, names in (("path", path_vars), ("query", spec.query), ("body", spec.body))
+        for part, names in (
+            ("path", path_vars),
+            ("query", spec.query),
+            ("body", spec.body),
+            ("ignored", spec.ignored),
+        )
         for name in sorted(names)
         if name not in fields
     ]
     sent = path_vars | set(spec.query) | set(spec.body)
+    for name in sorted(set(spec.ignored)):
+        if name in fields and fields[name].is_required():
+            found.append(
+                Diagnostic(
+                    "HTTP_IGNORED_REQUIRED", where, f"{name!r} is required and cannot be ignored"
+                )
+            )
+        if name in sent:
+            found.append(
+                Diagnostic("HTTP_IGNORED_BUT_SENT", where, f"{name!r} is both ignored and sent")
+            )
+    found += [
+        Diagnostic(
+            "MAPPED_TOOL_ARG_NOT_SENT",
+            where,
+            f"the binding produces {name!r} but the HTTP spec never sends it (a confirmed value "
+            "would be dropped): add it to path/query/body or declare it `ignored`",
+        )
+        for name in sorted(mapped)
+        if name in fields
+        and name not in sent
+        and name not in spec.ignored
+        and not fields[name].is_required()
+    ]
     found += [
         Diagnostic(
             "TOOL_ARG_NOT_SENT",

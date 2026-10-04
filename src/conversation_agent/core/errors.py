@@ -109,3 +109,8 @@ class AgentMismatchError(ConversationAgentError):
 class RegistryCompatibilityError(RegistryIntegrityError):
     """A stored agent was published with a compiler/manifest format this build cannot load.
     Loading it with today's compiler would reinterpret history, so it is refused explicitly."""
+
+
+class InvalidConnectionError(ConversationAgentError):
+    """A connection exists but cannot be used (malformed URL/port): a configuration error that
+    must surface as a canonical pre-I/O result, never as a raw exception in a turn."""

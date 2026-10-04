@@ -30,7 +30,11 @@ import httpx
 
 from conversation_agent.adapters.connections.static import StaticConnectionResolver
 from conversation_agent.core.definitions.binding import ErrorMap, ResolvedToolBinding
-from conversation_agent.core.errors import ConnectionNotFoundError, SecretNotFoundError
+from conversation_agent.core.errors import (
+    ConnectionNotFoundError,
+    InvalidConnectionError,
+    SecretNotFoundError,
+)
 from conversation_agent.core.models.connections import ResolvedConnection
 from conversation_agent.core.models.tooling import ToolContext, ToolError, ToolResult
 from conversation_agent.ports.connections import ConnectionResolver
@@ -134,7 +138,10 @@ class HTTPToolProvider:
         if binding.tool.connection is None:
             return None
         resolved = await self._connections.resolve(context.tenant_id, binding.tool.connection)
-        return resolved.fingerprint()
+        try:
+            return resolved.fingerprint()
+        except ValueError as exc:  # e.g. a connection built without validation
+            raise InvalidConnectionError(f"connection is unusable: {exc}") from exc
 
     async def execute(
         self,
@@ -166,7 +173,13 @@ class HTTPToolProvider:
             raise _Rejected(
                 _configuration_error("CONNECTION_NOT_CONFIGURED", "No connection.")
             ) from None
-        if expected_destination is not None and connection.fingerprint() != expected_destination:
+        try:
+            current_destination = connection.fingerprint()
+        except ValueError:
+            raise _Rejected(
+                _configuration_error("INVALID_CONNECTION_CONFIGURATION", "Connection is invalid.")
+            ) from None
+        if expected_destination is not None and current_destination != expected_destination:
             # The operation was prepared against another destination (INV-027): never send it
             # somewhere else just because configuration changed in the meantime.
             raise _Rejected(

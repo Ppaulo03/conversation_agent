@@ -698,3 +698,50 @@ def test_a_required_field_with_a_default_rejects_an_explicit_null() -> None:
     assert model.model_validate({"x": "foo"}).model_dump() == {"x": "foo"}
     with pytest.raises(ValueError):
         model.model_validate({"x": None})
+
+
+# --- Phase 5.5: what the binding produces must reach the wire ---
+
+
+def test_a_mapped_optional_tool_argument_cannot_be_silently_dropped() -> None:
+    m = raw()
+    # `hours` becomes optional with a default of its own, and is no longer in the request body
+    tool(m, "erp_create_reservation")["input"]["hours"] = {
+        "type": "number",
+        "required": False,
+        "default": 1.0,
+    }
+    tool(m, "erp_create_reservation")["http"]["body"] = ["service_code", "starts_at"]
+    with pytest.raises(CompileError, match="hours") as caught:
+        compile_manifest(m)
+    assert "MAPPED_TOOL_ARG_NOT_SENT" in caught.value.codes  # the API would apply ITS default
+
+
+def test_an_optional_argument_can_be_declared_ignored_explicitly() -> None:
+    m = raw()
+    tool(m, "erp_create_reservation")["input"]["hours"] = {
+        "type": "number",
+        "required": False,
+        "default": 1.0,
+    }
+    spec = tool(m, "erp_create_reservation")["http"]
+    spec["body"] = ["service_code", "starts_at"]
+    spec["ignored"] = ["hours"]
+    assert compile_manifest(m).digest  # a deliberate, visible decision
+
+
+def test_ignored_cannot_hide_a_required_argument_or_contradict_the_spec() -> None:
+    m = raw()
+    spec = tool(m, "erp_create_reservation")["http"]
+    spec["ignored"] = ["hours"]  # hours is required AND sent
+    with pytest.raises(CompileError) as caught:
+        compile_manifest(m)
+    assert {"HTTP_IGNORED_REQUIRED", "HTTP_IGNORED_BUT_SENT"} <= caught.value.codes
+    spec["ignored"] = ["nope"]
+    assert "HTTP_UNKNOWN_ARGUMENT" in codes_of(m)
+
+
+def test_an_argument_no_binding_produces_may_stay_unsent() -> None:
+    m = raw()
+    tool(m, "erp_get_available_slots")["input"]["unused"] = {"type": "string", "required": False}
+    assert compile_manifest(m).digest  # nothing can fill it, so nothing is lost

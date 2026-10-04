@@ -23,6 +23,9 @@ class HTTPRequestSpec(BaseModel):
     path: str
     query: tuple[str, ...] = ()
     body: tuple[str, ...] = ()
+    # Optional tool arguments that are deliberately NOT sent (runtime-only). Anything else the
+    # binding can produce must travel in the path, query or body, or it would silently vanish.
+    ignored: tuple[str, ...] = ()
 
 
 class RecoverySpec(BaseModel):
