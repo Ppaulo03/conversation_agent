@@ -386,3 +386,40 @@ async def test_an_agent_compiled_from_its_manifest_behaves_like_the_python_one(
     out = await chat.say("na verdade às 11h")
     assert proposed_start(out) == datetime(2026, 10, 6, 14, 0, tzinfo=UTC)
     assert len(api.availability_requests()) == 1
+
+
+# --- a stated time is matched against EVERYTHING the tool returned, not just what fit on screen ---
+
+
+async def test_a_stated_time_beyond_the_listed_options_is_still_found(api: ApiHandle) -> None:
+    chat = Chat(api)
+    out = await chat.say("Quero marcar um corte amanhã às 16h")  # the 12th option of 14 real ones
+    assert proposed_start(out) == datetime(2026, 10, 6, 19, 0, tzinfo=UTC)  # 16:00 São Paulo
+    assert "Não tenho exatamente" not in out.reply  # the system HAS that time free
+    assert len(api.availability_requests()) == 1
+
+
+async def test_a_time_said_while_choosing_can_pick_an_option_that_was_not_listed(
+    api: ApiHandle,
+) -> None:
+    chat = Chat(api)
+    shown = await chat.say("Quero agendar uma consulta amanhã")
+    assert "5) ter 06/10 às 15:00" in shown.reply and "16:00" not in shown.reply
+    out = await chat.say("pode ser às 16h")
+    assert proposed_start(out) == datetime(2026, 10, 6, 19, 0, tzinfo=UTC)
+
+
+def test_a_number_never_picks_an_option_that_was_not_listed() -> None:
+    from datetime import date
+
+    from conversation_agent.engine.flow_understanding import select_option
+
+    def option(hour: str) -> dict[str, Any]:
+        return {"value": hour, "label": hour, "local_date": "2026-10-06", "local_time": hour}
+
+    shown = [option(f"0{h}:00") for h in range(1, 6)]
+    hidden = [option("16:00")]
+    today = date(2026, 10, 5)
+    assert select_option("6", shown, today, unlisted=hidden) is None  # nothing was numbered 6
+    assert select_option("o último", shown, today, unlisted=hidden) == shown[-1]
+    assert select_option("às 16h", shown, today, unlisted=hidden) == hidden[0]  # a time can

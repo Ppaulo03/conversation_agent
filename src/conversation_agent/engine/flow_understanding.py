@@ -138,8 +138,16 @@ def render_options(options: list[dict[str, Any]]) -> str:
     return "\n".join(f"{i}) {o['label']}" for i, o in enumerate(options, start=1))
 
 
-def select_option(text: str, options: list[dict[str, Any]], today: date) -> dict[str, Any] | None:
-    """The one option the user means, or None. Never picks on a guess."""
+def select_option(
+    text: str,
+    options: list[dict[str, Any]],
+    today: date,
+    *,
+    unlisted: list[dict[str, Any]] | None = None,
+) -> dict[str, Any] | None:
+    """The one option the user means, or None. Never picks on a guess. A number or an ordinal
+    refers to what was SHOWN; a stated time or date may also select a real option that did not
+    fit in the message (`unlisted`)."""
     if not options:
         return None
     folded = fold(text)
@@ -161,7 +169,7 @@ def select_option(text: str, options: list[dict[str, Any]], today: date) -> dict
         return None
     matches = [
         o
-        for o in options
+        for o in [*options, *(unlisted or [])]
         if (wanted_time is None or o["local_time"] == wanted_time)
         and (wanted_date is None or o["local_date"] == wanted_date)
     ]

@@ -30,6 +30,9 @@ class FlowInstance(_Frozen):
     slots: dict[str, Any] = Field(default_factory=dict)  # validated, normalised values
     results: dict[str, StepResult] = Field(default_factory=dict)
     options: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)  # Choose id -> shown
+    # Choose id -> real options the message had no room to show: a stated time/date can still
+    # select one of them, a number or an ordinal never does (they refer to what was shown).
+    unlisted: dict[str, list[dict[str, Any]]] = Field(default_factory=dict)
     awaiting_slot: str | None = None  # the slot the last question asked for
     awaiting_choice: str | None = None  # the Choose step whose options are on screen
     proposal_hash: str | None = None  # hash of the inputs last proposed for confirmation

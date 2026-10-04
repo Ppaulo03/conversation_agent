@@ -364,7 +364,12 @@ class FlowRunner:
         if instance.awaiting_choice is not None:
             step = next(s for s in definition.steps if s.id == instance.awaiting_choice)
             assert isinstance(step, Choose)
-            picked = select_option(text, instance.options.get(step.id, []), today)
+            picked = select_option(
+                text,
+                instance.options.get(step.id, []),
+                today,
+                unlisted=instance.unlisted.get(step.id, []),
+            )
             if picked is not None:
                 slots[step.into] = picked["value"]
                 return instance.model_copy(update={"slots": slots, "awaiting_choice": None}), True
@@ -483,14 +488,18 @@ class FlowRunner:
     ) -> _Moved | tuple[list[FlowInstance], str] | None:
         source = instance.results[step.source]
         raw = (source.data or {}).get(step.list_field) or []
-        items = [i for i in raw if isinstance(i, dict)][: step.max_options]
-        if not items:
+        found = [i for i in raw if isinstance(i, dict)]
+        if not found:
             moved = self._transition(step.empty, flows, definition, instance, preface)
             if moved.reply is not None:
                 return _Moved(moved.flows, moved.reply, handoff=moved.handoff)
             return list(moved.flows), moved.preface
-        options = build_options(items, step.value_field, self._agent.timezone)
-        if instance.slots.get(step.into) in [o["value"] for o in options]:
+        # Everything the tool returned is a REAL option; only the number SHOWN is capped. A stated
+        # preference is matched against all of them, never just the ones that fit in the message
+        # (otherwise "at 4pm" is refused while the system has 4pm free).
+        every = build_options(found, step.value_field, self._agent.timezone)
+        options = every[: step.max_options]
+        if instance.slots.get(step.into) in [o["value"] for o in every]:
             return None  # still valid for the current search
         wanted_time = instance.slots.get(step.prefer_time_slot) if step.prefer_time_slot else None
         wanted_date = instance.slots.get(step.prefer_date_slot) if step.prefer_date_slot else None
@@ -498,7 +507,7 @@ class FlowRunner:
         if stated:
             matches = [
                 o
-                for o in options
+                for o in every
                 if (wanted_time is None or o["local_time"] == wanted_time)
                 and (wanted_date is None or o["local_date"] == wanted_date)
             ]
@@ -516,6 +525,7 @@ class FlowRunner:
                 "awaiting_choice": step.id,
                 "awaiting_slot": None,
                 "options": {**instance.options, step.id: options},
+                "unlisted": {**instance.unlisted, step.id: every[step.max_options :]},
                 "last_question": question,
             }
         )
