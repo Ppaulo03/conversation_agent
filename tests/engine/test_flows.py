@@ -9,6 +9,8 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from typing import Any
 
+import pytest
+
 from conftest import ApiHandle
 from conversation_agent.adapters.llm.fake import (
     FakeLLM,
@@ -16,9 +18,14 @@ from conversation_agent.adapters.llm.fake import (
     text_response,
     tool_call_response,
 )
+from conversation_agent.adapters.tools.fake import FakeToolProvider
 from conversation_agent.core.definitions.flow import Collect, FlowDefinition, SlotDefinition
+from conversation_agent.core.definitions.flow import Slot as FlowSlot
+from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.models.conversation import ConversationState, TurnOutcome
 from conversation_agent.core.models.llm import LLMResponse, LLMStopReason, LLMUsage
+from conversation_agent.core.models.tooling import ToolError, ToolResult
+from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.turn_engine import TurnEngine
 from support.builders import IDENTITY, new_clock, new_journal
 from vertical_slice.definitions import SCHEDULING_FLOW, build_agent
@@ -293,3 +300,81 @@ async def test_a_digression_can_only_use_read_tools(api: ApiHandle) -> None:
     await chat.say("Quero agendar um corte")
     out = await chat.say("agenda logo pra mim às 10")
     assert not out.proposed and not any(r["path"] == "/bookings" for r in api.requests)
+
+
+# --- every canonical outcome leads somewhere safe (DESIGN 23.4) ---
+
+
+def engine_returning(status: str, *, policy: PolicyGate | None = None) -> TurnEngine:
+    error = None if status == "success" else ToolError(code="X", message_safe="x")
+    provider = FakeToolProvider({"erp_get_available_slots": ToolResult(status=status, error=error)})
+    engine, _, _ = build_engine(
+        FakeLLM([]),
+        api_base_url="http://unused",
+        journal=new_journal(),
+        clock=new_clock(),
+        providers={"http": provider},
+        policy=policy,
+        flows=True,
+    )
+    return engine
+
+
+OUTCOMES = {
+    "validation_error": ("Não consegui usar essa data.", "open"),
+    "business_error": ("Esse serviço não está disponível agora.", "closed"),
+    "technical_error": ("Não consegui consultar a agenda agora.", "open"),
+    "timeout": ("Não consegui consultar a agenda agora.", "open"),
+    "unknown": ("Não consegui consultar a agenda agora.", "open"),
+}
+
+
+@pytest.mark.parametrize("status", sorted(OUTCOMES))
+async def test_every_tool_outcome_has_a_transition_or_safe_default(status: str) -> None:
+    expected, flow_state = OUTCOMES[status]
+    outcome = await engine_returning(status).process_turn(
+        IDENTITY, ConversationState(), "Quero marcar um corte amanhã", "t1"
+    )
+    assert expected in outcome.reply and not outcome.proposed
+    assert (outcome.state.active_flow is None) == (flow_state == "closed")
+
+
+async def test_policy_denied_follows_its_transition() -> None:
+    engine = engine_returning("success", policy=PolicyGate(frozenset({"scheduling.create"})))
+    outcome = await engine.process_turn(
+        IDENTITY, ConversationState(), "Quero marcar um corte amanhã", "t1"
+    )
+    assert "Não posso consultar a agenda" in outcome.reply and outcome.state.flows == ()
+
+
+def test_a_flow_cannot_be_defined_without_a_safe_default_or_with_dangling_references() -> None:
+    from pydantic import ValidationError
+
+    from conversation_agent.core.definitions.flow import Ask, Invoke, Say
+    from conversation_agent.core.errors import DefinitionError
+
+    inputs = {"service_id": FlowSlot(name="service")}
+    with pytest.raises(ValidationError):  # `default` is mandatory
+        Invoke(id="s", capability="scheduling.availability", inputs=inputs)  # type: ignore[call-arg]
+    base = {"name": "f", "slots": PRICES.slots}
+    unknown_outcome = Invoke(
+        id="s", capability="c", inputs=inputs, on={"exploded": Say(text="x")}, default=Say(text="y")
+    )
+    with pytest.raises((DefinitionError, ValidationError)):
+        FlowDefinition(steps=(unknown_outcome,), **base)  # type: ignore[arg-type]
+    dangling = Invoke(
+        id="s",
+        capability="c",
+        inputs=inputs,
+        on={"timeout": Ask(slot="nope")},
+        default=Say(text="y"),
+    )
+    with pytest.raises((DefinitionError, ValidationError)):
+        FlowDefinition(steps=(dangling,), **base)  # type: ignore[arg-type]
+
+
+def test_a_digression_may_only_use_read_capabilities() -> None:
+    flow = SCHEDULING_FLOW.model_copy(update={"digression_capabilities": ("scheduling.create",)})
+    agent = build_agent().model_copy(update={"flows": (flow,)})
+    with pytest.raises(DefinitionError, match="digression"):
+        agent._check_flows({c.name: c for c in agent.capabilities})

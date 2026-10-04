@@ -47,3 +47,9 @@ Deltas do repositório sobre o `AGENTS.md` global.
   seguinte). Um turno retomado deve voltar ao estágio já journalado (ver `find_step(CONFIRMATION_DECISION)` no coordinator).
 - `httpx.AsyncClient.send` herda `follow_redirects` do client injetado: sempre passe `follow_redirects=False` no provider.
 - PowerShell 5.1: `String.Replace` não aceita 3 argumentos e `"\n"` entre aspas duplas é literal; use `` `n `` ou a ferramenta Edit.
+
+- (Fase 4) Em PowerShell `R` é alias de `Invoke-History`: nunca nomeie helper de replace como `R`. `String.Replace` com 3 args falha em silêncio e o arquivo é gravado sem a edição.
+- (Fase 4) `ConversationState` ganhou `flows`; `test_runtime_does_not_own_business_state` lista os campos permitidos (só dado conversacional).
+- (Fase 4) Coluna `state_json` (jsonb) volta como dict/str conforme o codec: nos testes use `json.loads` se for `str`.
+- (Fase 4) Cancelamento: `cancel_requested` precisa ser reconhecido localmente (`LeaseHandle.acknowledge_cancel`) ao completar/cancelar o turno; senão o turno seguinte herda o pedido do heartbeat e é cancelado à toa (e reabrir os mesmos eventos colidiria no PK de `turns` sem o sal do `turn_id`).
+- (Fase 4) Gatilho vs resposta: "a consulta" respondendo "qual serviço?" contém o trigger "consulta"; a resposta ao flow ativo tem precedência sobre trigger de outro flow.

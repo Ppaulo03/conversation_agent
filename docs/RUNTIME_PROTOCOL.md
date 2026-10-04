@@ -302,6 +302,11 @@ PREPARED -> EXECUTING -> external call -> ledger finalize
 
 Parar apenas em safe boundary.
 
+Implementação (Fase 4): a mensagem nova (política `restart`) marca `conversation_states.cancel_requested`; o worker
+lê o flag com o heartbeat. A checagem acontece **antes de PREPARE** e antes de cada novo step do LLM/Flow, nunca entre
+PREPARED e a finalização. Sem efeito irreversível no turno: turno `CANCELLED` e eventos de volta a `READY`. Com efeito já
+executado: o turno termina com aviso determinístico e o efeito é reportado (a mensagem nova roda no turno seguinte).
+
 ## 11. Ownership
 
 Primeiro gate do turno:

@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 1 — Vertical slice (concluída; Fase 2 não iniciada).
+**Fase atual:** 4 — Flows e entendimento (concluída; aguardando merge). Próxima: Fase 5.
 
 ## Phase 1
 
@@ -314,3 +314,62 @@ preferível a executar demais).
 Débitos remanescentes: a saída do lookup é lida pelo `output_map` *atual* do binding do lookup (o fingerprint congela
 a entrada e o destino, não a interpretação); recovery de writes sem `status_lookup` continua dependendo só de
 `retry_same_key`/handoff.
+
+
+## Phase 4 — Flows e entendimento
+
+Status: **PASS**. DoD verificado contra PostgreSQL 16 e a API de referência reais; 648 testes (+5 live deselecionados).
+
+DoD (`ROADMAP.md` Fase 4):
+
+- [✓] Flow corrige slot sem perder contexto válido — `test_correcting_the_time_keeps_context_and_does_not_search_again`, `test_correcting_the_day_searches_again_and_keeps_the_rest`, `test_correcting_the_service_discards_the_old_choice`, `test_changing_the_request_instead_of_answering_corrects_the_flow` (Postgres, com PendingAction invalidada)
+- [✓] digressão permitida retorna ao Flow — `test_digression_is_answered_then_the_flow_resumes`; novo flow suspende/retoma o ativo — `test_a_different_request_suspends_the_flow_and_resumes_it`
+- [✓] `cancel_requested` não interrompe external call em voo — `test_C12_cancel_during_external_call_finishes_call_then_stops_at_boundary`
+- [✓] HUMAN nunca roda Router/LLM automaticamente — `test_human_owned_conversation_never_runs_flow_router_or_llm` (0 chamadas LLM, 0 requests, 0 outbound, nenhum flow criado)
+- [✓] todo outcome canônico tem transição ou default seguro — `default` é obrigatório no modelo; `test_every_tool_outcome_has_a_transition_or_safe_default` (validation_error, business_error, technical_error, timeout, unknown), `test_policy_denied_follows_its_transition`, `test_a_conflict_at_execution_follows_the_flow_transition` (409 depois do "sim")
+- [✓] normalização pt-BR determinística de data/hora/duração — `tests/engine/test_temporal_ptbr.py` (80 casos)
+- [✓] chaos **C12** passa (meta-teste exige C01–C16 das Fases 2–4)
+
+Implementado: `core/definitions/flow.py` (Flow tipado em Python: slots, `Collect`/`Invoke`/`Choose`/`Propose`, transições
+`Say`/`Ask`/`Handoff`, validação na construção e no `AgentDefinition`), `core/models/flow.py` (`FlowInstance`/`StepResult`
+dentro de `ConversationState.flows`, só dado conversacional), `core/temporal_ptbr.py`, `engine/flow_understanding.py` (extração
+determinística, correção, escolha entre opções reais), `engine/flow_runner.py` (progresso derivado do estado, pilha de flows),
+`TurnEngine.run_capability` (**único** caminho a uma capability, usado pelo agent loop e pelos Flows), `FlowIO` (extração
+estruturada e digressão journaladas), cancelamento cooperativo (migration 0006, `Lease.cancel_requested`, `PostgresInboxStore(restart_on_new_message=)`,
+`TurnRepository.cancel`, `TurnCancelledError`), flow de agendamento no exemplo (`SCHEDULING_FLOW`, opt-in `build_agent(flows=True)`).
+
+### Decisões de arquitetura da Fase 4
+
+1. **Progresso derivado, não cursor.** O runner percorre os steps e age no primeiro insatisfeito; `Invoke` só é satisfeito se
+   o `input_hash` guardado bate com as entradas atuais. Corrigir um slot muda as entradas → o resultado deixa de valer sozinho
+   e o que ainda vale (serviço, mesma busca) é reaproveitado (a correção de horário não repete a busca).
+2. **Slots derivados caem na correção** (`SlotDefinition.invalidates`): mudar serviço/dia/horário esquece o horário escolhido.
+3. **Opções vêm só da tool**: `Choose` lê a lista de um `Invoke` anterior; a escolha por número/ordinal/hora/dia só aceita o que foi
+   mostrado (ordinais femininos "segunda/quarta/quinta" não são ordinais: são dias da semana).
+4. **Entendimento em duas camadas**: regras primeiro (zero LLM); só se nada for entendido há UMA chamada estruturada journalada.
+   O modelo só *aponta palavras* ("depois de amanhã"); o valor é calculado pelos parsers determinísticos a partir da data de
+   referência do turno (INV-018) — um valor que o parser rejeita nunca entra no estado.
+5. **Digressão = agent loop restrito a leitura** (`digression_capabilities`, validadas como read no `AgentDefinition`) mais a
+   pergunta pendente reposta pelo runtime; limitada por `max_digressions`; qualquer outra tool pedida é negada.
+6. **Respostas do Flow são texto determinístico** (templates da definição); LLM só entende/digressiona.
+7. **Propose reutiliza a Fase 3 inteira**: o Flow só *propõe*; PendingAction, confirmação, ledger e execução são os de sempre.
+   `StageResult.closed/status` fecha o Flow quando a ação executa/é rejeitada/expira; falha na execução segue a transição do `Propose`.
+8. **Cancelamento só em safe boundary** (INV-012): `restart` marca `cancel_requested` quando chega mensagem com turno em
+   andamento (default `queue` não marca); o worker lê no heartbeat e checa **antes de PREPARE**, nunca dentro de
+   PREPARED→EXECUTING→chamada→finalize (o `guard` dos executors continua só de staleness). Sem efeito irreversível no turno → turno
+   `CANCELLED` e eventos voltam a `READY` (a próxima rodada agrega com a mensagem nova; `turn_id` ganha sal se os mesmos eventos
+   reabrem). Com efeito já feito → o turno termina com aviso determinístico (`cancelled_after_effect_reply`): o efeito real é
+   reportado, nunca descartado.
+9. **Cancelamento por texto** ("deixa pra lá") só vale em mensagens curtas (≤ 6 palavras) e tem precedência sobre trigger.
+10. Um trigger de outro flow só suspende o ativo se a mensagem **não** responde o que o flow ativo pergunta (resposta ganha).
+
+### Débitos conhecidos (Fase 4)
+
+- Roteamento de intenção por LLM (escolher o flow sem trigger): hoje triggers por palavra/frase; sem flow nem trigger, cai no agent
+  loop da Fase 1 (que ainda enxerga todas as capabilities, inclusive a protegida via proposta).
+- `Handoff` só encerra o flow e avisa; a mudança de `Ownership` para HUMAN é do canal/Fase 6.
+- `logical_step_id` de leituras do Flow é por turno/step; o `flow_instance_id + step_id + attempt_semantic_id` de DESIGN §20.3 só
+  importa para escritas sem confirmação, que o Flow não faz (escrita sempre passa por `Propose`).
+- Trigger "agendamento" também casa "cancelar meu agendamento" (não há flow de cancelamento ainda).
+- `restart` é política do `PostgresInboxStore`; configuração por agente/canal fica para a Fase 5/6.
+- Gatilhos e textos são pt-BR no exemplo; a normalização temporal é só pt-BR (outros idiomas = outro módulo).
