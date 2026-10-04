@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 10 — Production hardening (implementada; aguardando revisão/merge). Fases 1–9 em `main`.
+**Fase atual:** 11 — Observabilidade (implementada; aguardando revisão/merge). Fases 1–10 em `main`.
 
 ## Phase 1
 
@@ -732,3 +732,42 @@ O que é código está testado; o que é prática operacional está em `docs/OPE
 - **Métricas de tool e circuito continuam em memória por processo** (o exporter expõe as de um `InMemoryToolMetrics`); agregação entre processos é do Prometheus (scrape de cada instância).
 - **Backup/DR é procedimento, não automação**: o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. Não há rehearsal automatizado de restore no CI.
 - Achados da Fase 9 ainda abertos: slot de texto livre engole perguntas; não existe pedido direto de atendente humano pelo contato.
+
+
+## Phase 11 — Observabilidade (logs, métricas, tracing, custo de LLM)
+
+Status: **PASS** (suíte completa verde; mypy/ruff/import-linter limpos). Novas invariantes **INV-048 a INV-051**.
+Fora do ROADMAP original (a Fase 10 entregou saúde das filas, SLOs e auditoria); nasceu da pergunta "como estamos em observabilidade, e em custo de LLM?". Antes: ~17 linhas de log em texto livre, nenhum tracing (a porta `Tracer` do DESIGN nunca existiu), nenhuma métrica do caminho quente e apenas tokens crus por resposta de LLM, sem custo, sem agregação, sem orçamento.
+
+| Pergunta de produção | Resposta agora | Onde |
+|---|---|---|
+| "O que aconteceu com esta conversa/turno?" | Logs JSON (um objeto por linha) com um contexto fechado (tenant, versão do agente, `conversation_ref`, turno, invocação, linha da outbox, trace) vindo de `contextvars`; eventos com nomes estáveis (`turn.failed_permanently`, `outbox.send_not_confirmed`, ...) | `core/observability.py`, `adapters/observability/logs.py` |
+| "Por onde passou esta mensagem?" | Um `trace_id` nasce no webhook, é persistido no inbox, e segue turno → LLM → tool → linha da outbox → envio (mesmo por OUTRO processo); spans com pai, duração e status (`webhook.receive`, `turn`, `llm.call`, `tool.call`, `outbox.send`, reconciliação) como linha de log ou em memória | `core/tracing.py`, migration 0020 |
+| "Quão rápido/saudável está o fluxo normal?" | Turnos por desfecho, tempo de processamento (histograma), espera na fila até a coleta, chamadas de LLM por turno, propostas e handoffs, por agente e versão | `RuntimeMetrics`, coordinator |
+| "Quanto o LLM custa e onde?" | Uma linha por chamada (tenant, agente, versão, conversa por referência, turno, **finalidade**, provider, modelo, tokens input/cache/escrita/saída/raciocínio, latência, resultado) num ledger append-only; preços como DADO (`ops/llm_prices.yaml`) aplicados na leitura, ao preço do DIA de cada chamada; relatório por dia/agente/versão/modelo/finalidade; CLI `app.usage` | `MeteredLLMProvider`, migration 0018, `core/llm_prices.py` |
+| "Esta versão ficou mais cara/falante?" | `compare_versions`: custo, chamadas e erros POR TURNO entre versões; `cost_regressions` (recusa veredito com poucos turnos); `app.usage --compare STABLE,CANDIDATE` sai 1 se o candidato está pior; o relatório do eval diz quantas chamadas cada cenário fez e para quê | `core/llm_compare.py` |
+| "Um tenant está estourando?" | `LLMBudget` por tenant (tokens e/ou USD, dia/mês), status do ledger, gauge `llm_budget_used_ratio`, alertas; política `alert` (padrão) ou `refuse_new` (o edge recusa mensagens NOVAS, 503 + Retry-After, antes de persistir) | migration 0019, `BudgetEvaluator` |
+| "Como ligo isso?" | `setup_observability()` (logs, tracer, preços) + `wrap_llm`/`wrap_tools`/`ops_app` | `app/observability.py` |
+
+SLOs/alertas e runbook novos: erro e latência de LLM, custo/hora, modelo sem preço, uso não gravado, latência de turno, espera na fila, falha de turno, taxa de handoff, orçamento.
+
+### Decisões da Fase 11
+
+1. **Uma só fonte de contexto** (`contextvars`, campos FECHADOS): logs, spans, registro de uso e métricas leem o mesmo; nada é passado por assinatura. O conjunto fechado é o que impede um campo com conteúdo de entrar (INV-049). A conversa aparece como `conversation_ref` (o id cru pode embutir telefone), a mesma referência da auditoria.
+2. **Observabilidade é canal lateral (INV-048):** falha de logger, tracer, métrica ou ledger de uso nunca falha a chamada; o ledger falho é contado (`llm_usage_write_failures_total`) e alertado, a resposta ao cliente sai.
+3. **Gasto contado uma vez por chamada REAL (INV-050):** o registro fica onde o provider é chamado, não no journal: um replay (que reaproveita a resposta) não conta de novo, e uma chamada repetida após crash conta duas vezes porque o provider cobrou duas vezes. Chamada fora de contexto vai para `_unattributed`: gasto nunca fica invisível.
+4. **Preço é dado; modelo sem preço é "não precificado", nunca grátis.** O repositório entrega `ops/llm_prices.yaml` VAZIO de propósito (não conhece preços atuais): todo modelo aparece como `unpriced` (métrica, alerta e flag "limite inferior" no relatório) até o operador preencher.
+5. **Uso normalizado entre providers:** `input_tokens` = não-cacheado, cache read/write à parte, raciocínio dentro de `output_tokens`; o adapter faz a conta (OpenAI conta o cache dentro do prompt, a Anthropic não).
+6. **Custo por TURNO, não gasto total**, para comparar versões que atenderam volumes diferentes; poucos turnos = sem veredito.
+7. **Orçamento recusa só no edge, só se pedido (INV-051)** e com o aviso explícito de que um gateway desiste após suas tentativas.
+8. **Tracing sem backend:** spans viram linhas de log estruturadas (qualquer backend de logs reconstrói o trace por `trace_id`); exportador OpenTelemetry fica como adaptador futuro sobre a mesma interface `Tracer`.
+
+### Débitos conhecidos (Fase 11)
+
+- **Sem exportador OpenTelemetry** (a interface existe; falta o adaptador e o `traceparent` de entrada/saída: o RelayPlane não define propagação de trace, então o id é nosso, do webhook em diante).
+- **Métricas em memória por processo**, expostas por `/metrics` de cada instância; sem endpoint de agregação nem push.
+- **Orçamento avaliado do ledger com cache** (um tenant pode ultrapassar o que gasta numa janela de cache) e sem tabela de rollup diária: com milhões de linhas por tenant a consulta mensal vira custo; sem auditoria de "cruzou 80%/100%" (só métrica/alerta).
+- **`compare_versions` só no PostgreSQL** (não há versão em memória) e é ferramenta do operador, não gate automático do `ReleaseManager`.
+- **Transcrição de áudio (STT) ainda não é medida** (a porta existe, o provider real não): quando houver, entra como outra finalidade com custo por segundo.
+- **Logs e spans de chamadas a APIs externas não carregam o trace para fora**: o `X-Trace-Id` das tools já usa o trace do turno, mas o envio ao RelayPlane não propaga (contrato do gateway não define).
+- **Cardinalidade:** labels de tenant só no gauge de orçamento (só tenants com orçamento); custo/uso por tenant vem do ledger (`app.usage`), não do Prometheus, de propósito.

@@ -5,6 +5,22 @@ What to do when something fires, how to change things safely, and how to recover
 ALL its work in PostgreSQL: every "queue" below is a table, so the first move is almost always to look
 at the rows, not at the processes.
 
+## Where to look
+
+| Question | Where |
+|---|---|
+| What happened to this conversation? | JSON logs filtered by `conversation_ref` (compute it with `core.observability.conversation_ref(tenant, conversation_id)`) |
+| Where did this message go? | logs/spans filtered by `trace_id`; it is also in `inbox_events.trace_id`, `outbox_messages.trace_id` and `tool_invocations.context_json` |
+| Is the system healthy? | `/metrics` (queue backlogs and ages, turn outcomes and latency), the SLO alerts |
+| What does the LLM cost, and where? | `python -m conversation_agent.app.usage --tenant T --since D --until D --by agent_version,purpose` |
+| Did this release get dearer? | `python -m conversation_agent.app.usage ... --agent A --compare STABLE,CANDIDATE` (exit 1 = worse) |
+| Is a tenant over budget? | `conversation_agent_llm_budget_used_ratio`, `BudgetEvaluator.status(tenant)` |
+| What did an operator change? | `admin_audit` (`PostgresAuditLog.list`) |
+
+Wiring: `setup_observability()` turns on JSON logs (`LOG_LEVEL`, `LOG_STACK`), span lines (`TRACE=log|off`)
+and loads the price list (`LLM_PRICES_FILE`); wrap the LLM with `wrap_llm` (it goes on the books) and mount
+`ops_app` on a non-public port.
+
 ## Alerts
 
 ### inbox-latency
