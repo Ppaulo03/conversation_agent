@@ -25,8 +25,30 @@ class LLMStopReason(StrEnum):
 
 
 class LLMUsage(_Frozen):
+    """What one call consumed, normalised so it can be priced the same way for any provider:
+
+    input_tokens        input tokens that were NOT served from a cache (full price)
+    cache_read_tokens   input tokens served from a prompt cache (cheaper)
+    cache_write_tokens  input tokens written to a prompt cache (dearer)
+    output_tokens       everything generated, reasoning included (it is billed as output)
+    reasoning_tokens    informational: the part of `output_tokens` that was reasoning
+    Adapters do the arithmetic (some providers count cached tokens inside their input figure).
+    """
+
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0
+    cache_write_tokens: int = 0
+    reasoning_tokens: int = 0
+
+    @property
+    def total_tokens(self) -> int:
+        return (
+            self.input_tokens
+            + self.output_tokens
+            + self.cache_read_tokens
+            + self.cache_write_tokens
+        )
 
 
 class LLMToolCall(_Frozen):
@@ -107,6 +129,9 @@ class LLMResponse(_Frozen):
     stop_reason: LLMStopReason
     usage: LLMUsage = LLMUsage()
     structured: dict[str, Any] | None = None
+    # Who answered, as the provider reports it (what usage is priced by); None for fakes/replays.
+    provider: str | None = None
+    model: str | None = None
 
     @property
     def text(self) -> str:

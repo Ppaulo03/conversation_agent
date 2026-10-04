@@ -36,6 +36,7 @@ from conversation_agent.core.models.llm import (
 from conversation_agent.core.models.media import MediaReference, TranscriptionContext
 from conversation_agent.core.models.runtime import InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
+from conversation_agent.core.observability import bind
 from conversation_agent.engine.capability_pipeline import (
     CapabilityOutcome,
     CapabilityPipeline,
@@ -435,7 +436,10 @@ class TurnEngine:
         *,
         tools: tuple[LLMToolDefinition, ...] | None = None,
         structured: LLMStructuredOutput | None = None,
+        purpose: str = "agent",
     ) -> LLMResponse:
+        """One model call, journaled. `purpose` says WHY it is made (agent loop, confirmation
+        decision, flow understanding, ...): usage is reported per purpose."""
         request = LLMRequest(
             system=system,
             messages=tuple(messages),
@@ -450,9 +454,10 @@ class TurnEngine:
         )
 
         async def call_llm() -> dict[str, Any]:
-            response = await self._llm.complete(
-                request.model_copy(update={"request_id": llm_request_id})
-            )
+            with bind(purpose=purpose):  # fresh calls only: a replayed step never reaches here
+                response = await self._llm.complete(
+                    request.model_copy(update={"request_id": llm_request_id})
+                )
             return response.model_dump(mode="json")
 
         payload = await cursor.step(JournalStepType.LLM_RESPONSE, request_hash, call_llm)
@@ -637,7 +642,13 @@ class _EngineFlowIO:
         cursor, _, turn_id = self._args
         self._engine.boundary(self._rest[2], self._rest[3])
         response = await self._engine.llm_step(
-            cursor, turn_id, system, [LLMMessage.text("user", message)], tools=(), structured=schema
+            cursor,
+            turn_id,
+            system,
+            [LLMMessage.text("user", message)],
+            tools=(),
+            structured=schema,
+            purpose="flow_understanding",
         )
         return response.structured or {}
 
@@ -658,7 +669,12 @@ class _EngineFlowIO:
         for _ in range(3):
             engine.boundary(guard, policy_state)
             response = await engine.llm_step(
-                cursor, turn_id, f"{system}\n\n{note}", working, tools=tools
+                cursor,
+                turn_id,
+                f"{system}\n\n{note}",
+                working,
+                tools=tools,
+                purpose="flow_digression",
             )
             if response.stop_reason is LLMStopReason.MAX_TOKENS:
                 break

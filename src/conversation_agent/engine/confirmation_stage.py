@@ -96,6 +96,7 @@ class StageHost(Protocol):
         *,
         tools: tuple[LLMToolDefinition, ...] | None = None,
         structured: LLMStructuredOutput | None = None,
+        purpose: str = "agent",
     ) -> LLMResponse: ...
 
 
@@ -225,6 +226,7 @@ class ConfirmationStage:
             [message],
             tools=(),
             structured=_CLASSIFIER_SCHEMA,
+            purpose="confirmation_decision",
         )
         data = response.structured or {}
         decision = data.get("decision")
@@ -451,7 +453,12 @@ class ConfirmationStage:
         fallback = self._agent.confirmation.executed_fallback.format(status=result.status)
         try:
             response = await self._host.llm_step(
-                cursor, inp.turn_id, inp.system, messages, tools=inp.tools
+                cursor,
+                inp.turn_id,
+                inp.system,
+                messages,
+                tools=inp.tools,
+                purpose="confirmation_reply",
             )
         except Exception:
             return fallback, 1

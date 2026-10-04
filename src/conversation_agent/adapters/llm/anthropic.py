@@ -138,7 +138,12 @@ class AnthropicLLM:
             parts=tuple(parts),
             stop_reason=stop,
             usage=LLMUsage(
-                input_tokens=raw.usage.input_tokens, output_tokens=raw.usage.output_tokens
-            ),
+                input_tokens=raw.usage.input_tokens or 0,
+                output_tokens=raw.usage.output_tokens or 0,
+                cache_read_tokens=getattr(raw.usage, "cache_read_input_tokens", None) or 0,
+                cache_write_tokens=getattr(raw.usage, "cache_creation_input_tokens", None) or 0,
+            ),  # Anthropic's `input_tokens` already excludes the cached ones
             structured=structured,
+            provider="anthropic",
+            model=getattr(raw, "model", None),
         )

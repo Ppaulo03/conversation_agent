@@ -1,0 +1,17 @@
+# LLM price list, per MILLION tokens. Maintained by the operator from each provider's price page:
+# this repository does not know current prices, and a wrong default would be worse than none.
+# A model that is not listed is reported as UNPRICED (a visible gap in cost reports and in the
+# `llm_unpriced_calls_total` metric), never as free.
+#
+# Keys are "<provider>/<model>" (provider as the adapter reports it: anthropic, openai_compat)
+# or just "<model>". Several entries per model let a price change take effect on its date without
+# re-pricing history. `cache_read_per_mtok` / `cache_write_per_mtok` default to the input price.
+#
+# Example (replace with real values):
+#   anthropic/example-model:
+#     - effective_from: 2026-01-01
+#       input_per_mtok: 0.0
+#       output_per_mtok: 0.0
+#       cache_read_per_mtok: 0.0
+currency: USD
+models: {}

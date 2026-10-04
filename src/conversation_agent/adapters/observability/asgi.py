@@ -13,6 +13,7 @@ import json
 from collections.abc import Awaitable, Callable, MutableMapping
 from typing import Any
 
+from conversation_agent.adapters.llm.metrics import InMemoryLLMMetrics
 from conversation_agent.adapters.observability.prometheus import render
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.health import collect_health
@@ -26,7 +27,9 @@ Send = Callable[[MutableMapping[str, Any]], Awaitable[None]]
 
 
 def ops_app(
-    db: PostgresDatabase, tools: InMemoryToolMetrics | None = None
+    db: PostgresDatabase,
+    tools: InMemoryToolMetrics | None = None,
+    llm: InMemoryLLMMetrics | None = None,
 ) -> Callable[[Scope, Receive, Send], Awaitable[None]]:
     async def respond(send: Send, status: int, body: bytes, content_type: str) -> None:
         await send(
@@ -64,7 +67,7 @@ def ops_app(
                 await json_response(send, 200, {"status": "ready"})
         elif path == "/metrics":
             try:
-                body = render(await collect_health(db), tools).encode()
+                body = render(await collect_health(db), tools, llm).encode()
             except Exception:
                 await json_response(send, 503, {"error": "metrics_unavailable"})
             else:

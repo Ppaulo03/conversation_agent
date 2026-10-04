@@ -83,3 +83,45 @@ groups:
     annotations:
       summary: More than 20 % of outbound tool calls fail for a provider over 10 min.
       runbook: docs/OPERATIONS.md#tool-failures
+  - alert: ConversationAgentLLMErrorRateHigh
+    expr: sum by (provider) (rate(conversation_agent_llm_calls_total{outcome="error"}[10m])) / sum by
+      (provider) (rate(conversation_agent_llm_calls_total[10m])) > 0.1
+    for: 10m
+    labels:
+      severity: critical
+    annotations:
+      summary: More than 10 % of LLM calls fail for a provider over 10 min.
+      runbook: docs/OPERATIONS.md#llm-errors
+  - alert: ConversationAgentLLMLatencyP95High
+    expr: histogram_quantile(0.95, sum by (provider, le) (rate(conversation_agent_llm_call_duration_seconds_bucket[10m])))
+      > 20
+    for: 10m
+    labels:
+      severity: warning
+    annotations:
+      summary: The p95 latency of LLM calls is above 20 s for a provider.
+      runbook: docs/OPERATIONS.md#llm-latency
+  - alert: ConversationAgentLLMCostBurnHigh
+    expr: sum(increase(conversation_agent_llm_cost_usd_total[1h])) > 50
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: Estimated LLM spend is above the hourly ceiling (tune the number to your budget).
+      runbook: docs/OPERATIONS.md#llm-cost
+  - alert: ConversationAgentLLMUnpricedModel
+    expr: sum(increase(conversation_agent_llm_unpriced_calls_total[30m])) > 0
+    for: 5m
+    labels:
+      severity: warning
+    annotations:
+      summary: LLM calls are being made to a model that has no price, so cost reports are incomplete.
+      runbook: docs/OPERATIONS.md#llm-unpriced
+  - alert: ConversationAgentLLMUsageNotRecorded
+    expr: increase(conversation_agent_llm_usage_write_failures_total[10m]) > 0
+    for: 1m
+    labels:
+      severity: critical
+    annotations:
+      summary: LLM usage records could not be written, so the books are missing calls.
+      runbook: docs/OPERATIONS.md#llm-usage-records

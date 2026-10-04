@@ -250,6 +250,126 @@
           "refId": "A"
         }
       ]
+    },
+    {
+      "id": 11,
+      "type": "timeseries",
+      "title": "LLMErrorRateHigh",
+      "description": "More than 10 % of LLM calls fail for a provider over 10 min.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum by (provider) (rate(conversation_agent_llm_calls_total{outcome=\"error\"}[10m])) / sum by (provider) (rate(conversation_agent_llm_calls_total[10m])) > 0.1",
+          "legendFormat": "LLMErrorRateHigh",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 12,
+      "type": "timeseries",
+      "title": "LLMLatencyP95High",
+      "description": "The p95 latency of LLM calls is above 20 s for a provider.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 35
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (provider, le) (rate(conversation_agent_llm_call_duration_seconds_bucket[10m]))) > 20",
+          "legendFormat": "LLMLatencyP95High",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 13,
+      "type": "timeseries",
+      "title": "LLMCostBurnHigh",
+      "description": "Estimated LLM spend is above the hourly ceiling (tune the number to your budget).",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(conversation_agent_llm_cost_usd_total[1h])) > 50",
+          "legendFormat": "LLMCostBurnHigh",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 14,
+      "type": "timeseries",
+      "title": "LLMUnpricedModel",
+      "description": "LLM calls are being made to a model that has no price, so cost reports are incomplete.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 12,
+        "y": 42
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(increase(conversation_agent_llm_unpriced_calls_total[30m])) > 0",
+          "legendFormat": "LLMUnpricedModel",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 15,
+      "type": "timeseries",
+      "title": "LLMUsageNotRecorded",
+      "description": "LLM usage records could not be written, so the books are missing calls.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 49
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short"
+        }
+      },
+      "targets": [
+        {
+          "expr": "increase(conversation_agent_llm_usage_write_failures_total[10m]) > 0",
+          "legendFormat": "LLMUsageNotRecorded",
+          "refId": "A"
+        }
+      ]
     }
   ]
 }

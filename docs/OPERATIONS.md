@@ -58,6 +58,34 @@ Outbound tool calls fail for a provider. Distinguish by `error_code` in
 `conversation_agent_tool_calls_total`: `EXTERNAL_5XX`/`EXTERNAL_TIMEOUT` (their side), `RATE_LIMITED` (our
 per-tenant cap), `MCP_TOOL_SCHEMA_CHANGED` (a server changed a tool: review and re-pin, see *releases*).
 
+### llm-errors
+LLM calls are failing. Split by `error_code` and `provider` in `conversation_agent_llm_calls_total`. A
+provider outage shows as a burst of `LLMProviderError`: turns stay open and are retried from the journal
+(never lost); past `max_turn_attempts` a turn fails permanently with `turn.failed_permanently` in the
+logs. If it is one model, the provider may have retired or renamed it (check the configured model).
+
+### llm-latency
+The p95 of LLM calls is high. Compare by `model` and `purpose`: a slow `agent` purpose points at long
+prompts or the provider; slow `flow_understanding` or `confirmation_decision` calls point at a model
+too heavy for a classification. Turn latency (inbound to reply) grows by the sum of its calls.
+
+### llm-cost
+Spend is above the ceiling you set in `ops/slo.yaml`. Find where: `usage_report` grouped by
+`agent_version` (did a release get more expensive?), by `purpose` (confirmation or extraction calls
+exploding?) and by `model`. Cached-input tokens are cheaper: a sudden drop of `cache_read` tokens means a
+prompt change defeated the cache. A canary that costs more per conversation than stable is a reason to
+roll back (`ReleaseManager.rollback`).
+
+### llm-unpriced
+Calls go to a model with no entry in `ops/llm_prices.yaml`: reported costs are a lower bound. Add the
+model's price (per million tokens) from the provider's price page; history is re-priced on the next
+report, nothing is rewritten.
+
+### llm-usage-records
+The usage ledger (`llm_usage`) rejected writes: calls happened and were not recorded, so cost reports
+are incomplete for that window. Check the database; the answers to customers were NOT affected (a failed
+record never fails a call). Estimate the gap from the provider's own invoice for the same window.
+
 ## Releases
 
 Publishing a version makes it available; a **release** decides who gets it (`ReleaseManager`).

@@ -181,12 +181,21 @@ class OpenAICompatLLM:
         if structured is not None:
             stop = LLMStopReason.END_TURN
         usage = payload.get("usage") or {}
+        cached = int(((usage.get("prompt_tokens_details") or {}).get("cached_tokens")) or 0)
+        reasoning = int(
+            ((usage.get("completion_tokens_details") or {}).get("reasoning_tokens")) or 0
+        )
         return LLMResponse(
             parts=tuple(parts),
             stop_reason=stop,
             usage=LLMUsage(
-                input_tokens=usage.get("prompt_tokens", 0),
-                output_tokens=usage.get("completion_tokens", 0),
+                # OpenAI-style `prompt_tokens` INCLUDES the cached ones: split them out
+                input_tokens=max(int(usage.get("prompt_tokens", 0)) - cached, 0),
+                output_tokens=int(usage.get("completion_tokens", 0)),
+                cache_read_tokens=cached,
+                reasoning_tokens=reasoning,
             ),
             structured=structured,
+            provider="openai_compat",
+            model=payload.get("model") if isinstance(payload.get("model"), str) else None,
         )

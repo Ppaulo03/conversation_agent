@@ -67,6 +67,9 @@ src = [
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = ["E501"]  # data tables and SQL in tests read better unwrapped
+
 [tool.mypy]
 python_version = "3.12"
 strict = true

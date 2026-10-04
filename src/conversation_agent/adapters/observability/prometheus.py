@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+from conversation_agent.adapters.llm.metrics import InMemoryLLMMetrics
 from conversation_agent.adapters.postgres.health import HealthSnapshot
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 
@@ -68,6 +69,22 @@ TOOL_COUNTER = "tool_calls_total"
 TOOL_DURATION = "tool_call_duration_seconds"
 CIRCUIT_COUNTER = "circuit_transitions_total"
 COUNTERS = {TOOL_COUNTER, f"{TOOL_DURATION}_count", f"{TOOL_DURATION}_sum", CIRCUIT_COUNTER}
+LLM_CALLS = "llm_calls_total"
+LLM_TOKENS = "llm_tokens_total"
+LLM_COST = "llm_cost_usd_total"
+LLM_UNPRICED = "llm_unpriced_calls_total"
+LLM_DURATION = "llm_call_duration_seconds"
+LLM_WRITE_FAILURES = "llm_usage_write_failures_total"
+LLM_METRICS = {
+    LLM_CALLS,
+    LLM_TOKENS,
+    LLM_COST,
+    LLM_UNPRICED,
+    f"{LLM_DURATION}_bucket",
+    f"{LLM_DURATION}_sum",
+    f"{LLM_DURATION}_count",
+    LLM_WRITE_FAILURES,
+}
 
 
 def _label(value: object) -> str:
@@ -82,10 +99,64 @@ def available_metrics() -> set[str]:
     """Every metric name the exporter can emit (full names, no suffix games)."""
     names = {PREFIX + g for g in GAUGES}
     names |= {PREFIX + c for c in COUNTERS} | {PREFIX + f"{TOOL_DURATION}_max"}
+    names |= {PREFIX + m for m in LLM_METRICS}
     return names
 
 
-def render(snapshot: HealthSnapshot, tools: InMemoryToolMetrics | None = None) -> str:
+def _render_llm(llm: InMemoryLLMMetrics) -> list[str]:
+    lines = [
+        f"# HELP {PREFIX}{LLM_CALLS} LLM calls by outcome.",
+        f"# TYPE {PREFIX}{LLM_CALLS} counter",
+    ]
+    for (provider, model, purpose, outcome, code), count in sorted(llm.calls.items()):
+        labels = _labels(
+            provider=provider, model=model, purpose=purpose, outcome=outcome, error_code=code
+        )
+        lines.append(f"{PREFIX}{LLM_CALLS}{labels} {count}")
+    lines += [
+        f"# HELP {PREFIX}{LLM_TOKENS} LLM tokens by kind (input, output, cache_read, cache_write).",
+        f"# TYPE {PREFIX}{LLM_TOKENS} counter",
+    ]
+    for (provider, model, purpose, kind), amount in sorted(llm.tokens.items()):
+        labels = _labels(provider=provider, model=model, purpose=purpose, kind=kind)
+        lines.append(f"{PREFIX}{LLM_TOKENS}{labels} {amount}")
+    lines += [
+        f"# HELP {PREFIX}{LLM_COST} Estimated LLM cost in USD (priced calls only).",
+        f"# TYPE {PREFIX}{LLM_COST} counter",
+    ]
+    for (provider, model, purpose), cost in sorted(llm.cost_usd.items()):
+        labels = _labels(provider=provider, model=model, purpose=purpose)
+        lines.append(f"{PREFIX}{LLM_COST}{labels} {cost:.8f}")
+    lines += [
+        f"# HELP {PREFIX}{LLM_UNPRICED} LLM calls whose model has no price (cost unknown).",
+        f"# TYPE {PREFIX}{LLM_UNPRICED} counter",
+    ]
+    for (provider, model), count in sorted(llm.unpriced.items()):
+        lines.append(f"{PREFIX}{LLM_UNPRICED}{_labels(provider=provider, model=model)} {count}")
+    lines += [
+        f"# HELP {PREFIX}{LLM_DURATION} LLM call duration.",
+        f"# TYPE {PREFIX}{LLM_DURATION} histogram",
+    ]
+    for (provider, model, purpose), hist in sorted(llm.latency.items()):
+        base = {"provider": provider, "model": model, "purpose": purpose}
+        for bound, count in zip((*hist.buckets, float("inf")), hist.counts, strict=True):
+            le = "+Inf" if bound == float("inf") else f"{bound:g}"
+            lines.append(f"{PREFIX}{LLM_DURATION}_bucket{_labels(**base, le=le)} {count}")
+        lines.append(f"{PREFIX}{LLM_DURATION}_sum{_labels(**base)} {hist.total:g}")
+        lines.append(f"{PREFIX}{LLM_DURATION}_count{_labels(**base)} {hist.count}")
+    lines += [
+        f"# HELP {PREFIX}{LLM_WRITE_FAILURES} Usage records that could not be written.",
+        f"# TYPE {PREFIX}{LLM_WRITE_FAILURES} counter",
+        f"{PREFIX}{LLM_WRITE_FAILURES} {llm.usage_write_failures}",
+    ]
+    return lines
+
+
+def render(
+    snapshot: HealthSnapshot,
+    tools: InMemoryToolMetrics | None = None,
+    llm: InMemoryLLMMetrics | None = None,
+) -> str:
     lines: list[str] = []
     values = snapshot.as_dict()
     for name, (attribute, help_text) in GAUGES.items():
@@ -128,4 +199,6 @@ def render(snapshot: HealthSnapshot, tools: InMemoryToolMetrics | None = None) -
         for (provider, scope, state), count in sorted(transitions.items()):
             labels = _labels(provider=provider, scope=scope, state=state)
             lines.append(f"{PREFIX}{CIRCUIT_COUNTER}{labels} {count}")
+    if llm is not None:
+        lines += _render_llm(llm)
     return "\n".join(lines) + "\n"
