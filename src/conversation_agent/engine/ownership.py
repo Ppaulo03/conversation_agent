@@ -79,26 +79,21 @@ class OwnershipService:
                         f"{current.value} -> {target.value} is not allowed"
                     )
                 await uow.state.set_ownership(target)
+                if self._audit is not None:  # the trail commits WITH the change, or neither does
+                    await uow.audit.record(self._entry(key, actor, current, target))
                 await uow.commit()
-            await self._record(key, actor, current, target)
             return target
         finally:
             await self._leases.release(lease)
 
-    async def _record(
+    def _entry(
         self, key: ConversationKey, actor: str | None, before: Ownership, after: Ownership
-    ) -> None:
-        """The change is already committed under the conversation lease; the trail is written
-        right after (a failure to write it surfaces loudly, the change is NOT silently undone)."""
-        if self._audit is None:
-            return
-        await self._audit.record(
-            AuditEntry(
-                tenant_id=key.tenant_id,
-                actor=actor or self._owner,
-                action="conversation.ownership",
-                subject_type="conversation",
-                subject_id=subject_ref(key.tenant_id, key.conversation_id),
-                details={"from": before.value, "to": after.value},
-            )
+    ) -> AuditEntry:
+        return AuditEntry(
+            tenant_id=key.tenant_id,
+            actor=actor or self._owner,
+            action="conversation.ownership",
+            subject_type="conversation",
+            subject_id=subject_ref(key.tenant_id, key.conversation_id),
+            details={"from": before.value, "to": after.value},
         )

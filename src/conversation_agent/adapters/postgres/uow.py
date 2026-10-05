@@ -17,6 +17,7 @@ from typing import Any
 
 import asyncpg
 
+from conversation_agent.adapters.postgres.audit import insert_audit
 from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.rows import (
@@ -31,6 +32,7 @@ from conversation_agent.core.models.actions import (
     PendingActionStatus,
     PromptRecord,
 )
+from conversation_agent.core.models.audit import AuditEntry
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
 from conversation_agent.core.models.journal import JournalEntry, JournalStepType
 from conversation_agent.core.models.media import MediaReference
@@ -48,6 +50,7 @@ from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
 from conversation_agent.ports.uow import (
     ActionRepository,
+    AuditRepository,
     ConversationStateRepository,
     InboxRepository,
     InvocationRepository,
@@ -674,6 +677,11 @@ class _OutboxRepo(_Repo):
         return bool(status.endswith(" 1"))  # "INSERT 0 1"
 
 
+class _AuditRepo(_Repo):
+    async def record(self, entry: AuditEntry) -> None:
+        await insert_audit(self._c, entry)  # the unit of work's own connection and transaction
+
+
 class _InboxRepo(_Repo):
     async def consume(self, event_ids: tuple[str, ...]) -> None:
         await self._set_status(event_ids, "CONSUMED")
@@ -711,6 +719,7 @@ class PostgresUnitOfWork:
         self.actions: ActionRepository = _ActionRepo(conn, fence, clock)
         self.outbox: OutboxRepository = _OutboxRepo(conn, fence, clock, coordination_now)
         self.inbox: InboxRepository = _InboxRepo(conn, fence, clock)
+        self.audit: AuditRepository = _AuditRepo(conn, fence, clock)
 
     async def commit(self) -> None:
         await self._tx.commit()

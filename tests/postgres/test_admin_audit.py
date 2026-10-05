@@ -138,3 +138,34 @@ async def test_an_ownership_change_is_audited_without_naming_the_conversation(
     assert (second.actor, second.details) == ("ops-svc", {"from": "HUMAN", "to": "BOT"})
     assert first.subject_id == subject_ref(TENANT, KEY.conversation_id)
     assert KEY.conversation_id not in first.subject_id
+
+
+async def test_an_ownership_change_and_its_trail_commit_together_or_not_at_all(
+    world: World, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conversation_agent.core.models.audit import PseudonymKeyError, configure_pseudonym_key
+
+    await start(world)
+    ops = OwnershipService(world.leases, world.uows, owner="ops", audit=PostgresAuditLog(world.db))
+
+    configure_pseudonym_key(None)  # no key: the reference cannot be written...
+    with pytest.raises(PseudonymKeyError):
+        await ops.assign_human(KEY)
+    assert await world.db.pool.fetchval("SELECT ownership FROM conversation_states") == "BOT"
+    # ...so the change did NOT happen (it used to stay, unaudited)
+
+    configure_pseudonym_key("test-pseudonym-key-0123456789abcdef-test")
+
+    async def broken(conn: object, entry: object) -> None:
+        raise OSError("audit table unavailable")
+
+    monkeypatch.setattr("conversation_agent.adapters.postgres.uow.insert_audit", broken)
+    with pytest.raises(OSError):
+        await ops.assign_human(KEY)
+    assert await world.db.pool.fetchval("SELECT ownership FROM conversation_states") == "BOT"
+    assert await world.count("admin_audit") == 0  # and no half-written trail either
+
+    monkeypatch.undo()
+    await ops.assign_human(KEY)
+    assert await world.db.pool.fetchval("SELECT ownership FROM conversation_states") == "HUMAN"
+    assert await world.count("admin_audit", "action = 'conversation.ownership'") == 1

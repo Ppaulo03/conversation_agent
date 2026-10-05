@@ -33,6 +33,7 @@ from conversation_agent.core.errors import (
     TurnCancelledError,
 )
 from conversation_agent.core.models.actions import PendingAction
+from conversation_agent.core.models.audit import AuditEntry, subject_ref
 from conversation_agent.core.models.conversation import (
     ConversationMessage,
     ConversationState,
@@ -146,6 +147,7 @@ class TurnCoordinator:
         releases: ReleaseResolver | None = None,
         metrics: RuntimeMetrics | None = None,
         scope: str | None = None,
+        audit_ownership: bool = False,
         debounce: timedelta = timedelta(0),
         debounce_max_wait: timedelta = timedelta(seconds=10),
     ) -> None:
@@ -154,6 +156,7 @@ class TurnCoordinator:
         self._debounce = debounce or None  # wait until the contact stops typing (None: no wait)
         self._debounce_max_wait = debounce_max_wait
         self._scope = scope  # only conversations of this scope are claimed (None: all)
+        self._audit_ownership = audit_ownership  # write the bot's own handoffs to the audit trail
         self._metrics = metrics
         if (registry is None) != (versioned_engine_factory is None) or (
             registry is not None and agent_id is None
@@ -412,6 +415,19 @@ class TurnCoordinator:
             await self._persist_reply(uow, opened, outcome, engine.agent.split_replies)
             if outcome.handoff_requested:  # the reply and the ownership change are ONE decision
                 await uow.state.set_ownership(Ownership.HANDOFF_PENDING)
+                if self._audit_ownership:  # same transaction as the reply and the change
+                    await uow.audit.record(
+                        AuditEntry(
+                            tenant_id=opened.identity.tenant_id,
+                            actor="bot",
+                            action="conversation.ownership",
+                            subject_type="conversation",
+                            subject_id=subject_ref(
+                                opened.identity.tenant_id, opened.identity.conversation_id
+                            ),
+                            details={"from": stored.ownership.value, "to": "HANDOFF_PENDING"},
+                        )
+                    )
             await uow.turns.complete(opened.turn_id)
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()

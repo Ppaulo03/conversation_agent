@@ -177,3 +177,47 @@ async def test_a_prompt_already_on_its_way_is_left_alone(
     await operators(db).assign_human(KEY)
     assert await db.pool.fetchval("SELECT status FROM outbox_messages") == "SENDING"
     assert await status_of_action(db) == "INVALIDATED"
+
+
+async def audit_rows(db: PostgresDatabase) -> list[dict[str, object]]:
+    rows = await db.pool.fetch(
+        "SELECT actor, details FROM admin_audit WHERE action = 'conversation.ownership'"
+    )
+    return [dict(r) for r in rows]
+
+
+async def handoff_with(db: PostgresDatabase, api: ApiHandle, **options: object) -> None:
+    out: list[str] = []
+    channel = ConsoleChannel(identity("h"), CLOCK, write=out.append)
+    runtime = Runtime.build(
+        db=db,
+        compiled=with_human_request(),
+        llm=FakeLLM([text_response("x")]),
+        providers={},
+        sender=channel,
+        clock=CLOCK,
+        **options,  # type: ignore[arg-type]
+    )
+    await runtime.receive(channel.inbound("quero falar com um atendente"))
+    await runtime.drain()
+    assert await db.pool.fetchval("SELECT ownership FROM conversation_states") == "HANDOFF_PENDING"
+
+
+async def test_the_bots_own_handoff_is_audited_in_the_same_transaction_when_asked(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    from conversation_agent.core.models.audit import subject_ref
+
+    await handoff_with(db, api, audit_ownership=True)
+    (row,) = await audit_rows(db)
+    assert row["actor"] == "bot"
+    assert row["details"] == {"from": "BOT", "to": "HANDOFF_PENDING"}
+    ref = await db.pool.fetchval("SELECT subject_id FROM admin_audit")
+    assert ref == subject_ref("tenant-1", "conv-h") and "conv-h" not in ref
+
+
+async def test_without_the_option_nothing_is_added_to_the_trail(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    await handoff_with(db, api)
+    assert await audit_rows(db) == []

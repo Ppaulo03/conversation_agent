@@ -12,6 +12,7 @@ from conversation_agent.core.models.actions import (
     PendingActionStatus,
     PromptRecord,
 )
+from conversation_agent.core.models.audit import AuditEntry
 from conversation_agent.core.models.conversation import ConversationIdentity, ConversationState
 from conversation_agent.core.models.journal import JournalEntry, JournalStepType
 from conversation_agent.core.models.runtime import (
@@ -118,6 +119,13 @@ class InboxRepository(Protocol):
     async def dead(self, event_ids: tuple[str, ...]) -> None: ...
 
 
+class AuditRepository(Protocol):
+    async def record(self, entry: AuditEntry) -> None:
+        """Writes the entry IN THIS TRANSACTION: it commits or rolls back with the change it
+        describes (an administrative action with no trail does not happen)."""
+        ...
+
+
 class ConversationUnitOfWork(Protocol):
     """One local transaction, valid only while `fence` still owns the conversation (INV-009).
 
@@ -132,6 +140,7 @@ class ConversationUnitOfWork(Protocol):
     actions: ActionRepository
     outbox: OutboxRepository
     inbox: InboxRepository
+    audit: AuditRepository
 
     async def commit(self) -> None: ...
 
