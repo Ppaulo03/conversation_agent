@@ -928,3 +928,7 @@ Um audit externo apontou cinco riscos; os quatro de código foram reproduzidos e
 
 Notas: o valor de path param vindo do LLM já era restrito; o achado 4 era do `path` escrito pelo autor do agente. Os débitos operacionais do audit (STT real, exporter OTel, métricas distribuídas, auditoria de ownership atômica, media fetch com GuardedTransport, orçamento rígido de LLM) seguem listados como débitos conhecidos.
 
+### `lease_ttl` em `Runtime.build` (nota do POC)
+
+`lease_ttl` estava fixo em 30 s e passar `lease_ttl=` dava `TypeError` (o repasse `**coordinator_options` o recebia duas vezes), então a janela de recuperação de um worker morto não era configurável nem em teste. Agora `Runtime.build(lease_ttl=...)` vale para o lease da conversa e para os claims do outbox, dos timers e da reconciliação; o heartbeat segue o TTL (um terço, até 10 s) e o TTL precisa ser maior que o dobro dele (`ValueError` caso contrário, para um lease não expirar no meio de um turno em andamento). Padrão inalterado (30 s / 10 s). Prova: `test_a_dead_workers_conversation_is_recovered_after_the_configured_lease_ttl`, `test_the_lease_ttl_must_leave_room_for_the_heartbeat`.
+

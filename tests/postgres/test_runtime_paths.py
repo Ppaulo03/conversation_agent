@@ -245,3 +245,64 @@ def test_a_delivery_policy_needs_a_sender_that_can_look_a_message_up() -> None:
                 idempotency_retention=timedelta(hours=1), retry_horizon=timedelta(minutes=10)
             ),
         )
+
+
+# --- the recovery window of a dead worker is the deployment's to choose ---
+
+
+async def test_a_dead_workers_conversation_is_recovered_after_the_configured_lease_ttl(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    from datetime import timedelta
+
+    from conversation_agent.adapters.postgres.coordination import CoordinationTime
+    from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
+    from conversation_agent.core.models.runtime import ConversationKey
+
+    clock = SystemClock("America/Sao_Paulo")
+    out: list[str] = []
+    channel = ConsoleChannel(identity("e"), clock, write=out.append)
+    runtime = Runtime.build(
+        db=db,
+        compiled=compiled(),
+        llm=FakeLLM([text_response("Voltei!")]),
+        providers={
+            "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
+        },
+        sender=channel,
+        clock=clock,
+        lease_ttl=timedelta(seconds=3),
+    )
+    # a worker took the conversation and died: its lease is never renewed
+    key = ConversationKey(tenant_id="tenant-1", conversation_id="conv-e")
+    await runtime.receive(channel.inbound("oi"))
+    dead = PostgresLeaseStore(db, clock, CoordinationTime(db))
+    assert await dead.acquire(key, "dead-worker", timedelta(seconds=3)) is not None
+
+    await runtime.coordinator.run_once()
+    assert out == []  # still held: nobody may take it yet
+
+    await asyncio.sleep(3.5)  # the short TTL, not the 30 s default
+    await runtime.drain()
+    assert out == ["bot> Voltei!"]
+
+
+def test_the_lease_ttl_must_leave_room_for_the_heartbeat() -> None:
+    from datetime import timedelta
+
+    def build(**kw: object) -> Runtime:
+        return Runtime.build(
+            db=None,  # type: ignore[arg-type]
+            compiled=compiled(),
+            llm=FakeLLM([]),
+            providers={},
+            sender=SharedChannel(),  # type: ignore[arg-type]
+            **kw,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="more than twice"):
+        build(lease_ttl=timedelta(seconds=5), heartbeat_interval_seconds=3.0)
+    with pytest.raises(ValueError, match="more than twice"):
+        build(lease_ttl=timedelta(seconds=0))
+    build(lease_ttl=timedelta(seconds=3))  # the heartbeat follows the TTL: 1 s
+    build(lease_ttl=timedelta(seconds=30), heartbeat_interval_seconds=10.0)

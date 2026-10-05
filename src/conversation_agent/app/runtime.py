@@ -54,7 +54,7 @@ from conversation_agent.ports.transcriber import Transcriber
 
 log = logging.getLogger("conversation_agent.runtime")
 
-_CLAIM_TTL = timedelta(seconds=30)
+DEFAULT_LEASE_TTL = timedelta(seconds=30)
 
 
 class Runtime:
@@ -96,6 +96,7 @@ class Runtime:
         outbox_retry_horizon: timedelta | None = None,
         delivery_policy: DeliveryPolicy | None = None,
         outbox_poll_after: timedelta = timedelta(seconds=30),
+        lease_ttl: timedelta = DEFAULT_LEASE_TTL,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -104,9 +105,23 @@ class Runtime:
         its own conversations. With a `delivery_policy` (how long the channel remembers an
         idempotency key) and a sender that can `lookup(message)`, sends whose outcome the channel
         did not settle (queued, unknown) are reconciled instead of left hanging, and the policy's
-        retry horizon bounds re-sending. `coordinator_options` go to the TurnCoordinator.
+        retry horizon bounds re-sending. `lease_ttl` is how long a conversation lease and every
+        worker claim lasts without renewal: a worker that dies is recovered after that long (a turn
+        renews its lease every `heartbeat_interval_seconds`, default a third of the TTL up to 10 s,
+        and the TTL must be more than twice the heartbeat). `coordinator_options` go to the
+        TurnCoordinator.
         """
         scope = scope or compiled.agent_id
+        heartbeat = float(
+            coordinator_options.pop(
+                "heartbeat_interval_seconds", min(10.0, lease_ttl.total_seconds() / 3)
+            )
+        )
+        if heartbeat <= 0 or lease_ttl.total_seconds() <= 2 * heartbeat:
+            raise ValueError(
+                "lease_ttl must be more than twice heartbeat_interval_seconds, or a lease could "
+                "expire in the middle of a turn that is still running"
+            )
         if delivery_policy is not None and not hasattr(sender, "lookup"):
             raise ValueError("a delivery_policy needs a sender that can look a message up")
         if delivery_policy is not None and outbox_retry_horizon is None:
@@ -176,7 +191,8 @@ class Runtime:
                 clock=clock,
                 coordination=coordination,
                 faults=faults,
-                lease_ttl=_CLAIM_TTL,
+                lease_ttl=lease_ttl,
+                heartbeat_interval_seconds=heartbeat,
                 scope=scope,
                 **coordinator_options,
             ),
@@ -185,7 +201,7 @@ class Runtime:
                 sender,
                 faults,
                 owner=owner,
-                claim_ttl=_CLAIM_TTL,
+                claim_ttl=lease_ttl,
                 retry_horizon=outbox_retry_horizon,
                 coordination=coordination,
                 scope=scope,
@@ -194,7 +210,7 @@ class Runtime:
                 scheduler,
                 {RECONCILE_EVENT: wake, PROACTIVE_EVENT: ProactiveEventHandler(inbox, clock)},
                 owner=owner,
-                claim_ttl=_CLAIM_TTL,
+                claim_ttl=lease_ttl,
             ),
             reconciler=ReconciliationWorker(
                 ledger=ledger,
@@ -214,7 +230,7 @@ class Runtime:
                     coordination,
                     delivery_policy,
                     owner=owner,
-                    claim_ttl=_CLAIM_TTL,
+                    claim_ttl=lease_ttl,
                     poll_after=outbox_poll_after,
                     scope=scope,
                 )
