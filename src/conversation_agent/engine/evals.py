@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Protocol
 
 from conversation_agent.core.definitions.evals import EvalScenario, EvalTurn
 from conversation_agent.core.models.conversation import (
@@ -18,9 +19,16 @@ from conversation_agent.core.models.conversation import (
     ConversationState,
     TurnOutcome,
 )
+from conversation_agent.core.models.media import MediaReference
 from conversation_agent.engine.turn_engine import TurnEngine
 
 _PLACEHOLDER = re.compile(r"\{(\w+)\}")
+
+
+class ScriptedTranscriber(Protocol):
+    """A transcriber that can be told what a voice message says (the harness's own)."""
+
+    def set(self, media_id: str, text: str) -> None: ...
 
 
 @dataclass
@@ -42,6 +50,7 @@ async def run_scenario(
     turn_prefix: str = "eval",
     variables: dict[str, str] | None = None,
     executed: Callable[[], list[str]] = list,
+    transcriber: ScriptedTranscriber | None = None,
 ) -> EvalResult:
     """`variables` fill the `{name}` placeholders only the installing agent can know; `executed`
     returns, in order, the capabilities that have really reached a provider so far."""
@@ -52,8 +61,18 @@ async def run_scenario(
         user = _PLACEHOLDER.sub(lambda m: captured.get(m.group(1), m.group(0)), turn.user)
         where = f"{scenario.name} turn {index}"
         before = len(executed())
+        voice: tuple[MediaReference, ...] = ()
+        if turn.voice is not None:
+            if transcriber is None:
+                result.failures.append(f"{where}: a voice turn needs a transcriber")
+                return result
+            media_id = f"{turn_prefix}-voice-{index}"
+            transcriber.set(media_id, turn.voice)
+            voice = (MediaReference(media_id=media_id, kind="audio", mime_type="audio/ogg"),)
         try:
-            outcome = await engine.process_turn(identity, state, user, f"{turn_prefix}-{index}")
+            outcome = await engine.process_turn(
+                identity, state, user, f"{turn_prefix}-{index}", media=voice
+            )
         except Exception as exc:  # e.g. the scripted model was called when the flow should answer
             result.failures.append(f"{where}: the turn failed: {type(exc).__name__}: {exc}")
             return result

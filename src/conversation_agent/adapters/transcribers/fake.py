@@ -15,6 +15,12 @@ class FakeTranscriber:
         self.calls: list[MediaReference] = []
         self.fail_with: Exception | None = None
 
+    def set(self, media_id: str, text: str) -> None:
+        """What the voice message `media_id` will turn out to say (a scripted transcript)."""
+        if callable(self._answers):
+            raise TypeError("cannot script a transcript on a callable transcriber")
+        self._answers[media_id] = text
+
     async def transcribe(self, media: MediaReference, context: TranscriptionContext) -> Transcript:
         self.calls.append(media)
         if self.fail_with is not None:

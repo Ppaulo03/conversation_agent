@@ -27,6 +27,7 @@ from conversation_agent.adapters.llm.fake import (
 from conversation_agent.adapters.llm.metered import MeteredLLMProvider
 from conversation_agent.adapters.llm.usage_memory import InMemoryLLMUsageStore
 from conversation_agent.adapters.tools.spy import ExecutionSpy
+from conversation_agent.adapters.transcribers.fake import FakeTranscriber
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.evals import EvalSuite, LLMStep
 from conversation_agent.core.models.conversation import ConversationIdentity
@@ -152,8 +153,14 @@ class EvalHarness:
             pipeline = CapabilityPipeline(
                 self._compiled, PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
             )
+            transcriber = FakeTranscriber()  # scripted per voice turn: no audio, no provider
             engine = TurnEngine(
-                self._compiled, llm, pipeline, InMemoryTurnJournal(), FixedClock(self._now)
+                self._compiled,
+                llm,
+                pipeline,
+                InMemoryTurnJournal(),
+                FixedClock(self._now),
+                transcriber=transcriber,
             )
             identity = ConversationIdentity(
                 tenant_id="eval",
@@ -171,6 +178,7 @@ class EvalHarness:
                         turn_prefix=scenario.name,
                         variables=merged,
                         executed=lambda executed=executed: executed,  # type: ignore[misc]
+                        transcriber=transcriber,
                     )
                 )
             purposes = Counter(r.purpose for r in ledger.records)

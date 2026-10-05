@@ -45,7 +45,11 @@ class EvalTurn(_Strict):
     """One user message and what must be true of the turn. `capture` stores a regex match of the
     reply (group 1, else the whole match): `{name}` in a later `user` is replaced by it."""
 
-    user: str
+    user: str = ""
+    # The contact sent a voice message whose transcript is exactly this (scripted: no audio, no
+    # provider). Whether the agent hears it depends on its `transcription` setting, which is the
+    # point: a suite can prove both what the agent does with the words and that `off` ignores them.
+    voice: str | None = None
     llm: tuple[LLMStep, ...] = ()  # scripted model answers this turn consumes, in order
     reply_contains: tuple[str, ...] = ()
     reply_not_contains: tuple[str, ...] = ()
@@ -72,6 +76,8 @@ class EvalTurn(_Strict):
 
     @model_validator(mode="after")
     def _consistent(self) -> EvalTurn:
+        if not self.user and self.voice is None:
+            raise ValueError("a turn needs a `user` message or a `voice` transcript")
         if self.proposes is not None and self.proposes_nothing:
             raise ValueError("a turn cannot both propose and propose nothing")
         if self.executes and self.executes_nothing:
@@ -106,4 +112,11 @@ class EvalSuite(_Strict):
 
     @property
     def digest(self) -> str:
-        return stable_hash(self.model_dump(mode="json"))
+        document = self.model_dump(mode="json")
+        for scenario in document["scenarios"]:
+            for turn in scenario["turns"]:
+                if turn.get("voice") is None:  # only turns that use it carry it: a suite written
+                    turn.pop(
+                        "voice", None
+                    )  # before voice turns keeps the digest it was released with
+        return stable_hash(document)
