@@ -63,6 +63,7 @@ INV-053  um slot de texto livre com `question_check: model` nunca toma como valo
 INV-054  o instante em que uma mensagem fica devida (`available_at` do outbox) é do relógio de coordenação (o do banco), não do relógio da aplicação de quem a gravou: um worker adiantado não atrasa as próprias mensagens.
 INV-055  uma correção de um slot já informado, dita enquanto o Flow espera uma escolha, é aplicada (nunca tratada como digressão): o slot muda, o valor derivado é descartado e as opções são buscadas de novo; um nome contido em outro ("tennis" em "beach tennis") não torna a resposta ambígua, mas duas respostas distintas continuam ambíguas.
 INV-056  o que se diz ao contato depois de uma ação confirmada não contradiz o que aconteceu: com `executed_template` a frase vem dos dados (argumentos e resultado, datas no fuso do agente) sem modelo, e sem ele o modelo recebe a instrução de que a ação JÁ foi executada, com o status real, acima da persona; um campo que falta no resultado nunca produz meia frase.
+INV-057  runtimes que compartilham um banco não tomam o trabalho um do outro: cada conversa pertence a um escopo (fixado no primeiro contato, nunca muda; vem da assinatura do operador, nunca do payload) e um runtime só reivindica os turnos e as mensagens de outbox (envio e reconciliação) das conversas do seu escopo. Sem escopo (worker montado à mão) vê tudo.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -129,6 +130,7 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-054 | `test_a_worker_whose_clock_runs_ahead_does_not_delay_its_own_messages` |
 | INV-055 | `test_correcting_the_service_with_a_name_inside_another_is_still_applied`, `test_a_correction_while_choosing_is_not_routed_as_a_digression`, `test_the_longest_name_wins_but_two_answers_stay_ambiguous` |
 | INV-056 | `test_a_template_reports_the_real_result_with_no_model_call`, `test_without_a_template_the_model_is_told_the_action_was_executed`, `test_the_result_wins_over_the_arguments_and_a_missing_field_gives_no_sentence`, `test_a_template_naming_an_unknown_field_does_not_compile`, `test_only_capabilities_that_set_it_carry_it_in_the_digest` |
+| INV-057 | `test_a_runtime_does_not_take_the_turns_of_another_scope`, `test_a_runtime_does_not_send_the_outbox_messages_of_another_scope`, `test_a_conversation_never_changes_scope`, `test_a_conversation_from_before_scopes_is_adopted_by_the_first_scoped_event`, `test_an_unscoped_worker_still_sees_everything`, `test_the_registration_decides_which_runtime_handles_the_conversation` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

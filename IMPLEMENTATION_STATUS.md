@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (em andamento: itens 5 e 13 feitos). Fases 1–13 em `main`.
+**Fase atual:** 14 — Achados do POC (em andamento: itens 4, 5 e 13 feitos). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -862,4 +862,13 @@ Correção, em duas camadas: (1) `executed_template` opcional por capability: a 
 
 Provas: `tests/postgres/test_executed_reply.py`, `tests/engine/test_executed_template.py`.
 Débitos: o status não-sucesso ainda é contado pelo modelo (com a instrução); template por status (ex.: conflito) e formatação de data nos `summary_template` (item 14) seguem abertos.
+
+### Item 4 — runtimes no mesmo banco roubavam turnos (INV-057)
+
+Causa: `list_ready_conversations` e as claims do outbox não tinham noção de quem era o dono da conversa; um runtime de fundo processava (e enviava) o trabalho de outro agente, com outras ferramentas, e dava 409.
+
+Correção (escolhida pelo usuário: escopo por agente): `conversation_states.scope` (migração 0021; conversas já fixadas a um agente recebem o escopo dele). `Runtime.build(scope=...)`, padrão = `agent_id`; `receive` carimba o escopo no primeiro contato e o webhook o lê da assinatura (`Subscription.scope`). O `TurnCoordinator`, o `OutboxWorker` e o `OutboxReconciler` reivindicam só o escopo deles; a reconciliação de invocações já filtrava por `agent_id`. Uma conversa nunca muda de escopo (conflito de identidade). Worker sem escopo (montado à mão, testes) vê tudo.
+
+Decisão: os timers (`SchedulerWorker`) NÃO têm escopo: o de reconciliação só levanta o backoff e o proativo apenas enfileira um evento na conversa, que o runtime dono processa; consumido por outro runtime é inofensivo.
+Débito: conversas legadas sem escopo ficam invisíveis a runtimes com escopo até o primeiro evento carimbado (documentado no guia).
 
