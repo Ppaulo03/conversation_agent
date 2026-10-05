@@ -19,7 +19,9 @@ class InboxStore(Protocol):
         many were withdrawn; a turn already in flight is not interrupted."""
         ...
 
-    async def list_ready_conversations(self, limit: int = 50) -> list[ConversationKey]:
+    async def list_ready_conversations(
+        self, limit: int = 50, scope: str | None = None
+    ) -> list[ConversationKey]:
         """Candidate selection only: it never changes event ownership. Events are claimed
         later, inside the conversation lease (RUNTIME_PROTOCOL §2)."""
         ...

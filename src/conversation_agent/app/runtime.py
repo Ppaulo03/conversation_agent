@@ -65,7 +65,9 @@ class Runtime:
         reconciler: ReconciliationWorker,
         inbox: PostgresInboxStore,
         owner: str,
+        scope: str | None = None,
     ) -> None:
+        self.scope = scope
         self.coordinator = coordinator
         self.outbox_worker = outbox_worker
         self.scheduler_worker = scheduler_worker
@@ -84,13 +86,18 @@ class Runtime:
         sender: MessageSender,
         clock: Clock | None = None,
         owner: str | None = None,
+        scope: str | None = None,
         policy: PolicyGate | None = None,
         transcriber: Transcriber | None = None,
         outbox_retry_horizon: timedelta | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
-        `coordinator_options` go to the TurnCoordinator (channel_policy, metrics, ...)."""
+        `scope` says which conversations this runtime handles (default: the agent's id): several
+        runtimes can share one database, each claiming only the turns and the outbox messages of
+        its own conversations. `coordinator_options` go to the TurnCoordinator.
+        """
+        scope = scope or compiled.agent_id
         agent = compiled.agent
         clock = clock or SystemClock(agent.timezone)
         owner = owner or f"worker-{uuid.uuid4().hex[:8]}"
@@ -157,6 +164,7 @@ class Runtime:
                 coordination=coordination,
                 faults=faults,
                 lease_ttl=_CLAIM_TTL,
+                scope=scope,
                 **coordinator_options,
             ),
             outbox_worker=OutboxWorker(
@@ -167,6 +175,7 @@ class Runtime:
                 claim_ttl=_CLAIM_TTL,
                 retry_horizon=outbox_retry_horizon,
                 coordination=coordination,
+                scope=scope,
             ),
             scheduler_worker=SchedulerWorker(
                 scheduler,
@@ -184,11 +193,15 @@ class Runtime:
             ),
             inbox=inbox,
             owner=owner,
+            scope=scope,
         )
 
     async def receive(self, event: InboundEvent) -> bool:
-        """Persist an inbound event (the conversation is created on first contact). False when it
-        was already there (a duplicate delivery)."""
+        """Persist an inbound event (the conversation is created on first contact, in this
+        runtime's scope unless the event names one). False when it was already there (a duplicate
+        delivery)."""
+        if event.scope is None and self.scope is not None:
+            event = event.model_copy(update={"scope": self.scope})
         return await self.inbox.insert_if_absent(event)
 
     async def tick(self) -> int:

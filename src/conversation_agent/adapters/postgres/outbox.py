@@ -27,7 +27,7 @@ class PostgresOutboxStore:
         self._max_attempts = max_attempts
 
     async def claim_ready(
-        self, owner: str, limit: int, claim_ttl: timedelta
+        self, owner: str, limit: int, claim_ttl: timedelta, scope: str | None = None
     ) -> list[OutboundMessage]:
         """PENDING-and-due or stale-SENDING rows -> SENDING. A stale SENDING row is a message
         whose sender died mid-flight: it is retried with the *same* payload and idempotency
@@ -36,10 +36,15 @@ class PostgresOutboxStore:
         rows = await self._db.pool.fetch(
             f"""
             WITH picked AS (
-                SELECT tenant_id, outbox_id FROM outbox_messages
-                 WHERE (status = 'PENDING' AND available_at <= $1)
-                    OR (status = 'SENDING' AND claim_expires_at <= $1)
-                 ORDER BY created_at, message_index
+                SELECT o.tenant_id, o.outbox_id FROM outbox_messages o
+                 WHERE ((o.status = 'PENDING' AND o.available_at <= $1)
+                    OR (o.status = 'SENDING' AND o.claim_expires_at <= $1))
+                   AND ($5::text IS NULL OR EXISTS (
+                          SELECT 1 FROM conversation_states c
+                           WHERE c.tenant_id = o.tenant_id
+                             AND c.conversation_id = o.conversation_id
+                             AND c.scope = $5))
+                 ORDER BY o.created_at, o.message_index
                  LIMIT $2 FOR UPDATE SKIP LOCKED
             )
             UPDATE outbox_messages o
@@ -54,6 +59,7 @@ class PostgresOutboxStore:
             limit,
             owner,
             now + claim_ttl,
+            scope,
         )
         return [outbox_from_row(r) for r in rows]
 
@@ -95,17 +101,27 @@ class PostgresOutboxStore:
         )
 
     async def claim_unsettled(
-        self, owner: str, limit: int, claim_ttl: timedelta, poll_after: timedelta
+        self,
+        owner: str,
+        limit: int,
+        claim_ttl: timedelta,
+        poll_after: timedelta,
+        scope: str | None = None,
     ) -> list[OutboundMessage]:
         now = await self._time.now()
         rows = await self._db.pool.fetch(
             f"""
             WITH picked AS (
-                SELECT tenant_id, outbox_id FROM outbox_messages
-                 WHERE (status = 'UNKNOWN' AND available_at <= $1)
-                    OR (status = 'QUEUED' AND updated_at <= $5)
-                    OR (status = 'RECONCILING' AND claim_expires_at <= $1)
-                 ORDER BY updated_at
+                SELECT o.tenant_id, o.outbox_id FROM outbox_messages o
+                 WHERE ((o.status = 'UNKNOWN' AND o.available_at <= $1)
+                    OR (o.status = 'QUEUED' AND o.updated_at <= $5)
+                    OR (o.status = 'RECONCILING' AND o.claim_expires_at <= $1))
+                   AND ($6::text IS NULL OR EXISTS (
+                          SELECT 1 FROM conversation_states c
+                           WHERE c.tenant_id = o.tenant_id
+                             AND c.conversation_id = o.conversation_id
+                             AND c.scope = $6))
+                 ORDER BY o.updated_at
                  LIMIT $2 FOR UPDATE SKIP LOCKED
             )
             UPDATE outbox_messages o
@@ -120,6 +136,7 @@ class PostgresOutboxStore:
             owner,
             now + claim_ttl,
             now - poll_after,
+            scope,
         )
         return [outbox_from_row(r) for r in rows]
 

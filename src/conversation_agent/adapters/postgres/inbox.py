@@ -21,7 +21,7 @@ class PostgresInboxStore:
         UNIQUE(tenant, channel, event_id) constraint, so concurrent redeliveries race safely
         (INV-020)."""
         async with self._db.pool.acquire() as conn, conn.transaction():
-            await ensure_conversation(conn, event.identity, self._clock.now())
+            await ensure_conversation(conn, event.identity, self._clock.now(), event.scope)
             row = await conn.fetchrow(
                 """
                 INSERT INTO inbox_events (tenant_id, channel_id, event_id, conversation_id,
@@ -70,15 +70,20 @@ class PostgresInboxStore:
         )
         return int(status.rsplit(" ", 1)[-1])
 
-    async def list_ready_conversations(self, limit: int = 50) -> list[ConversationKey]:
+    async def list_ready_conversations(
+        self, limit: int = 50, scope: str | None = None
+    ) -> list[ConversationKey]:
         rows = await self._db.pool.fetch(
             """
-            SELECT tenant_id, conversation_id, min(id) AS first_id FROM inbox_events
-             WHERE status IN ('READY', 'CLAIMED')
-             GROUP BY tenant_id, conversation_id
+            SELECT e.tenant_id, e.conversation_id, min(e.id) AS first_id FROM inbox_events e
+              JOIN conversation_states c
+                ON c.tenant_id = e.tenant_id AND c.conversation_id = e.conversation_id
+             WHERE e.status IN ('READY', 'CLAIMED') AND ($2::text IS NULL OR c.scope = $2)
+             GROUP BY e.tenant_id, e.conversation_id
              ORDER BY first_id LIMIT $1
             """,
             limit,
+            scope,
         )
         return [
             ConversationKey(tenant_id=r["tenant_id"], conversation_id=r["conversation_id"])

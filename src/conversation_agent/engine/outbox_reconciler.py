@@ -43,7 +43,9 @@ class OutboxReconciler:
         claim_ttl: timedelta = timedelta(seconds=30),
         retry_after: timedelta = timedelta(seconds=30),
         poll_after: timedelta = timedelta(seconds=30),
+        scope: str | None = None,
     ) -> None:
+        self._scope = scope  # only messages of this scope's conversations are reconciled
         self._outbox = outbox
         self._channel = channel
         self._coordination = coordination
@@ -55,7 +57,7 @@ class OutboxReconciler:
 
     async def run_once(self, limit: int = 20) -> int:
         messages = await self._outbox.claim_unsettled(
-            self._owner, limit, self._claim_ttl, self._poll_after
+            self._owner, limit, self._claim_ttl, self._poll_after, self._scope
         )
         for message in messages:
             await self._reconcile(message)

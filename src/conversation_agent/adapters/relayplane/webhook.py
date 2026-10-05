@@ -248,6 +248,7 @@ class RelayPlaneWebhook:
                 provider_message_id=msg.provider_message_id,
                 media=media,
                 trace_id=current().get("trace_id"),
+                scope=sub.scope,
             )
         )
         return WebhookResponse(200, {"status": "accepted" if created else "duplicate"})

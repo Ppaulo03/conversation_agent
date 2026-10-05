@@ -16,6 +16,7 @@ class Subscription(BaseModel):
     secret_ref: str  # the subscription secret (`whsec_...`), held by the SecretProvider
     relay_tenant_id: str | None = None  # when set, the envelope's tenant must be this one
     instance_ids: tuple[str, ...] = ()  # empty = any instance of that gateway tenant
+    scope: str | None = None  # the runtime that handles conversations opened through it
 
 
 class SubscriptionResolver(Protocol):

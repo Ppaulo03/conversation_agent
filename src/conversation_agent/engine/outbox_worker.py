@@ -35,7 +35,9 @@ class OutboxWorker:
         retry_after: timedelta = timedelta(seconds=5),
         retry_horizon: timedelta | None = None,
         coordination: CoordinationClock | None = None,
+        scope: str | None = None,
     ) -> None:
+        self._scope = scope  # only messages of this scope's conversations are claimed
         if retry_horizon is not None and coordination is None:
             raise ValueError("a retry horizon needs the coordination clock to measure message age")
         self._outbox = outbox
@@ -48,7 +50,7 @@ class OutboxWorker:
         self._coordination = coordination
 
     async def run_once(self, limit: int = 20) -> int:
-        messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl)
+        messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl, self._scope)
         for message in messages:
             with (
                 bind(

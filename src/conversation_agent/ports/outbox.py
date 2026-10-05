@@ -8,7 +8,7 @@ from conversation_agent.core.models.runtime import OutboundMessage, SendResult
 
 class OutboxStore(Protocol):
     async def claim_ready(
-        self, owner: str, limit: int, claim_ttl: timedelta
+        self, owner: str, limit: int, claim_ttl: timedelta, scope: str | None = None
     ) -> list[OutboundMessage]:
         """PENDING (available) or stale-SENDING rows -> SENDING."""
         ...
@@ -18,7 +18,12 @@ class OutboxStore(Protocol):
     ) -> None: ...
 
     async def claim_unsettled(
-        self, owner: str, limit: int, claim_ttl: timedelta, poll_after: timedelta
+        self,
+        owner: str,
+        limit: int,
+        claim_ttl: timedelta,
+        poll_after: timedelta,
+        scope: str | None = None,
     ) -> list[OutboundMessage]:
         """Rows whose outcome the channel has not told us yet -> RECONCILING (claimed): UNKNOWN
         ones that are due, and QUEUED ones that nobody has heard about for `poll_after` (the

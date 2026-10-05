@@ -333,3 +333,13 @@ async def test_the_processing_loop_picks_up_what_the_webhook_stored(world: World
     run = await world.coordinator("w", FakeLLM([text_response("OlÃ¡!")])).run_once()
     assert [r.status for r in run] == ["done"]
     assert await world.count("outbox_messages") == 1
+
+
+async def test_the_registration_decides_which_runtime_handles_the_conversation(
+    world: World,
+) -> None:  # INV-057: the scope comes from the operator's subscription, never from the payload
+    scoped = SUB.model_copy(update={"scope": "quadras"})
+    async with make_client(world, sub=scoped) as client:
+        response = await post(client, world, received(world))
+    assert response.status_code == 200
+    assert await world.db.pool.fetchval("SELECT scope FROM conversation_states") == "quadras"

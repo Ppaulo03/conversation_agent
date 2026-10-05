@@ -88,6 +88,9 @@ class InboundEvent(_Frozen):
     # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
     provider_occurred_at: AwareDatetime | None = None  # comparable with `provider_accepted_at`
     reply_to_provider_message_id: str | None = None
+    # Which runtime handles the conversation this event opens (see `Runtime.scope`); only read
+    # at first contact: a conversation never changes scope.
+    scope: str | None = None
 
     @property
     def identity(self) -> ConversationIdentity:

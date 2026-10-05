@@ -131,7 +131,9 @@ class TurnCoordinator:
         | None = None,
         releases: ReleaseResolver | None = None,
         metrics: RuntimeMetrics | None = None,
+        scope: str | None = None,
     ) -> None:
+        self._scope = scope  # only conversations of this scope are claimed (None: all)
         self._metrics = metrics
         if (registry is None) != (versioned_engine_factory is None) or (
             registry is not None and agent_id is None
@@ -160,7 +162,7 @@ class TurnCoordinator:
     async def run_once(self, limit: int = 50) -> list[ConversationRun]:
         """One polling pass: candidates are chosen without claiming anything; the claim
         happens only after the conversation lease is held."""
-        candidates = await self._inbox.list_ready_conversations(limit)
+        candidates = await self._inbox.list_ready_conversations(limit, self._scope)
         return [await self.process_conversation(key) for key in candidates]
 
     async def process_conversation(self, key: ConversationKey) -> ConversationRun:
