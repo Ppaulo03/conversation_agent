@@ -33,6 +33,10 @@ class CapabilityDefinition(BaseModel):
     # Human-readable one-liner for confirmation prompts, formatted with the (validated) args,
     # e.g. "Book {service_id} at {start_at}". Absent -> a generic summary is generated.
     summary_template: str | None = None
+    # Said to the contact when the confirmed action SUCCEEDED, with no model involved: the words
+    # cannot contradict what happened. `{name}` is an input argument or an output field (the
+    # output wins); datetimes are shown in the agent's timezone. Absent -> the model composes it.
+    executed_template: str | None = None
 
     @field_validator("name")
     @classmethod

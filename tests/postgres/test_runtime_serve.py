@@ -19,6 +19,7 @@ from conversation_agent.adapters.senders.console import ConsoleChannel
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.app.runtime import Runtime
 from conversation_agent.app.serve import Args, converse, parse_args
+from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.ports.clock import Clock
 from support.builders import IDENTITY
 from vertical_slice.definitions import CONNECTION
@@ -40,12 +41,17 @@ def clock() -> Clock:
 
 
 def build(
-    db: PostgresDatabase, clock: Clock, api: ApiHandle, llm: FakeLLM, out: list[str]
+    db: PostgresDatabase,
+    clock: Clock,
+    api: ApiHandle,
+    llm: FakeLLM,
+    out: list[str],
+    compiled: CompiledAgent | None = None,
 ) -> tuple[Runtime, ConsoleChannel]:
     channel = ConsoleChannel(IDENTITY, clock, write=out.append)
     runtime = Runtime.build(
         db=db,
-        compiled=load_compiled_agent(),
+        compiled=compiled or load_compiled_agent(),
         llm=llm,
         providers={
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})

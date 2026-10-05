@@ -36,7 +36,7 @@ from conversation_agent.core.compiler_types import (
 )
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
-from conversation_agent.core.definitions.capability import RISK_ORDER
+from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
 from conversation_agent.core.definitions.flow import (
     AddDays,
     FlowDefinition,
@@ -198,6 +198,21 @@ def _flow_document(flow: FlowDefinition) -> dict[str, Any]:
     return document
 
 
+def _capability_document(c: CapabilityDefinition) -> dict[str, Any]:
+    document: dict[str, Any] = {
+        "name": c.name,
+        "description": c.description,
+        "risk": c.risk,
+        "confirmation_required": c.confirmation_required,
+        "summary_template": c.summary_template,
+        "input": schema_fingerprint(c.input_model),
+        "output": schema_fingerprint(c.output_model),
+    }
+    if c.executed_template is not None:  # only capabilities that set it carry it (digests stable)
+        document["executed_template"] = c.executed_template
+    return document
+
+
 def _confirmation_document(agent: AgentDefinition) -> dict[str, Any]:
     document = agent.confirmation.model_dump(mode="json")
     if document.get("reprompt_unproven") is None:  # only agents that set it carry it: the others
@@ -212,16 +227,7 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "persona": agent.persona,
         "timezone": agent.timezone,
         "capabilities": [
-            {
-                "name": c.name,
-                "description": c.description,
-                "risk": c.risk,
-                "confirmation_required": c.confirmation_required,
-                "summary_template": c.summary_template,
-                "input": schema_fingerprint(c.input_model),
-                "output": schema_fingerprint(c.output_model),
-            }
-            for c in sorted(agent.capabilities, key=lambda c: c.name)
+            _capability_document(c) for c in sorted(agent.capabilities, key=lambda c: c.name)
         ],
         "tools": [
             {
@@ -390,6 +396,7 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
         found += _check_result_map(agent, tool)
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
+        found += _check_executed(cap)
     found += _check_flow_inputs(agent)
     return found
 
@@ -486,6 +493,19 @@ def _check_summary(name: str, template: str | None, model: type[BaseModel]) -> l
     unknown = sorted(set(re.findall(r"{(\w+)}", template)) - set(model.model_fields))
     return [
         Diagnostic("SUMMARY_UNKNOWN_FIELD", f"capabilities.{name}.summary_template", f"{{{u}}}")
+        for u in unknown
+    ]
+
+
+def _check_executed(cap: CapabilityDefinition) -> list[Diagnostic]:
+    if not cap.executed_template:
+        return []
+    known = set(cap.input_model.model_fields) | set(cap.output_model.model_fields)
+    unknown = sorted(set(re.findall(r"{(\w+)}", cap.executed_template)) - known)
+    return [
+        Diagnostic(
+            "EXECUTED_UNKNOWN_FIELD", f"capabilities.{cap.name}.executed_template", f"{{{u}}}"
+        )
         for u in unknown
     ]
 

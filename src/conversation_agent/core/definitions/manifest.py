@@ -44,6 +44,7 @@ class CapabilityManifest(_Strict):
     risk: Risk = "read"
     confirmation_required: bool = False
     summary_template: str | None = None
+    executed_template: str | None = None
 
 
 class ToolManifest(_Strict):
@@ -128,6 +129,7 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
             risk=c.risk,
             confirmation_required=c.confirmation_required,
             summary_template=c.summary_template,
+            executed_template=c.executed_template,
         )
         for c in manifest.capabilities
     )

@@ -27,6 +27,7 @@ from typing import Any, Literal, Protocol
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.agent import AgentDefinition
+from conversation_agent.core.display import render_executed
 from conversation_agent.core.errors import ConfirmationConflictError
 from conversation_agent.core.models.actions import (
     ActionConfirmation,
@@ -63,6 +64,15 @@ from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.uow import ConversationUnitOfWorkFactory
 
 log = logging.getLogger("conversation_agent.confirmation")
+
+# The persona may talk about proposals ("not effective until confirmed"); at this step the action
+# HAS been confirmed and executed, and the model must report that outcome, not the persona's habit.
+_REPORT_RULES = (
+    "The confirmed action has just been executed. Its result status is '{status}'. Report exactly "
+    "that outcome from the tool result: if the status is 'success' say it is done, and never say "
+    "it is pending, not yet effective or only proposed, whatever was said earlier. Use only facts "
+    "from the tool result; do not invent identifiers or details."
+)
 
 _CLASSIFIER_SYSTEM = (
     "You classify a user's reply to a confirmation question about ONE pending action. "
@@ -453,6 +463,12 @@ class ConfirmationStage:
         """Tell the user what happened. A real side effect already occurred, so a failure to
         compose must degrade to a deterministic message, never to silence or a failed turn."""
         action = inp.pending
+        resolved = self._agent.resolve(action.capability)
+        template = resolved.capability.executed_template if resolved is not None else None
+        if template and result.status == "success":  # no model: the words cannot contradict it
+            said = render_executed(template, action.request.args, result.data, self._agent.timezone)
+            if said is not None:
+                return said, 0
         call = LLMToolCall(
             id="confirmed_action",
             name=llm_name_for(action.capability),
@@ -473,12 +489,13 @@ class ConfirmationStage:
                 ),
             ),
         ]
+        system = f"{inp.system}\n\n{_REPORT_RULES.format(status=result.status)}"
         fallback = self._agent.confirmation.executed_fallback.format(status=result.status)
         try:
             response = await self._host.llm_step(
                 cursor,
                 inp.turn_id,
-                inp.system,
+                system,
                 messages,
                 tools=inp.tools,
                 purpose="confirmation_reply",
