@@ -46,7 +46,16 @@ from conversation_agent.core.models.runtime import (
 from conversation_agent.core.models.tooling import CapabilityRequest
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
-from conversation_agent.ports.uow import StoredConversation
+from conversation_agent.ports.uow import (
+    ActionRepository,
+    ConversationStateRepository,
+    InboxRepository,
+    InvocationRepository,
+    JournalRepository,
+    OutboxRepository,
+    StoredConversation,
+    TurnRepository,
+)
 
 _JOURNAL_COLUMNS = "turn_id, step_index, step_type, request_hash, logical_step_id, payload"
 
@@ -580,6 +589,18 @@ class _ActionRepo(_Repo):
 
 
 class _OutboxRepo(_Repo):
+    def __init__(
+        self,
+        conn: asyncpg.Connection,
+        fence: FenceToken,
+        clock: Clock,
+        coordination_now: datetime | None = None,
+    ) -> None:
+        super().__init__(conn, fence, clock)
+        # `available_at` is compared with the COORDINATION clock by the outbox worker (INV-032):
+        # a worker whose own clock runs ahead of the database's must not delay its own messages.
+        self._coordination_now = coordination_now
+
     async def supersede(self, outbox_id: str) -> None:
         await self._c.execute(
             "UPDATE outbox_messages SET status='SUPERSEDED', updated_at=$3 "
@@ -591,12 +612,13 @@ class _OutboxRepo(_Repo):
 
     async def add(self, message: OutboundMessage) -> bool:
         now = self._clock.now()
+        available_at = self._coordination_now or now
         status = await self._c.execute(
             """
             INSERT INTO outbox_messages (tenant_id, outbox_id, conversation_id, channel_id,
                 contact_id, turn_id, message_index, action_id, text, idempotency_key, status,
                 available_at, created_at, updated_at, trace_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$11,$11,$11,$12)
+            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$13,$11,$11,$12)
             ON CONFLICT DO NOTHING
             """,
             message.tenant_id,
@@ -611,6 +633,7 @@ class _OutboxRepo(_Repo):
             message.idempotency_key,
             now,
             message.trace_id,
+            available_at,
         )
         return bool(status.endswith(" 1"))  # "INSERT 0 1"
 
@@ -634,17 +657,24 @@ class _InboxRepo(_Repo):
 
 
 class PostgresUnitOfWork:
-    def __init__(self, conn: asyncpg.Connection, tx: Any, fence: FenceToken, clock: Clock) -> None:
+    def __init__(
+        self,
+        conn: asyncpg.Connection,
+        tx: Any,
+        fence: FenceToken,
+        clock: Clock,
+        coordination_now: datetime | None = None,
+    ) -> None:
         self.fence = fence
         self._tx = tx
         self.committed = False
-        self.state = _StateRepo(conn, fence, clock)
-        self.turns = _TurnRepo(conn, fence, clock)
-        self.journal = _JournalRepo(conn, fence, clock)
-        self.invocations = _InvocationRepo(conn, fence, clock)
-        self.actions = _ActionRepo(conn, fence, clock)
-        self.outbox = _OutboxRepo(conn, fence, clock)
-        self.inbox = _InboxRepo(conn, fence, clock)
+        self.state: ConversationStateRepository = _StateRepo(conn, fence, clock)
+        self.turns: TurnRepository = _TurnRepo(conn, fence, clock)
+        self.journal: JournalRepository = _JournalRepo(conn, fence, clock)
+        self.invocations: InvocationRepository = _InvocationRepo(conn, fence, clock)
+        self.actions: ActionRepository = _ActionRepo(conn, fence, clock)
+        self.outbox: OutboxRepository = _OutboxRepo(conn, fence, clock, coordination_now)
+        self.inbox: InboxRepository = _InboxRepo(conn, fence, clock)
 
     async def commit(self) -> None:
         await self._tx.commit()
@@ -664,7 +694,7 @@ class PostgresUnitOfWorkFactory:
         async with self._db.pool.acquire() as conn:
             tx = conn.transaction()
             await tx.start()
-            uow = PostgresUnitOfWork(conn, tx, fence, self._clock)
+            uow = PostgresUnitOfWork(conn, tx, fence, self._clock, await self._time.now(conn))
             try:
                 # Owner + epoch + a lease that has NOT expired. A lease whose TTL elapsed is
                 # stale even if nobody has taken over yet: its holder must stop writing.
