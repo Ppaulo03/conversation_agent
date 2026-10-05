@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 15 — Mídia (15a transcriber implementada; 15b e 15c por vir). Fases 1–14.1 em `main`.
+**Fase atual:** 15 — Mídia (15a transcriber e 15b mídia como argumento implementadas; 15c por vir). Fases 1–14.1 em `main`.
 
 ## Phase 1
 
@@ -975,4 +975,21 @@ Decisões (combinadas com o usuário): provedor é CONFIGURAÇÃO, não código 
 Impacto em quem já usava: os testes que passavam um `FakeTranscriber` precisaram do agente com `transcription="on"` (`build_agent(transcription="on")`). Um agente que antes transcrevia só por ter transcriber agora precisa declarar `transcription: on`.
 
 Débitos: sem adaptador de áudio de saída; o limite de duração (não só bytes) é do provedor; sem conversão de formato embutida (servidor local sem ogg precisa converter); o transcriber de cassette para evals não foi feito (os cenários de áudio usam o `FakeTranscriber`); `serve` (terminal) não tem áudio.
+
+## Phase 15b — Mídia como argumento de tool (INV-068)
+
+Status: **PASS**. Decisão do usuário: o handle vale enquanto a mídia durar na retenção da conversa, com limite de 10 por conversa.
+
+| Peça | Entrega | Prova |
+|---|---|---|
+| Handles | `ConversationState.media` (`MediaArg`: handle, id, tipo, mime, tamanho, checksum, nome) + `media_seq`; `register_media`: só mídia `ready`, redelivery mantém o handle, os 10 mais novos, o número nunca é reaproveitado; só referências (nada de bytes) | `tests/engine/test_media_args.py` |
+| O que o modelo vê | `type: media` nos manifests; o schema para o LLM é uma string-handle (`media_N`), nunca o objeto; o texto da mensagem ganha `[media_N]` só para agentes que têm capability com arquivo | idem |
+| Resolução | `PolicyContext.media` (fato do runtime) -> `resolve_media_args` em `build_capability_request`: handle inexistente, id do canal ou objeto escrito pelo modelo é recusado e nada é proposto | idem |
+| Confirmação | a referência (com checksum) entra nos argumentos: o hash muda com o arquivo, a pergunta mostra o nome | `test_two_different_files_are_two_different_confirmations` |
+| Entrega à tool | HTTP, só no corpo (`MEDIA_NOT_IN_BODY` / `MEDIA_NEEDS_HTTP_BODY` no compilador); `media_content: [campo]` acrescenta `content_base64` buscado na hora do envio, com limite (3/4 do tamanho de requisição da conexão) e checksum, falha antes de enviar nada | `tests/postgres/test_media_args_runtime.py` |
+| Retenção/erasure | os handles moram no estado da conversa: o apagamento do contato os leva | `test_erasing_the_contact_takes_the_handles_with_the_conversation` |
+
+Compatibilidade: campos novos fora do digest quando não usados (`media_content`); `ConversationState` ganhou `media`/`media_seq` (o teste de arquitetura de INV-008 foi atualizado: referências, nunca bytes).
+
+Débitos: um único arquivo por argumento (sem lista); só tools HTTP (MCP não recebe arquivo); o conteúdo vai em base64 no JSON (sem multipart); a retenção de MÍDIA no gateway é do gateway: se o arquivo expirar lá, `media_content` falha antes de enviar e o agente é avisado; o histórico guarda o texto com `[media_N]`.
 

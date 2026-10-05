@@ -180,7 +180,7 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 
 Voice messages are transcribed when the agent says `transcription: on` AND you pass a `Transcriber`
 (`transcriber=` to `Runtime.build`; see *Voice messages*); images, video and documents are named to the
-agent, never described. Tools do not receive media yet.
+agent, never described. A capability can take a file by handle: see *Passing a file to a tool*.
 
 Two flows can never share a trigger phrase at the same priority (the compiler says `FLOW_TRIGGER_TIE`).
 If different phrases both match one message with equal priority and specificity ("cancelar minha
@@ -231,6 +231,53 @@ Cost: every transcription is written to the usage books by the **second of audio
 text), under purpose `transcription`; give the model an `audio_per_minute` price in `ops/llm_prices.yaml`
 or its calls are reported as unpriced. The `Transcriber` port is also the place to plug something else
 entirely (a different provider, an in-house service): implement `transcribe(media, context)`.
+
+## Passing a file to a tool
+
+A capability can take a file the contact sent (a picture of the problem, a receipt) with a field of
+`type: media`. The contact's files get **handles** (`media_1`, `media_2`, ...), the model passes one, and the
+runtime fills in the file's reference. The model never sees or writes ids, checksums or bytes.
+
+```yaml
+capabilities:
+  - name: files.attach
+    risk: irreversible
+    confirmation_required: true
+    summary_template: "Attach {file} to ticket {ticket}"     # {file} reads as the file's name
+    input:
+      ticket: {type: string}
+      file: {type: media, description: The file to attach}
+tools:
+  - name: tickets_attach
+    provider: http
+    http:
+      method: POST
+      path: /tickets/{ticket}/files
+      body: [file]                 # a file argument must be a body field
+      media_content: [file]        # optional: ALSO send the bytes (base64) ...
+    input: {ticket: {type: string}, file: {type: media}}
+bindings:
+  - capability: files.attach
+    tool: tickets_attach
+    input_map: {ticket: $.ticket, file: $.file}
+```
+
+What happens: when a message carries files, an agent that has such a capability sees `[image received]
+[media_2]` in the text, so it knows what to pass. The tool receives
+`{"handle", "media_id", "kind", "mime_type", "size_bytes", "sha256", "filename"}`; with `media_content` it also
+gets `content_base64`, fetched at send time (needs `media_fetcher=` on `HTTPToolProvider`, bounded by the
+connection's request size and checked against the file's checksum). Without `media_content` the tool only
+learns who the file is, which is enough for a service that can fetch it from the gateway itself.
+
+Rules worth knowing:
+
+- A handle only works in the conversation it came from. The conversation keeps the **10 newest** files
+  (handles are never reused: a file that ages out cannot be attached any more) and they live and die with the
+  conversation (retention and erasure remove them).
+- The reference, including the checksum, is part of the arguments, so a confirmation covers THAT file.
+- An unknown handle, a channel id, or an object written by the model is refused and nothing is proposed.
+- Only an HTTP tool can take a file, and only in its body (the compiler checks).
+- Agents with no `media` input see media exactly as before (no handles).
 
 ## 7. When something does not work
 

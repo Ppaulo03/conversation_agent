@@ -248,6 +248,8 @@ Do POC de agendamento de quadras (lista consolidada, abertos após a fase 13).
 
 ## Fase 15 — Mídia de ponta a ponta
 
+> 15a (transcriber real) e 15b (mídia como argumento de tool) implementadas; 15c (visão opcional) por vir.
+
 Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
 
 - **Transcriber real:** adapter de provedor (Whisper/Groq ou equivalente) atrás da porta `Transcriber`, com custo no ledger de uso e teto por agente;
