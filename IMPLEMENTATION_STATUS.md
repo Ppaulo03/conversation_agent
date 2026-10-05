@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 13 — Uso real (em andamento: `serve` pronto). Fases 1–12 em `main`.
+**Fase atual:** 13 — Uso real (implementada; aguardando revisão/merge). Fases 1–12 em `main`.
 
 ## Phase 1
 
@@ -805,7 +805,7 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 
 ## Phase 13 — Uso real (em andamento)
 
-Status: **parcial**. Pronto: o runtime durável montado em um lugar só (`serve`). Pronto também: wiring genérico no pacote e extras de dependências. Falta (ver ROADMAP): guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
+Status: **PASS** (itens 1–4, 8–11 da lista do POC; 5, 6 e 7 ficam para a fase seguinte). Pronto: o runtime durável montado em um lugar só (`serve`). Pronto também: wiring genérico no pacote e extras de dependências. Falta (ver ROADMAP): guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
 
 | Item | Entrega | Prova |
 |---|---|---|
@@ -830,4 +830,14 @@ Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/Relay
 | `ops check` sem banco | `prometheus.py` só tipa `HealthSnapshot` (TYPE_CHECKING): gerar/validar SLOs roda no CI sem asyncpg | idem |
 
 Decisão: `close_llm` fecha qualquer provider com `aclose` (não precisa mais importar o SDK da Anthropic). O grupo `dev` instala `[all]`.
+
+### Guia de uso e motivo da ambiguidade (Fase 13, passo 3)
+
+| Item | Entrega | Prova |
+|---|---|---|
+| Guia de uso | `docs/GUIDE.md` (inglês, como README/código): manifest -> runtime, o que o canal precisa fornecer (tabela de elegibilidade), diagnóstico de sintomas. README e `docs/README.md` apontam para ele | revisão |
+| Motivo da ambiguidade | `confirmation.reprompt_unproven` (opcional): dito quando o contato disse SIM e o runtime não consegue prová-lo resposta ao prompt (AMBIGUOUS / prompt não aceito); "não entendi" fica para o que não é um sim. O motivo também vai ao log `conversation_agent.confirmation`. Ausente do documento (digest) quando não usado; exemplos o usam | `test_a_yes_the_runtime_cannot_tie_to_the_prompt_is_told_why`, `test_a_message_that_is_not_a_yes_still_gets_the_plain_reprompt`, `tests/engine/test_unproven_reprompt.py` |
+
+Decisão: a elegibilidade continua exatamente como era (INV-022/013); só a RESPOSTA ao contato mudou, e é opt-in porque o texto é do idioma do agente.
+Débito: sem métrica (só log) para a taxa de confirmações não provadas por canal.
 

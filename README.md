@@ -1,7 +1,7 @@
 # conversation_agent
 
 Framework for stateful conversational agents. **It owns conversational state, not business
-state.** Architecture lives in [`docs/`](docs/README.md); implementation progress in
+state.** **Start with the [usage guide](docs/GUIDE.md).** Architecture lives in [`docs/`](docs/README.md); implementation progress in
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 ## Install
