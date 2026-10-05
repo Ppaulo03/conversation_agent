@@ -19,7 +19,7 @@ from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Any
 
-from conversation_agent.core.models.audit import subject_ref
+from conversation_agent.core.models.audit import log_ref
 
 FIELDS: frozenset[str] = frozenset(
     {
@@ -45,7 +45,7 @@ _CONTEXT: ContextVar[Mapping[str, Any]] = ContextVar(
 
 def conversation_ref(tenant_id: str, conversation_id: str) -> str:
     """The reference to a conversation used in logs and audit (never the raw id)."""
-    return subject_ref(tenant_id, conversation_id)[:16]
+    return log_ref(tenant_id, conversation_id)[:16]
 
 
 def current() -> dict[str, Any]:

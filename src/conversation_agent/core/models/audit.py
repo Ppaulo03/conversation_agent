@@ -8,12 +8,15 @@ operation that handles personal data cannot leak it into the trail by accident.
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
+import secrets
 from datetime import datetime
 from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
+from conversation_agent.core.errors import ConversationAgentError
 from conversation_agent.core.redaction import redact
 
 Outcome = Literal["ok", "refused", "failed"]
@@ -26,10 +29,54 @@ FORBIDDEN_KEYS = frozenset(
 )
 
 
+MIN_PSEUDONYM_KEY_BYTES = 32
+_PSEUDONYM_KEY: bytes | None = None
+_PROCESS_KEY = secrets.token_bytes(32)  # logs only: correlates inside one process, nothing else
+
+
+class PseudonymKeyError(ConversationAgentError):
+    """No (usable) pseudonymisation key: no reference is generated rather than a weak one."""
+
+
+def configure_pseudonym_key(key: str | bytes | None) -> None:
+    """The secret every pseudonym is derived from (deployment-wide, rotatable). At least 32 bytes of
+    randomness, e.g. `openssl rand -hex 32`. Without it `subject_ref` refuses to run: an unkeyed
+    hash of a phone number or a CPF can be enumerated offline by anyone holding the hash."""
+    global _PSEUDONYM_KEY
+    if key is None:
+        _PSEUDONYM_KEY = None
+        return
+    raw = key.encode() if isinstance(key, str) else key
+    if len(raw) < MIN_PSEUDONYM_KEY_BYTES:
+        raise PseudonymKeyError(
+            f"the pseudonymisation key needs at least {MIN_PSEUDONYM_KEY_BYTES} bytes"
+        )
+    _PSEUDONYM_KEY = raw
+
+
+def _derive(master: bytes, domain: bytes, tenant_id: str, value: str) -> str:
+    tenant_key = hmac.new(master, b"tenant\x00" + tenant_id.encode(), hashlib.sha256).digest()
+    mac = hmac.new(tenant_key, domain + b"\x00" + value.encode(), hashlib.sha256)
+    return mac.hexdigest()[:32]
+
+
 def subject_ref(tenant_id: str, value: str) -> str:
-    """A stable, non-reversible reference to a person-level identifier (a contact): enough to
-    prove an erasure happened for a given contact when asked, without storing the identifier."""
-    return hashlib.sha256(f"{tenant_id}\x00{value}".encode()).hexdigest()[:32]
+    """A stable reference to a person-level identifier (a contact): HMAC-SHA256 under the
+    deployment's key, derived per tenant. The same contact always maps to the same reference (so an
+    erasure can be proven when asked) but, without the key, the reference cannot be tested against
+    guesses of the identifier. Raises `PseudonymKeyError` when no key is configured."""
+    if _PSEUDONYM_KEY is None:
+        raise PseudonymKeyError(
+            "no pseudonymisation key configured (configure_pseudonym_key / PSEUDONYM_KEY)"
+        )
+    return _derive(_PSEUDONYM_KEY, b"subject", tenant_id, value)
+
+
+def log_ref(tenant_id: str, value: str) -> str:
+    """A short correlation reference for LOGS. Keyed like `subject_ref` when a key is configured;
+    otherwise by a random per-process key (it correlates lines within one process and cannot be
+    reversed or compared across processes). Never raises: logging must not depend on the key."""
+    return _derive(_PSEUDONYM_KEY or _PROCESS_KEY, b"log", tenant_id, value)
 
 
 class AuditEntry(BaseModel):

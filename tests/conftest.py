@@ -189,3 +189,13 @@ def agenda(_live_agenda: tuple[LiveServer, object]) -> AgendaHandle:
     state.reservas.clear()
     state.by_key.clear()
     return handle
+
+
+@pytest.fixture(autouse=True)
+def _pseudonym_key() -> Iterator[None]:
+    """Every test runs with a pseudonymisation key (production refuses to run without one)."""
+    from conversation_agent.core.models.audit import configure_pseudonym_key
+
+    configure_pseudonym_key("test-pseudonym-key-0123456789abcdef-test")
+    yield
+    configure_pseudonym_key(None)

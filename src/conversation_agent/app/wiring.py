@@ -16,6 +16,7 @@ from conversation_agent.adapters.manifest.pack_loader import DirectoryPackLoader
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.compiler import CompiledAgent, compile_manifest
+from conversation_agent.core.models.audit import configure_pseudonym_key
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.tool_runner import ToolRunner
@@ -67,3 +68,13 @@ def build_memory_engine(
         InMemoryTurnJournal(),
         clock or SystemClock(agent.timezone),
     )
+
+
+def configure_pseudonyms_from_env(env: Mapping[str, str]) -> bool:
+    """Read `PSEUDONYM_KEY` (>= 32 bytes) for audit and erasure references. False when unset: the
+    code that needs a reference then refuses to produce one."""
+    key = env.get("PSEUDONYM_KEY")
+    if not key:
+        return False
+    configure_pseudonym_key(key)
+    return True

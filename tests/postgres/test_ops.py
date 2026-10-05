@@ -37,7 +37,6 @@ from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 from conversation_agent.app.integrity import main as integrity_cli
 from conversation_agent.app.ops import main as ops_cli
 from conversation_agent.core.models.runtime import ScheduledEvent
-from conversation_agent.engine.ownership import OwnershipService
 from postgres.test_protected_actions import answer, coord, deliver_prompt
 from postgres.world import KEY, World, event
 
@@ -78,10 +77,11 @@ async def test_every_queue_shows_its_backlog_and_how_long_its_oldest_item_has_wa
         "UPDATE inbox_events SET received_at = clock_timestamp() - interval '90 s' "
         "WHERE event_id = 'e-2'"
     )
-    # a handoff waiting for a person
-    await OwnershipService(world.leases, world.uows, owner="ops").request_handoff(KEY)
+    # a handoff waiting for a person (set directly: through the service it would also end the
+    # confirmation above, INV-060, and this test measures each queue on its own)
     await pool.execute(
-        "UPDATE conversation_states SET updated_at = clock_timestamp() - interval '700 s'"
+        "UPDATE conversation_states SET ownership = 'HANDOFF_PENDING', "
+        "updated_at = clock_timestamp() - interval '700 s'"
     )
     # a timer that should have fired
     await world.scheduler.schedule(

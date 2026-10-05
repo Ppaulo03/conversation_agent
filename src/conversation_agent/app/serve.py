@@ -27,7 +27,11 @@ from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.senders.console import ConsoleChannel
 from conversation_agent.app.llm_factory import LLMConfig, build_llm, close_llm
 from conversation_agent.app.runtime import Runtime
-from conversation_agent.app.wiring import load_agent, local_http_provider
+from conversation_agent.app.wiring import (
+    configure_pseudonyms_from_env,
+    load_agent,
+    local_http_provider,
+)
 from conversation_agent.core.compiler import CompileError
 from conversation_agent.core.errors import ConversationAgentError, DefinitionError
 from conversation_agent.core.models.conversation import ConversationIdentity
@@ -165,6 +169,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("DATABASE_URL is not set", file=sys.stderr)
         return 2
     try:
+        configure_pseudonyms_from_env(os.environ)
         llm = build_llm(LLMConfig.from_env(os.environ))
         return asyncio.run(_serve(args, dsn, llm))
     except ConversationAgentError as exc:

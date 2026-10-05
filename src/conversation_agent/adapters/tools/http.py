@@ -140,7 +140,9 @@ class HTTPToolProvider:
             )
         problem = http_path_problem(spec.path)  # the compiler refuses it; a hand-built spec too
         if problem is not None:
-            raise Rejected(configuration_error("INVALID_TOOL_CONFIGURATION", "Tool path not acceptable."))
+            raise Rejected(
+                configuration_error("INVALID_TOOL_CONFIGURATION", "Tool path not acceptable.")
+            )
         try:
             path = _PATH_PARAM.sub(lambda m: self._path_value(args, m.group(1)), spec.path)
         except _IllegalPathValue as exc:
