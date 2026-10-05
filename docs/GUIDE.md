@@ -279,6 +279,10 @@ Rules worth knowing:
 - Only an HTTP tool can take a file, and only in its body (the compiler checks).
 - Agents with no `media` input see media exactly as before (no handles).
 
+**Testing voice in evals.** A suite turn can say `voice: "quero falar com um atendente"`: the harness
+sends a voice message whose transcript is exactly that (no audio, no provider), so a suite proves what the
+agent does with the words AND that an agent with `transcription: off` ignores them.
+
 ## 7. When something does not work
 
 | Symptom | Likely cause |
@@ -296,6 +300,9 @@ Rules worth knowing:
 or `core.models.audit.configure_pseudonym_key`) keys the references written by erasure and ownership
 audit. Without it they refuse to produce one. Rotating it changes every reference from then on: keep the
 old key if you must prove an earlier erasure.
+
+**Auditing ownership.** An operator's `OwnershipService` writes its audit entry in the same transaction as the
+change. To also audit the bot's own handoffs, `Runtime.build(audit_ownership=True)` (needs `PSEUDONYM_KEY`).
 
 ## 8. Operating it
 

@@ -993,3 +993,14 @@ Compatibilidade: campos novos fora do digest quando não usados (`media_content`
 
 Débitos: um único arquivo por argumento (sem lista); só tools HTTP (MCP não recebe arquivo); o conteúdo vai em base64 no JSON (sem multipart); a retenção de MÍDIA no gateway é do gateway: se o arquivo expirar lá, `media_content` falha antes de enviar e o agente é avisado; o histórico guarda o texto com `[media_N]`.
 
+## Débitos conhecidos: o que foi fechado (branch chore/known-debts)
+
+| Débito | Estado |
+|---|---|
+| Auditoria de ownership não atômica | **Fechado (INV-069).** `uow.audit.record` escreve na mesma transação; `OwnershipService` grava a trilha antes do commit (antes: depois, uma falha deixava a mudança sem trilha); o handoff do próprio bot pode ser auditado (`audit_ownership`). |
+| Download de mídia sem a proteção do `GuardedTransport` | **Fechado (INV-070).** DNS fixado, rede privada recusada, TLS exigido, sem redirecionamento, `media_id` como um único segmento. |
+| Transcriber de cassette para evals | **Fechado.** Turnos de eval com `voice:` (transcrição roteirizada); prova o que o agente faz e que `transcription: off` ignora o áudio. O digest de suítes antigas não muda. |
+| `T0` fixo dos testes (2026-10-05) contra o relógio real do banco | **Fechado na prática.** O único teste que misturava os dois (`test_a_conversation_being_processed_cannot_be_erased`) foi corrigido e, como o tempo real só avança, um teste que passa com `T0` no passado continua passando; regra no `AGENTS.local.md`. |
+| Orçamento rígido de LLM pode perder mensagem | **Aberto: decisão de produto** (ver OPERATIONS.md, `llm-budget`). |
+| Exporter OpenTelemetry, métricas agregadas, ensaio de restauração | **Abertos** (operacionais). |
+
