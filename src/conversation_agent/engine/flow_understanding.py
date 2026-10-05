@@ -88,13 +88,25 @@ def phrase_score(text: str, phrases: tuple[str, ...]) -> int:
 
 
 def _enum_value(slot: SlotDefinition, folded: str) -> str | None:
-    matched = {
+    """The one choice the text names. When one term sits inside a longer one that also matched
+    ("tennis" inside "beach tennis"), the longer wins: the shorter was only part of it."""
+    hits: list[tuple[str, int, int]] = []  # (canonical, start, end) of every matched term
+    for canonical, synonyms in slot.choices.items():
+        for term in (canonical, *synonyms):
+            for found in re.finditer(rf"\b{re.escape(fold(term))}\b", folded):
+                hits.append((canonical, found.start(), found.end()))
+    standing = {
         canonical
-        for canonical, synonyms in slot.choices.items()
-        for term in (canonical, *synonyms)
-        if re.search(rf"\b{re.escape(fold(term))}\b", folded)
+        for canonical, start, end in hits
+        if not any(
+            other != canonical
+            and o_start <= start
+            and end <= o_end
+            and (o_end - o_start) > (end - start)
+            for other, o_start, o_end in hits
+        )
     }
-    return next(iter(matched)) if len(matched) == 1 else None  # two different answers: ambiguous
+    return next(iter(standing)) if len(standing) == 1 else None  # two answers: ambiguous
 
 
 def extract_slots(

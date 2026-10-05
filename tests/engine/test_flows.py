@@ -58,6 +58,7 @@ class Chat:
         script: list[Script] | None = None,
         max_depth: int = 3,
         from_manifest: bool = False,
+        flow: FlowDefinition | None = None,
     ) -> None:
         self.strict = script is None
         self.llm = FakeLLM(script or [])  # strict chats fail on ANY model call
@@ -69,6 +70,8 @@ class Chat:
             override = build_agent(flows=True).model_copy(
                 update={"flows": (SCHEDULING_FLOW, PRICES), "max_flow_depth": max_depth}
             )
+        elif flow is not None:
+            override = build_agent(flows=True).model_copy(update={"flows": (flow,)})
         elif from_manifest:
             override = load_compiled_agent().agent
         engine, _, _ = build_engine(
@@ -157,6 +160,44 @@ async def test_correcting_the_service_discards_the_old_choice(api: ApiHandle) ->
     assert chat.flow.slots["service"] == "consultation"
     assert "start_at" not in chat.flow.slots  # the slot picked for the haircut is gone
     assert "Tenho estes horários" in out.reply  # offered again from a fresh search
+
+
+def overlapping_services() -> FlowDefinition:
+    """A service named inside another one's name: "corte" is part of "consulta de corte"."""
+    slots = tuple(
+        slot.model_copy(
+            update={"choices": {"haircut": ("corte",), "consultation": ("consulta de corte",)}}
+        )
+        if slot.name == "service"
+        else slot
+        for slot in SCHEDULING_FLOW.slots
+    )
+    return SCHEDULING_FLOW.model_copy(update={"slots": slots})
+
+
+async def test_correcting_the_service_with_a_name_inside_another_is_still_applied(
+    api: ApiHandle,
+) -> None:  # while a list is shown, "na verdade prefiro beach tennis" must not be a digression
+    chat = Chat(api, flow=overlapping_services())
+    await chat.say("Quero agendar um corte amanhã")  # the list for the haircut is shown
+    old = chat.flow.options["pick"]
+    out = await chat.say("na verdade prefiro uma consulta de corte")  # no model: strict chat
+    assert chat.flow.slots["service"] == "consultation"
+    assert "start_at" not in chat.flow.slots and "Tenho estes horários" in out.reply
+    assert chat.flow.options["pick"] != old or len(api.availability_requests()) == 2
+
+
+async def test_a_correction_while_choosing_is_not_routed_as_a_digression(api: ApiHandle) -> None:
+    # the model, when the rules read nothing, must be told what was already given and that a
+    # change to it is an answer (the prompt carries both)
+    chat = Chat(api, script=[understood("answer", slots={"service": "consulta"})])
+    await chat.say("Quero agendar um corte amanhã")
+    await chat.say("mudei de ideia, prefiro aquele atendimento médico")  # no word the rules know
+    assert chat.flow.slots["service"] == "consultation"
+    asked = chat.llm.requests[0]
+    text = str(asked)
+    assert "Already given: " in text and "service=haircut" in text
+    assert "never a digression" in text
 
 
 async def test_a_time_that_does_not_exist_shows_the_real_options(api: ApiHandle) -> None:
