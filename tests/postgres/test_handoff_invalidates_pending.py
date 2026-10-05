@@ -129,3 +129,51 @@ async def test_an_ended_action_stays_ended_when_the_conversation_returns(
     await ops.assign_human(KEY)
     await ops.return_to_bot(KEY)
     assert await status_of_action(db) == "INVALIDATED"  # once ended it stays ended
+
+
+async def unsent_proposal(
+    db: PostgresDatabase, api: ApiHandle
+) -> tuple[Runtime, ConsoleChannel, list[str]]:
+    """A confirmation prompt that is still waiting in the outbox (no sender ran yet)."""
+    out: list[str] = []
+    channel = ConsoleChannel(identity("h"), CLOCK, write=out.append)
+    runtime = runtime_for(db, api, proposing_llm(), channel, CLOCK, with_human_request())
+    await runtime.receive(channel.inbound("quero terça às 10h"))
+    await runtime.coordinator.run_once()
+    assert await db.pool.fetchval("SELECT status FROM outbox_messages") == "PENDING"
+    return runtime, channel, out
+
+
+async def test_a_confirmation_prompt_not_yet_sent_is_withdrawn_when_a_person_takes_over(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    runtime, _, out = await unsent_proposal(db, api)
+    await operators(db).assign_human(KEY)  # an operator acts before the prompt went out
+
+    assert await status_of_action(db) == "INVALIDATED"
+    assert await db.pool.fetchval("SELECT status FROM outbox_messages") == "SUPERSEDED"
+    assert await runtime.outbox_worker.run_once() == 0 and out == []  # zero sends
+
+
+async def test_the_handoffs_own_message_still_goes_out_while_the_old_prompt_does_not(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    runtime, channel, out = await unsent_proposal(db, api)
+    await runtime.receive(channel.inbound("quero falar com um atendente"))
+    await runtime.coordinator.run_once()
+    await runtime.outbox_worker.run_once()
+
+    assert out == ["bot> Claro, vou chamar um atendente."]  # the prompt for the dead action: never
+    rows = await db.pool.fetch("SELECT text, status FROM outbox_messages")
+    by_start = {r["text"].split(".")[0].split(" ")[0]: r["status"] for r in rows}
+    assert by_start == {"Posso": "SUPERSEDED", "Claro,": "ACCEPTED"}
+
+
+async def test_a_prompt_already_on_its_way_is_left_alone(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:  # only what has not started sending is withdrawn; the invalid action is what protects
+    _ = await unsent_proposal(db, api)
+    await db.pool.execute("UPDATE outbox_messages SET status = 'SENDING'")
+    await operators(db).assign_human(KEY)
+    assert await db.pool.fetchval("SELECT status FROM outbox_messages") == "SENDING"
+    assert await status_of_action(db) == "INVALIDATED"

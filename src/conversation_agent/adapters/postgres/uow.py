@@ -118,13 +118,28 @@ class _StateRepo(_Repo):
             # A person is (or is about to be) in the conversation: what the bot proposed BEFORE
             # that is no longer something a later "yes" may authorise, even if the conversation
             # comes back to the bot before the confirmation would have expired. Same transaction.
-            await self._c.execute(
+            ended = await self._c.fetch(
                 "UPDATE pending_actions SET status='INVALIDATED', updated_at=$3 "
-                "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PENDING_CONFIRMATION'",
+                "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PENDING_CONFIRMATION' "
+                "RETURNING action_id",
                 self._f.tenant_id,
                 self._f.conversation_id,
                 now,
             )
+            if ended:
+                # The question that asked for that confirmation must not go out either: a prompt
+                # still waiting in the outbox would reach a conversation a person already has.
+                # Only rows tied to THOSE actions and not yet being sent; the handoff's own
+                # message ("I am calling someone") has no action and still goes.
+                await self._c.execute(
+                    "UPDATE outbox_messages SET status='SUPERSEDED', updated_at=$4 "
+                    "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PENDING' "
+                    "AND action_id = ANY($3::text[])",
+                    self._f.tenant_id,
+                    self._f.conversation_id,
+                    [r["action_id"] for r in ended],
+                    now,
+                )
 
     async def pin_agent(self, agent_id: str, version: str) -> None:
         await self._c.execute(
