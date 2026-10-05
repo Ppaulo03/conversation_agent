@@ -31,9 +31,11 @@ from conversation_agent.adapters.postgres.outbox import PostgresOutboxStore
 from conversation_agent.adapters.postgres.scheduler import PostgresScheduler
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
 from conversation_agent.core.compiler import CompiledAgent
+from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import FenceToken, InboundEvent
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.confirmation_stage import ConfirmationStage
+from conversation_agent.engine.outbox_reconciler import OutboxReconciler
 from conversation_agent.engine.outbox_worker import OutboxWorker
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.proactive import PROACTIVE_EVENT, ProactiveEventHandler
@@ -66,8 +68,10 @@ class Runtime:
         inbox: PostgresInboxStore,
         owner: str,
         scope: str | None = None,
+        outbox_reconciler: OutboxReconciler | None = None,
     ) -> None:
         self.scope = scope
+        self.outbox_reconciler = outbox_reconciler
         self.coordinator = coordinator
         self.outbox_worker = outbox_worker
         self.scheduler_worker = scheduler_worker
@@ -90,14 +94,23 @@ class Runtime:
         policy: PolicyGate | None = None,
         transcriber: Transcriber | None = None,
         outbox_retry_horizon: timedelta | None = None,
+        delivery_policy: DeliveryPolicy | None = None,
+        outbox_poll_after: timedelta = timedelta(seconds=30),
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
         `scope` says which conversations this runtime handles (default: the agent's id): several
         runtimes can share one database, each claiming only the turns and the outbox messages of
-        its own conversations. `coordinator_options` go to the TurnCoordinator.
+        its own conversations. With a `delivery_policy` (how long the channel remembers an
+        idempotency key) and a sender that can `lookup(message)`, sends whose outcome the channel
+        did not settle (queued, unknown) are reconciled instead of left hanging, and the policy's
+        retry horizon bounds re-sending. `coordinator_options` go to the TurnCoordinator.
         """
         scope = scope or compiled.agent_id
+        if delivery_policy is not None and not hasattr(sender, "lookup"):
+            raise ValueError("a delivery_policy needs a sender that can look a message up")
+        if delivery_policy is not None and outbox_retry_horizon is None:
+            outbox_retry_horizon = delivery_policy.retry_horizon
         agent = compiled.agent
         clock = clock or SystemClock(agent.timezone)
         owner = owner or f"worker-{uuid.uuid4().hex[:8]}"
@@ -194,6 +207,20 @@ class Runtime:
             inbox=inbox,
             owner=owner,
             scope=scope,
+            outbox_reconciler=(
+                OutboxReconciler(
+                    outbox,
+                    sender,  # type: ignore[arg-type]  # checked above: it has `lookup`
+                    coordination,
+                    delivery_policy,
+                    owner=owner,
+                    claim_ttl=_CLAIM_TTL,
+                    poll_after=outbox_poll_after,
+                    scope=scope,
+                )
+                if delivery_policy is not None
+                else None
+            ),
         )
 
     async def receive(self, event: InboundEvent) -> bool:
@@ -214,6 +241,8 @@ class Runtime:
             self.scheduler_worker.run_once,
             self.reconciler.run_once,
         ]
+        if self.outbox_reconciler is not None:
+            stages.append(self.outbox_reconciler.run_once)
         for stage in stages:
             try:
                 result = await stage()

@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (lista do POC concluída). Fases 1–13 em `main`.
+**Fase atual:** 14 — Achados do POC (concluída; aguardando revisão/merge da cobertura). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -891,4 +891,18 @@ Débitos: as opções só entendem um período por vez e usam horas inteiras; o 
 - Campos novos fora do digest quando no valor padrão.
 
 Débitos: `send_contact_id` precisa ser ligado por quem monta o resolver de conexões (não há campo no manifest, de propósito: é decisão do operador). Com `split_replies` as partes do mesmo turno saem em mensagens separadas sem pausa entre elas.
+
+### Fechamento da fase 14 — cobertura que o POC não tinha
+
+Status: **PASS**. Todos os 15 achados da lista consolidada tratados (itens 1–3 e 11 na fase 13; 4–10 e 12–15 aqui).
+
+`tests/postgres/test_runtime_paths.py` exercita o `Runtime` montado:
+- reserva inteira SEM chamada de modelo (Flow propõe, regra lê o "sim", `executed_template` diz o resultado);
+- resposta de escrita perdida recuperada pelo reconciliador do próprio Runtime por LOOKUP: o teste conta os POSTs da API, então um reenvio não se esconde atrás da idempotência dela (lacuna que o POC apontou: a API dele é idempotente e não isolava o `status_lookup`; no framework já era isolado em `test_C05_...` e agora também pelo Runtime);
+- vários runtimes do mesmo escopo respondem cada conversa exatamente uma vez (2 e 3 workers);
+- envio que o canal deixou `QUEUED` é reconciliado por lookup, nunca reenviado.
+
+Achado no caminho: o `Runtime` não montava o `OutboxReconciler`, então um canal com envio assíncrono (RelayPlane) deixaria mensagens `QUEUED`/`UNKNOWN` sem solução. Agora `Runtime.build(delivery_policy=...)` o monta (o sender precisa de `lookup`) e usa o horizonte de reenvio da política.
+
+Cancelamento: já coberto em `tests/postgres/test_cancellation.py` (coordenador); não repliquei no Runtime, que apenas o delega.
 
