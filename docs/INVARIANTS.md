@@ -62,6 +62,7 @@ INV-052  um pedido de atendente humano (agente com `human_request`) é decidido 
 INV-053  um slot de texto livre com `question_check: model` nunca toma como valor uma mensagem com cara de pergunta sem que o modelo (journalado) decida que é a resposta; sem o opt-in o comportamento e o digest do agente são os de sempre.
 INV-054  o instante em que uma mensagem fica devida (`available_at` do outbox) é do relógio de coordenação (o do banco), não do relógio da aplicação de quem a gravou: um worker adiantado não atrasa as próprias mensagens.
 INV-055  uma correção de um slot já informado, dita enquanto o Flow espera uma escolha, é aplicada (nunca tratada como digressão): o slot muda, o valor derivado é descartado e as opções são buscadas de novo; um nome contido em outro ("tennis" em "beach tennis") não torna a resposta ambígua, mas duas respostas distintas continuam ambíguas.
+INV-056  o que se diz ao contato depois de uma ação confirmada não contradiz o que aconteceu: com `executed_template` a frase vem dos dados (argumentos e resultado, datas no fuso do agente) sem modelo, e sem ele o modelo recebe a instrução de que a ação JÁ foi executada, com o status real, acima da persona; um campo que falta no resultado nunca produz meia frase.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -127,6 +128,7 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-053 | `test_a_question_while_the_subject_is_awaited_goes_to_the_model_not_into_the_subject`, `test_a_question_that_really_is_the_subject_is_kept_whole`, `test_a_plain_subject_never_costs_a_model_call`, `test_without_the_opt_in_a_free_text_slot_still_takes_whatever_comes_next`, `test_agents_that_do_not_use_the_new_features_keep_the_digest_they_always_had` |
 | INV-054 | `test_a_worker_whose_clock_runs_ahead_does_not_delay_its_own_messages` |
 | INV-055 | `test_correcting_the_service_with_a_name_inside_another_is_still_applied`, `test_a_correction_while_choosing_is_not_routed_as_a_digression`, `test_the_longest_name_wins_but_two_answers_stay_ambiguous` |
+| INV-056 | `test_a_template_reports_the_real_result_with_no_model_call`, `test_without_a_template_the_model_is_told_the_action_was_executed`, `test_the_result_wins_over_the_arguments_and_a_missing_field_gives_no_sentence`, `test_a_template_naming_an_unknown_field_does_not_compile`, `test_only_capabilities_that_set_it_carry_it_in_the_digest` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

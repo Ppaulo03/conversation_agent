@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (em andamento: item 5 feito). Fases 1–13 em `main`.
+**Fase atual:** 14 — Achados do POC (em andamento: itens 5 e 13 feitos). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -853,4 +853,13 @@ Causa raiz: o slot `sport` tinha `tennis: [tenis, tennis]` e `beach_tennis: [bea
 Correção: (1) o nome mais longo vence quando um está contido no outro; dois nomes distintos seguem ambíguos; (2) a mensagem ao modelo que entende a fala traz os slots já informados e a instrução explícita de que mudar algo já dito é resposta, não digressão. Provas: `tests/engine/test_enum_overlap.py` e dois testes em `tests/engine/test_flows.py`.
 
 Débito: se o modelo ainda classificar uma correção como digressão, a lista antiga volta junto da resposta (duas listas); o remédio de fundo é o rótulo/estado das opções (item 10 da lista).
+
+### Item 13 — resposta pós-execução que contradiz o resultado (INV-056)
+
+Causa: o passo que conta o resultado (`purpose="confirmation_reply"`) reutilizava o prompt de sistema inteiro do agente; uma persona que diz "a proposta ainda não está efetivada" vencia o fato de que a ação acabava de ser executada com sucesso.
+
+Correção, em duas camadas: (1) `executed_template` opcional por capability: a frase vem dos dados (argumentos + campos do resultado, o resultado vence; datas no fuso do agente), sem chamada de modelo; um campo ausente no resultado faz cair no modelo, nunca numa meia frase; o compilador recusa placeholder desconhecido (`EXECUTED_UNKNOWN_FIELD`); fora do digest quando não usado. (2) sem template, o passo recebe a instrução de que a ação JÁ foi executada, com o status real, acima da persona. Parte do item 12 (variação por capability e dados do output) fica resolvida junto; o `executed_fallback` global continua só com `{status}`.
+
+Provas: `tests/postgres/test_executed_reply.py`, `tests/engine/test_executed_template.py`.
+Débitos: o status não-sucesso ainda é contado pelo modelo (com a instrução); template por status (ex.: conflito) e formatação de data nos `summary_template` (item 14) seguem abertos.
 

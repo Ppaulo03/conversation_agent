@@ -132,6 +132,7 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | a step-by-step collection with no LLM in the happy path | `flows:` (triggers, slots, steps) |
 | a free-text slot that must not swallow questions | `question_check: model` on the slot |
 | let the contact ask for a person | `human_request:` (`available: false` if nobody is behind the bot) |
+| the exact words after a confirmed action succeeds (no model) | `executed_template` on the capability, e.g. `"Reserva {booking_id} confirmada para {start_at}."` (arguments and output fields; datetimes in the agent's timezone) |
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
 
