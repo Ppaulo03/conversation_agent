@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 13 — Uso real (implementada; aguardando revisão/merge). Fases 1–12 em `main`.
+**Fase atual:** 14 — Achados do POC (em andamento: item 5 feito). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -840,4 +840,17 @@ Decisão: `close_llm` fecha qualquer provider com `aclose` (não precisa mais im
 
 Decisão: a elegibilidade continua exatamente como era (INV-022/013); só a RESPOSTA ao contato mudou, e é opt-in porque o texto é do idioma do agente.
 Débito: sem métrica (só log) para a taxa de confirmações não provadas por canal.
+
+
+## Phase 14 — Achados do POC (em andamento)
+
+Lista consolidada do POC de agendamento de quadras; ordem e escopo no ROADMAP.
+
+### Item 5 — correção de slot durante o `choose` (INV-055)
+
+Causa raiz: o slot `sport` tinha `tennis: [tenis, tennis]` e `beach_tennis: [beach tennis, ...]`. "prefiro beach tennis" casava com os DOIS (o nome "tennis" está dentro de "beach tennis"), o `_enum_value` concluía ambiguidade e nada era lido pelas regras; o modelo então tratava como digressão, respondia com os horários de beach tennis por conta própria e o Flow reapresentava a lista antiga do tênis.
+
+Correção: (1) o nome mais longo vence quando um está contido no outro; dois nomes distintos seguem ambíguos; (2) a mensagem ao modelo que entende a fala traz os slots já informados e a instrução explícita de que mudar algo já dito é resposta, não digressão. Provas: `tests/engine/test_enum_overlap.py` e dois testes em `tests/engine/test_flows.py`.
+
+Débito: se o modelo ainda classificar uma correção como digressão, a lista antiga volta junto da resposta (duas listas); o remédio de fundo é o rótulo/estado das opções (item 10 da lista).
 

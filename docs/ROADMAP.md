@@ -237,7 +237,16 @@ Achados de um POC que montou o runtime durável a partir de helpers de teste.
 - **docs de uso:** guia do runtime completo, incluindo o requisito de timestamps de canal para confirmação e o motivo da ambiguidade (hoje o contato só vê "não entendi");
 - **depois (fase própria):** `choose` com mais de um campo, fallback de execução com campos do output, testes de caminho sem LLM/cancelamento/multi-worker.
 
-## Fase 14 — Mídia de ponta a ponta
+## Fase 14 — Achados do POC (conversa, templates, multi-agente)
+
+Do POC de agendamento de quadras (lista consolidada, abertos após a fase 13).
+
+- **Corretude:** correção de slot durante o `choose` (feito); resposta pós-execução que contradiz o resultado (modo determinístico ou instrução própria); dois runtimes no mesmo banco roubando turnos (escopo por agente/deployment);
+- **Templates e Flows:** `executed_fallback` com campos do output e por capability; formatação de data/hora no `summary_template`; `choose` com rótulo e mais de um campo e auto-seleção; período do dia ("à noite");
+- **Pequenos:** gatilho de Flow que sequestra perguntas; diagnóstico de empate de gatilhos; separação entre digressão e pergunta do Flow; `contact_id` para a API externa;
+- **Cobertura:** caminho sem LLM, cancelamento, reconciliação de outbox sob falha, multi-worker.
+
+## Fase 15 — Mídia de ponta a ponta
 
 Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
 
