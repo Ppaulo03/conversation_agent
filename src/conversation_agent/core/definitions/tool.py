@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 from conversation_agent.core.definitions.capability import Risk
 from conversation_agent.core.definitions.mapping import MappingSpec
+from conversation_agent.core.http_path import http_path_problem
 
 
 class HTTPRequestSpec(BaseModel):
@@ -26,6 +27,14 @@ class HTTPRequestSpec(BaseModel):
     # Optional tool arguments that are deliberately NOT sent (runtime-only). Anything else the
     # binding can produce must travel in the path, query or body, or it would silently vanish.
     ignored: tuple[str, ...] = ()
+
+    @field_validator("path")
+    @classmethod
+    def _path_stays_under_the_connection(cls, value: str) -> str:
+        problem = http_path_problem(value)
+        if problem is not None:
+            raise ValueError(f"path {value!r} {problem}")
+        return value
 
 
 class MCPToolSpec(BaseModel):

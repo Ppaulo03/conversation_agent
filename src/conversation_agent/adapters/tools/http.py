@@ -32,6 +32,7 @@ from conversation_agent.adapters.tools.guard import (
     validation_error,
 )
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
+from conversation_agent.core.http_path import http_path_problem
 from conversation_agent.core.models.connections import ResolvedConnection
 from conversation_agent.core.models.tooling import ToolContext, ToolResult
 from conversation_agent.ports.connections import ConnectionResolver
@@ -137,6 +138,9 @@ class HTTPToolProvider:
                     "INVALID_TOOL_CONFIGURATION", f"Path parameter(s) not provided: {missing}."
                 )
             )
+        problem = http_path_problem(spec.path)  # the compiler refuses it; a hand-built spec too
+        if problem is not None:
+            raise Rejected(configuration_error("INVALID_TOOL_CONFIGURATION", "Tool path not acceptable."))
         try:
             path = _PATH_PARAM.sub(lambda m: self._path_value(args, m.group(1)), spec.path)
         except _IllegalPathValue as exc:

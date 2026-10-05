@@ -112,7 +112,11 @@ async def test_non_relative_tool_path_is_a_configuration_error_not_a_validation_
 ) -> None:
     """The defect is in the ToolDefinition, not in the caller's arguments."""
     binding = availability_binding()
-    tool = binding.tool.model_copy(update={"http": HTTPRequestSpec(method="GET", path=bad_path)})
+    # the definition refuses these now; a spec built around that check is still stopped here
+    spec = HTTPRequestSpec.model_construct(
+        method="GET", path=bad_path, query=(), body=(), ignored=()
+    )
+    tool = binding.tool.model_copy(update={"http": spec})
     result = await provider_for(api.base_url).execute(
         binding.model_copy(update={"tool": tool}), {}, CONTEXT
     )
