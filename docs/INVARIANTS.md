@@ -70,6 +70,7 @@ INV-060  entrar em HANDOFF_PENDING ou HUMAN (por regra, por Flow ou por um opera
 INV-061  a autorização de reenvio do outbox dada pelo reconciliador tem prazo próprio (`resend_authorized_until` = primeiro envio + janela segura da política) e o sender o confere NO MOMENTO do envio: depois do prazo não há chamada de rede, a mensagem volta a UNKNOWN para a reconciliação decidir.
 INV-062  o `path` estático de uma tool HTTP fica sob o base path da conexão: enraizado, sem host, query, fragmento, segmentos `.`/`..` (nem percent-encoded) ou separadores codificados; a mesma regra vale no compilador/definição e no adapter.
 INV-063  referências a pessoas em auditoria e apagamento (`subject_ref`) são HMAC-SHA256 com chave do deployment (derivada por tenant, >= 32 bytes); sem chave configurada nenhuma referência é produzida (nunca um hash simples); a referência de log nunca depende da chave nem iguala a de auditoria.
+INV-064  mensagens enviadas em pedaços: o turno junta tudo que está pronto (na ordem de entrega); com `debounce` ele só abre depois que a conversa ficou quieta aquele tempo, medido no relógio do BANCO e nunca além de `debounce_max_wait` desde a primeira mensagem à espera; um turno já em andamento nunca é retido pela janela; sem `debounce` o comportamento é o de sempre.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -143,6 +144,7 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-061 | `test_a_resend_authorised_inside_the_window_is_not_sent_after_it_closes`, `test_a_resend_authorised_inside_the_window_and_sent_inside_it_still_goes_out` |
 | INV-062 | `test_a_path_under_the_connection_is_accepted`, `test_a_path_that_could_leave_the_connection_is_refused_by_the_definition`, `test_the_compiler_refuses_it_for_a_manifest_too`, `test_the_adapter_refuses_a_hand_built_spec_without_sending` |
 | INV-063 | `test_the_same_contact_always_gets_the_same_reference_under_one_key`, `test_a_dictionary_attack_on_the_old_unkeyed_hash_finds_nothing`, `test_another_key_gives_another_reference_so_a_rotation_is_visible`, `test_without_a_key_no_reference_is_produced_instead_of_a_weak_one`, `test_a_short_key_is_refused`, `test_logging_never_depends_on_the_key_and_never_equals_the_audit_reference` |
+| INV-064 | `test_a_turn_waits_until_the_contact_has_been_quiet_for_the_debounce`, `test_the_wait_never_exceeds_the_maximum_even_if_the_contact_keeps_typing`, `test_without_a_debounce_a_turn_opens_at_once_as_before`, `test_the_debounce_cannot_be_longer_than_its_maximum`, `test_restart_on_new_message_is_off_by_default_and_can_be_turned_on` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

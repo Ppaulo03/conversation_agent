@@ -100,6 +100,18 @@ twice that, so a slow turn never loses its lease.
 resolve connections with a resolver so destinations are checked (`HTTPToolProvider` with a
 `ConnectionResolver`); MCP servers are served by `MCPToolProvider` (`adapters/tools/mcp.py`).
 
+**Messages sent in pieces.** A turn takes everything that is ready for the conversation, in delivery
+order, joined by line breaks, and answers once. By default it opens as soon as a message is seen, so a
+contact who types in bursts a few seconds apart can get an answer "in the middle". Two opt-ins on
+`Runtime.build`:
+
+| Option | Effect |
+|---|---|
+| `debounce=timedelta(seconds=3)` | the turn opens only after the contact has been quiet that long; each new piece restarts the wait, up to `debounce_max_wait` (default 10 s) since the first waiting piece. It delays EVERY answer by up to the debounce, so keep it short (2 to 4 s for WhatsApp). Measured on the database clock. |
+| `restart_on_new_message=True` | a message arriving while a turn runs asks it to stop at its next safe point and reopen with everything together. Work already paid for (an LLM call) is discarded; if an irreversible effect already happened in that turn, it finishes and the new message gets the next turn. |
+
+Both are off by default (nothing changes for existing deployments); they combine.
+
 ## 5. What your channel must provide
 
 Confirmation is the one place where the channel's evidence matters. The runtime executes a

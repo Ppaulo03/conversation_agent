@@ -146,7 +146,13 @@ class TurnCoordinator:
         releases: ReleaseResolver | None = None,
         metrics: RuntimeMetrics | None = None,
         scope: str | None = None,
+        debounce: timedelta = timedelta(0),
+        debounce_max_wait: timedelta = timedelta(seconds=10),
     ) -> None:
+        if debounce < timedelta(0) or (debounce and debounce_max_wait < debounce):
+            raise ValueError("debounce must be >= 0 and no longer than debounce_max_wait")
+        self._debounce = debounce or None  # wait until the contact stops typing (None: no wait)
+        self._debounce_max_wait = debounce_max_wait
         self._scope = scope  # only conversations of this scope are claimed (None: all)
         self._metrics = metrics
         if (registry is None) != (versioned_engine_factory is None) or (
@@ -176,7 +182,9 @@ class TurnCoordinator:
     async def run_once(self, limit: int = 50) -> list[ConversationRun]:
         """One polling pass: candidates are chosen without claiming anything; the claim
         happens only after the conversation lease is held."""
-        candidates = await self._inbox.list_ready_conversations(limit, self._scope)
+        candidates = await self._inbox.list_ready_conversations(
+            limit, self._scope, self._debounce, self._debounce_max_wait
+        )
         return [await self.process_conversation(key) for key in candidates]
 
     async def process_conversation(self, key: ConversationKey) -> ConversationRun:

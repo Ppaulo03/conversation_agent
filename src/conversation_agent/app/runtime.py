@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import time
 import uuid
 from collections.abc import Awaitable, Callable, Mapping
 from datetime import timedelta
@@ -97,6 +98,9 @@ class Runtime:
         delivery_policy: DeliveryPolicy | None = None,
         outbox_poll_after: timedelta = timedelta(seconds=30),
         lease_ttl: timedelta = DEFAULT_LEASE_TTL,
+        debounce: timedelta = timedelta(0),
+        debounce_max_wait: timedelta = timedelta(seconds=10),
+        restart_on_new_message: bool = False,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -110,6 +114,11 @@ class Runtime:
         renews its lease every `heartbeat_interval_seconds`, default a third of the TTL up to 10 s,
         and the TTL must be more than twice the heartbeat). `coordinator_options` go to the
         TurnCoordinator.
+        Messages sent in pieces: by default a turn opens as soon as a message is seen and takes
+        everything that is ready. `debounce` makes it wait until the contact has been quiet that
+        long (at most `debounce_max_wait` after the first waiting message); `restart_on_new_message`
+        makes a turn in progress stop at its next safe point when more arrives, and reopen with
+        everything together.
         """
         scope = scope or compiled.agent_id
         heartbeat = float(
@@ -131,7 +140,7 @@ class Runtime:
         owner = owner or f"worker-{uuid.uuid4().hex[:8]}"
         coordination = CoordinationTime(db)
         faults = NoFaults()
-        inbox = PostgresInboxStore(db, clock)
+        inbox = PostgresInboxStore(db, clock, restart_on_new_message=restart_on_new_message)
         leases = PostgresLeaseStore(db, clock, coordination)
         uows = PostgresUnitOfWorkFactory(db, clock, coordination)
         ledger = PostgresToolInvocationStore(db, clock, coordination)
@@ -194,6 +203,8 @@ class Runtime:
                 lease_ttl=lease_ttl,
                 heartbeat_interval_seconds=heartbeat,
                 scope=scope,
+                debounce=debounce,
+                debounce_max_wait=debounce_max_wait,
                 **coordinator_options,
             ),
             outbox_worker=OutboxWorker(
@@ -270,12 +281,24 @@ class Runtime:
             done += result if isinstance(result, int) else len(result)  # type: ignore[arg-type]
         return done
 
-    async def drain(self, *, quiet_rounds: int = 2) -> None:
-        """Run rounds until `quiet_rounds` in a row find nothing to do (what a script or a piped
-        session needs before it exits: the replies were produced AND delivered)."""
+    async def drain(
+        self, *, quiet_rounds: int = 2, wait: timedelta = timedelta(seconds=30)
+    ) -> None:
+        """Run rounds until `quiet_rounds` in a row find nothing to do AND no event is left waiting
+        (a debounce window may be holding one): what a script or a piped session needs before it
+        exits. `wait` bounds how long it keeps waiting for such events."""
         quiet = 0
-        while quiet < quiet_rounds:
-            quiet = quiet + 1 if await self.tick() == 0 else 0
+        deadline = time.monotonic() + wait.total_seconds()
+        while True:
+            if await self.tick() > 0:
+                quiet = 0
+                continue
+            quiet += 1
+            if quiet >= quiet_rounds and (
+                await self.inbox.waiting(self.scope) == 0 or time.monotonic() > deadline
+            ):
+                return
+            await asyncio.sleep(0.05)
 
     async def run(self, stop: asyncio.Event, *, poll_interval: float = 0.5) -> None:
         """Poll until `stop` is set; sleeps only when a round found nothing to do."""

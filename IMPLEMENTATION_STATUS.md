@@ -932,3 +932,12 @@ Notas: o valor de path param vindo do LLM já era restrito; o achado 4 era do `p
 
 `lease_ttl` estava fixo em 30 s e passar `lease_ttl=` dava `TypeError` (o repasse `**coordinator_options` o recebia duas vezes), então a janela de recuperação de um worker morto não era configurável nem em teste. Agora `Runtime.build(lease_ttl=...)` vale para o lease da conversa e para os claims do outbox, dos timers e da reconciliação; o heartbeat segue o TTL (um terço, até 10 s) e o TTL precisa ser maior que o dobro dele (`ValueError` caso contrário, para um lease não expirar no meio de um turno em andamento). Padrão inalterado (30 s / 10 s). Prova: `test_a_dead_workers_conversation_is_recovered_after_the_configured_lease_ttl`, `test_the_lease_ttl_must_leave_room_for_the_heartbeat`.
 
+### Mensagens em pedaços: debounce e reinício (opt-in, INV-064)
+
+O turno já agrupava tudo que estava pronto (`\n`, ordem de entrega) e respondia uma vez, mas abria no primeiro ciclo de polling: quem digita em rajadas espaçadas por segundos recebia resposta "no meio". Dois opt-ins em `Runtime.build`:
+- `debounce` (+ `debounce_max_wait`, padrão 10 s): a conversa só abre turno depois de ficar quieta; medido no relógio do banco (`inbox_events.inserted_at`, migração 0023), com teto desde a primeira mensagem à espera; um turno em andamento (CLAIMED) nunca é retido. `TurnCoordinator` e `list_ready_conversations` ganharam os parâmetros; `ValueError` se `debounce > debounce_max_wait`.
+- `restart_on_new_message`: antes só os testes o usavam; agora é exposto (o turno em andamento para na próxima fronteira segura e reabre com tudo).
+- `Runtime.drain` espera uma janela de debounce pendente (conta eventos READY; limite de 30 s) em vez de sair com a conversa ainda segurada.
+
+Padrões inalterados (`debounce=0`, reinício desligado). Custo: o debounce atrasa toda resposta em até N s; o reinício pode descartar chamadas de LLM já pagas.
+

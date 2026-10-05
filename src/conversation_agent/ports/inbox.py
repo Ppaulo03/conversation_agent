@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Protocol
 
 from conversation_agent.core.models.runtime import ConversationKey, InboundEvent
@@ -20,7 +21,11 @@ class InboxStore(Protocol):
         ...
 
     async def list_ready_conversations(
-        self, limit: int = 50, scope: str | None = None
+        self,
+        limit: int = 50,
+        scope: str | None = None,
+        quiet: timedelta | None = None,
+        max_wait: timedelta | None = None,
     ) -> list[ConversationKey]:
         """Candidate selection only: it never changes event ownership. Events are claimed
         later, inside the conversation lease (RUNTIME_PROTOCOL §2)."""

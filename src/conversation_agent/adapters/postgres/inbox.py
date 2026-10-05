@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import timedelta
+
 from conversation_agent.adapters.postgres.conversations import ensure_conversation
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.models.runtime import ConversationKey, InboundEvent
@@ -15,6 +17,19 @@ class PostgresInboxStore:
         # Policy for a message that arrives while a turn is processing: `queue` (default) lets
         # the turn finish; `restart` flags it so the worker stops at the next safe boundary.
         self._restart = restart_on_new_message
+
+    async def waiting(self, scope: str | None = None) -> int:
+        """How many events are waiting for a turn to open (a debounce window may hold them)."""
+        value = await self._db.pool.fetchval(
+            """
+            SELECT count(*) FROM inbox_events e
+              JOIN conversation_states c
+                ON c.tenant_id = e.tenant_id AND c.conversation_id = e.conversation_id
+             WHERE e.status = 'READY' AND ($1::text IS NULL OR c.scope = $1)
+            """,
+            scope,
+        )
+        return int(value or 0)
 
     async def insert_if_absent(self, event: InboundEvent) -> bool:
         """One transaction: the conversation row (first contact) + the event. Dedupe is the
@@ -71,8 +86,16 @@ class PostgresInboxStore:
         return int(status.rsplit(" ", 1)[-1])
 
     async def list_ready_conversations(
-        self, limit: int = 50, scope: str | None = None
+        self,
+        limit: int = 50,
+        scope: str | None = None,
+        quiet: timedelta | None = None,
+        max_wait: timedelta | None = None,
     ) -> list[ConversationKey]:
+        """Conversations with work to do. With `quiet`, a conversation whose newest message is
+        younger than that waits (the contact may still be typing), but never longer than
+        `max_wait` since its OLDEST waiting message; a turn already in progress is never held
+        back. Measured on the database clock."""
         rows = await self._db.pool.fetch(
             """
             SELECT e.tenant_id, e.conversation_id, min(e.id) AS first_id FROM inbox_events e
@@ -80,10 +103,16 @@ class PostgresInboxStore:
                 ON c.tenant_id = e.tenant_id AND c.conversation_id = e.conversation_id
              WHERE e.status IN ('READY', 'CLAIMED') AND ($2::text IS NULL OR c.scope = $2)
              GROUP BY e.tenant_id, e.conversation_id
+            HAVING $3::float8 IS NULL
+                OR bool_or(e.status = 'CLAIMED')
+                OR max(e.inserted_at) <= clock_timestamp() - make_interval(secs => $3)
+                OR min(e.inserted_at) <= clock_timestamp() - make_interval(secs => $4)
              ORDER BY first_id LIMIT $1
             """,
             limit,
             scope,
+            quiet.total_seconds() if quiet else None,
+            (max_wait or quiet or timedelta(0)).total_seconds(),
         )
         return [
             ConversationKey(tenant_id=r["tenant_id"], conversation_id=r["conversation_id"])

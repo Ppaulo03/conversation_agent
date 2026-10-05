@@ -306,3 +306,135 @@ def test_the_lease_ttl_must_leave_room_for_the_heartbeat() -> None:
         build(lease_ttl=timedelta(seconds=0))
     build(lease_ttl=timedelta(seconds=3))  # the heartbeat follows the TTL: 1 s
     build(lease_ttl=timedelta(seconds=30), heartbeat_interval_seconds=10.0)
+
+
+# --- messages sent in pieces ---
+
+
+def with_window(db, api, llm, out, **kw):  # type: ignore[no-untyped-def]
+    clock = SystemClock("America/Sao_Paulo")
+    channel = ConsoleChannel(identity("w"), clock, write=out.append)
+    return (
+        Runtime.build(
+            db=db,
+            compiled=compiled(),
+            llm=llm,
+            providers={
+                "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
+            },
+            sender=channel,
+            clock=clock,
+            **kw,
+        ),
+        channel,
+    )
+
+
+async def test_a_turn_waits_until_the_contact_has_been_quiet_for_the_debounce(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    from datetime import timedelta
+
+    out: list[str] = []
+    llm = FakeLLM([text_response("Entendi tudo.")])
+    runtime, channel = with_window(db, api, llm, out, debounce=timedelta(seconds=1.5))
+
+    await runtime.receive(channel.inbound("quero reservar"))
+    await asyncio.sleep(0.8)
+    await runtime.receive(channel.inbound("futsal"))
+    await asyncio.sleep(0.8)
+    await runtime.receive(
+        channel.inbound("amanhã às 18h")
+    )  # still typing: each piece restarts the wait
+    await runtime.coordinator.run_once()
+    assert out == [] and llm.calls == 0  # nothing yet: 0.0 s since the last piece
+
+    await runtime.drain()  # waits out the window, then ONE turn takes all three pieces
+    assert out == ["bot> Entendi tudo."] and llm.calls == 1
+    seen = str(llm.requests[0].messages)
+    assert "quero reservar" in seen and "futsal" in seen and "amanhã às 18h" in seen
+
+
+async def test_the_wait_never_exceeds_the_maximum_even_if_the_contact_keeps_typing(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    from datetime import timedelta
+
+    out: list[str] = []
+    llm = FakeLLM([text_response("Pronto.")])
+    runtime, channel = with_window(
+        db,
+        api,
+        llm,
+        out,
+        debounce=timedelta(seconds=2),
+        debounce_max_wait=timedelta(seconds=3),  # never more than 3 s since the FIRST piece
+    )
+    await runtime.receive(channel.inbound("um"))  # t = 0
+    await asyncio.sleep(1.0)
+    await runtime.receive(channel.inbound("dois"))  # t = 1: the 2 s window restarts
+    await asyncio.sleep(1.0)
+    await runtime.receive(channel.inbound("tres"))  # t = 2: ...and again (it would end at t = 4)
+    await asyncio.sleep(0.5)
+    await runtime.coordinator.run_once()  # t = 2.5: still inside both the window and the cap
+    assert llm.calls == 0 and out == []
+
+    await asyncio.sleep(0.8)  # t = 3.3: the cap (3 s since the first piece) opens the turn
+    await runtime.coordinator.run_once()
+    await runtime.outbox_worker.run_once()
+    assert out == ["bot> Pronto."] and llm.calls == 1
+
+
+async def test_without_a_debounce_a_turn_opens_at_once_as_before(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    out: list[str] = []
+    runtime, channel = with_window(db, api, FakeLLM([text_response("Oi!")]), out)
+    await runtime.receive(channel.inbound("oi"))
+    await runtime.coordinator.run_once()  # no waiting at all
+    await runtime.outbox_worker.run_once()
+    assert out == ["bot> Oi!"]
+
+
+def test_the_debounce_cannot_be_longer_than_its_maximum() -> None:
+    from datetime import timedelta
+
+    with pytest.raises(ValueError, match="debounce"):
+        Runtime.build(
+            db=None,  # type: ignore[arg-type]
+            compiled=compiled(),
+            llm=FakeLLM([]),
+            providers={},
+            sender=SharedChannel(),  # type: ignore[arg-type]
+            debounce=timedelta(seconds=20),
+            debounce_max_wait=timedelta(seconds=5),
+        )
+
+
+async def test_restart_on_new_message_is_off_by_default_and_can_be_turned_on(
+    db: PostgresDatabase, api: ApiHandle
+) -> None:
+    from datetime import timedelta
+
+    from conversation_agent.adapters.postgres.coordination import CoordinationTime
+    from conversation_agent.adapters.postgres.lease import PostgresLeaseStore
+    from conversation_agent.core.models.runtime import ConversationKey
+
+    key = ConversationKey(tenant_id="tenant-1", conversation_id="conv-w")
+    clock = SystemClock("America/Sao_Paulo")
+    leases = PostgresLeaseStore(db, clock, CoordinationTime(db))
+
+    async def flagged(**kw: object) -> bool:
+        runtime, channel = with_window(db, api, FakeLLM([]), [], **kw)
+        await runtime.receive(channel.inbound("primeira"))  # creates the conversation
+        await db.pool.execute("UPDATE inbox_events SET status = 'CONSUMED'")
+        assert await leases.acquire(key, "busy-worker", timedelta(seconds=30)) is not None
+        await runtime.receive(channel.inbound("segunda"))  # arrives while a turn is "in progress"
+        value = bool(await db.pool.fetchval("SELECT cancel_requested FROM conversation_states"))
+        await db.pool.execute("TRUNCATE conversation_states, inbox_events")
+        return value
+
+    assert await flagged() is False  # queued: the turn in progress finishes first
+    assert (
+        await flagged(restart_on_new_message=True) is True
+    )  # asked to stop at the next safe point
