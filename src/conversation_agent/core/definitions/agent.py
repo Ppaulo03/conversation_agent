@@ -58,6 +58,10 @@ class ConfirmationTexts(BaseModel):
 
     prompt: str = "Please confirm: {summary}. Reply YES to confirm or NO to cancel."
     reprompt: str = "I did not catch that. {summary} - reply YES to confirm or NO to cancel."
+    # Said instead of `reprompt` when the contact DID say yes but the runtime cannot prove it
+    # answers this prompt (no reply-to, clocks too close or unknown, prompt not yet accepted):
+    # the contact is told why, and how to make it count. None: `reprompt` is used.
+    reprompt_unproven: str | None = None
     rejected: str = "Understood, I cancelled that request."
     expired: str = "That request expired. Tell me again what you would like to do."
     gave_up: str = "I could not get a clear confirmation, so I cancelled the request."
@@ -154,6 +158,10 @@ class AgentDefinition(BaseModel):
             check_template(f"media.{label}", getattr(m, label), set())
         check_template("confirmation.prompt", c.prompt, {"summary"}, required=summary)
         check_template("confirmation.reprompt", c.reprompt, {"summary"}, required=summary)
+        if c.reprompt_unproven is not None:
+            check_template(
+                "confirmation.reprompt_unproven", c.reprompt_unproven, {"summary"}, required=summary
+            )
         check_template("confirmation.executed_fallback", c.executed_fallback, {"status"})
         for label in ("rejected", "expired", "gave_up"):
             check_template(f"confirmation.{label}", getattr(c, label), set())

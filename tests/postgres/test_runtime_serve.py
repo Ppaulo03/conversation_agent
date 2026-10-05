@@ -99,7 +99,7 @@ async def test_without_the_message_it_answers_a_yes_is_not_taken_as_a_confirmati
     await runtime.receive(bare)
     await runtime.drain()
     assert api.state.bookings == {}  # no evidence it answers the prompt: nothing runs
-    assert "Não entendi" in out[-1]  # and it asks again (INV-022)
+    assert "responde à minha pergunta" in out[-1]  # it asks again AND says why (INV-022)
 
 
 async def test_the_same_event_delivered_twice_is_one_turn(

@@ -198,6 +198,13 @@ def _flow_document(flow: FlowDefinition) -> dict[str, Any]:
     return document
 
 
+def _confirmation_document(agent: AgentDefinition) -> dict[str, Any]:
+    document = agent.confirmation.model_dump(mode="json")
+    if document.get("reprompt_unproven") is None:  # only agents that set it carry it: the others
+        document.pop("reprompt_unproven", None)  # keep the digest they always had
+    return document
+
+
 def agent_document(agent: AgentDefinition) -> dict[str, Any]:
     """Canonical JSON-able content of an agent, however it was written."""
     document: dict[str, Any] = {
@@ -238,7 +245,7 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "cancelled_after_effect_reply": agent.cancelled_after_effect_reply,
         "max_tokens_per_turn": agent.max_tokens_per_turn,
         "max_flow_depth": agent.max_flow_depth,
-        "confirmation": agent.confirmation.model_dump(mode="json"),
+        "confirmation": _confirmation_document(agent),
         "confirmation_prompt_enabled": agent.confirmation_prompt_enabled,
         "media": agent.media.model_dump(mode="json"),
         "max_media_bytes": agent.max_media_bytes,

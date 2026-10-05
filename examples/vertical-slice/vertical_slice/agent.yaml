@@ -26,6 +26,7 @@ allowed_capabilities: [scheduling.availability, scheduling.create]
 confirmation:
   prompt: "Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar."
   reprompt: "Não entendi. {summary}. Responda SIM para confirmar ou NÃO para cancelar."
+  reprompt_unproven: 'Não consegui confirmar que o seu "sim" responde à minha pergunta. {summary}. Responda SIM ou NÃO respondendo diretamente à mensagem acima.'
   rejected: "Tudo bem, cancelei o pedido."
   expired: "Esse pedido expirou. Me diga de novo o que você gostaria de fazer."
   gave_up: "Não consegui uma confirmação clara, então cancelei o pedido."

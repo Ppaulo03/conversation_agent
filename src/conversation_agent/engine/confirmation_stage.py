@@ -18,6 +18,7 @@ threshold and still needs an eligible prompt.
 
 from __future__ import annotations
 
+import logging
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
@@ -60,6 +61,8 @@ from conversation_agent.engine.prompts import render_result
 from conversation_agent.engine.side_effects import LedgerToolExecutor, new_invocation
 from conversation_agent.ports.faults import FaultInjector
 from conversation_agent.ports.uow import ConversationUnitOfWorkFactory
+
+log = logging.getLogger("conversation_agent.confirmation")
 
 _CLASSIFIER_SYSTEM = (
     "You classify a user's reply to a confirmation question about ONE pending action. "
@@ -209,7 +212,17 @@ class ConfirmationStage:
             if eligibility in (PromptEligibility.BEFORE_PROMPT, PromptEligibility.UNRELATED_REPLY):
                 return StageResult(None, llm_calls=llm_calls)  # not an answer to our prompt
         # unclear, ambiguous time zone, or a prompt that is not (yet) ACCEPTED -> ask again
-        return await self._reprompt(cursor, inp, d, llm_calls)
+        unproven = verdict == "confirm" and eligibility in (
+            PromptEligibility.AMBIGUOUS,
+            PromptEligibility.PROMPT_NOT_ACCEPTED,
+        )
+        if unproven:  # the contact said yes; why it did not count is worth knowing in the logs
+            log.info(
+                "confirmation not provable: eligibility=%s attempts=%d",
+                eligibility.value,
+                action.confirmation_attempts,
+            )
+        return await self._reprompt(cursor, inp, d, llm_calls, unproven=unproven)
 
     # ------------------------------------------------------------------ interpretation
 
@@ -302,7 +315,13 @@ class ConfirmationStage:
         )
 
     async def _reprompt(
-        self, cursor: TurnJournalCursor, inp: StageInput, d: dict[str, Any], llm_calls: int
+        self,
+        cursor: TurnJournalCursor,
+        inp: StageInput,
+        d: dict[str, Any],
+        llm_calls: int,
+        *,
+        unproven: bool = False,
     ) -> StageResult:
         action = inp.pending
         texts = self._agent.confirmation
@@ -327,7 +346,10 @@ class ConfirmationStage:
             payload,
             write,
         )
-        reply = texts.reprompt.format(summary=action.summary)
+        template = (
+            texts.reprompt_unproven if unproven and texts.reprompt_unproven else texts.reprompt
+        )
+        reply = template.format(summary=action.summary)
         return StageResult(reply, reprompt_action_id=action.action_id, llm_calls=llm_calls)
 
     # ------------------------------------------------------------------ confirm + execute

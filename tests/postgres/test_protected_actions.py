@@ -189,7 +189,7 @@ async def test_C13_confirm_while_prompt_ambiguous(
     rows = await world.db.pool.fetch(
         "SELECT outbox_id, status, text FROM outbox_messages ORDER BY created_at, message_index"
     )
-    assert len(rows) == 2 and "Não entendi" in rows[1]["text"]
+    assert len(rows) == 2 and "Não consegui confirmar que o seu" in rows[1]["text"]
     if status == "UNKNOWN":
         assert rows[0]["status"] == "SUPERSEDED"  # the doubtful prompt can no longer authorise
 
@@ -498,3 +498,34 @@ async def test_when_the_llm_dies_after_the_side_effect_the_user_still_gets_a_det
         "SELECT text FROM outbox_messages ORDER BY created_at DESC, message_index DESC LIMIT 1"
     )
     assert last == "Seu pedido foi processado (situação: success)."
+
+
+# --- why a yes did not count (the contact is told, not just "I did not understand") ---
+
+
+async def last_reply(world: World) -> str:
+    return str(
+        await world.db.pool.fetchval(
+            "SELECT text FROM outbox_messages ORDER BY created_at DESC, message_index DESC LIMIT 1"
+        )
+    )
+
+
+async def test_a_yes_the_runtime_cannot_tie_to_the_prompt_is_told_why(
+    world: World, api: ApiHandle
+) -> None:
+    await propose(world, api)
+    await deliver_prompt(world)
+    await answer(world, api, "sim", FakeLLM([]), after_s=1)  # inside the clock tolerance
+    assert posts(api) == [] and (await pending(world))["status"] == "PENDING_CONFIRMATION"
+    reply = await last_reply(world)
+    assert "Não consegui confirmar que o seu" in reply and "Não entendi" not in reply
+
+
+async def test_a_message_that_is_not_a_yes_still_gets_the_plain_reprompt(
+    world: World, api: ApiHandle
+) -> None:
+    await propose(world, api)
+    await deliver_prompt(world)
+    await answer(world, api, "talvez", FakeLLM([structured("unclear", 0.9)]))
+    assert "Não entendi" in await last_reply(world)  # nothing was provable OR said: just unclear
