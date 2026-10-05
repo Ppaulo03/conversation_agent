@@ -259,3 +259,24 @@ def test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention() 
         reconcile_margin=timedelta(minutes=5),
     )
     assert policy.safe_resend_until == timedelta(minutes=55)
+
+
+def test_a_negative_reconcile_margin_cannot_extend_the_idempotency_window() -> None:
+    with pytest.raises(ValidationError, match="reconcile_margin"):
+        DeliveryPolicy(
+            idempotency_retention=timedelta(minutes=10),
+            retry_horizon=timedelta(minutes=10),
+            reconcile_margin=timedelta(minutes=-5),  # used to make 'safe to resend' last 15 min
+        )
+    with pytest.raises(ValidationError, match="reconcile_margin"):
+        DeliveryPolicy(  # a margin as long as the retention leaves no safe window at all
+            idempotency_retention=timedelta(minutes=10),
+            retry_horizon=timedelta(minutes=5),
+            reconcile_margin=timedelta(minutes=10),
+        )
+    ok = DeliveryPolicy(
+        idempotency_retention=timedelta(minutes=10),
+        retry_horizon=timedelta(minutes=5),
+        reconcile_margin=timedelta(0),
+    )
+    assert ok.safe_resend_until == timedelta(minutes=10)  # never beyond the retention

@@ -133,7 +133,13 @@ class Runtime:
             )
         if delivery_policy is not None and not hasattr(sender, "lookup"):
             raise ValueError("a delivery_policy needs a sender that can look a message up")
-        if delivery_policy is not None and outbox_retry_horizon is None:
+        if delivery_policy is not None:
+            # ONE source of truth: the worker's blind-retry horizon is the policy's, never its own
+            if outbox_retry_horizon not in (None, delivery_policy.retry_horizon):
+                raise ValueError(
+                    "outbox_retry_horizon differs from delivery_policy.retry_horizon: with a "
+                    "delivery_policy the retry horizon comes from it (give only the policy)"
+                )
             outbox_retry_horizon = delivery_policy.retry_horizon
         agent = compiled.agent
         clock = clock or SystemClock(agent.timezone)

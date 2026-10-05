@@ -27,6 +27,10 @@ class DeliveryPolicy(BaseModel):
     def _horizon_fits_the_retention(self) -> DeliveryPolicy:
         if self.retry_horizon <= timedelta(0) or self.idempotency_retention <= timedelta(0):
             raise ValueError("retention and retry horizon must be positive")
+        if not timedelta(0) <= self.reconcile_margin < self.idempotency_retention:
+            # a negative margin would push the "safe to resend" instant PAST the moment the channel
+            # forgets the key (retention - (-5 min) = retention + 5 min): a duplicate in waiting
+            raise ValueError("reconcile_margin must be >= 0 and shorter than the retention")
         if self.retry_horizon > self.idempotency_retention:
             raise ValueError(
                 "sender_retry_horizon must be <= relayplane_idempotency_retention: after the "

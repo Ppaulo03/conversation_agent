@@ -438,3 +438,29 @@ async def test_restart_on_new_message_is_off_by_default_and_can_be_turned_on(
     assert (
         await flagged(restart_on_new_message=True) is True
     )  # asked to stop at the next safe point
+
+
+def test_with_a_delivery_policy_the_retry_horizon_has_one_source() -> None:
+    from datetime import timedelta
+
+    from conversation_agent.core.models.delivery import DeliveryPolicy
+
+    policy = DeliveryPolicy(
+        idempotency_retention=timedelta(hours=24), retry_horizon=timedelta(minutes=10)
+    )
+
+    def build(**kw: object) -> Runtime:
+        return Runtime.build(
+            db=None,  # type: ignore[arg-type]
+            compiled=compiled(),
+            llm=FakeLLM([]),
+            providers={},
+            sender=SlowGateway(),  # type: ignore[arg-type]
+            delivery_policy=policy,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError, match="retry horizon comes from it"):
+        build(outbox_retry_horizon=timedelta(hours=48))  # would let the worker retry blind for 48 h
+    build(outbox_retry_horizon=timedelta(minutes=10))  # the same value is harmless
+    build()
