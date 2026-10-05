@@ -60,6 +60,7 @@ INV-050  o gasto de LLM é registrado uma vez por chamada REAL ao provider (um r
 INV-051  um orçamento de LLM só recusa se a política do tenant pedir (`refuse_new`), recusa apenas mensagens NOVAS do usuário e antes de persistir ou reconhecer qualquer coisa; o padrão é alertar.
 INV-052  um pedido de atendente humano (agente com `human_request`) é decidido por regra, antes de qualquer Flow ou modelo: mensagem curta, sem negação; com atendimento disponível a conversa vai a HANDOFF_PENDING na mesma transação da resposta e o bot silencia; sem atendimento disponível (`available: false`) diz a resposta fixa e NÃO muda o dono da conversa.
 INV-053  um slot de texto livre com `question_check: model` nunca toma como valor uma mensagem com cara de pergunta sem que o modelo (journalado) decida que é a resposta; sem o opt-in o comportamento e o digest do agente são os de sempre.
+INV-054  o instante em que uma mensagem fica devida (`available_at` do outbox) é do relógio de coordenação (o do banco), não do relógio da aplicação de quem a gravou: um worker adiantado não atrasa as próprias mensagens.
 ```
 
 O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primeiro Pack só é extraído depois que existir comportamento reutilizável comprovado.
@@ -123,6 +124,7 @@ O primeiro agente real deve ser implementado **sem Pack obrigatório**. O primei
 | INV-051 | `test_only_a_tenant_over_a_refuse_new_budget_is_refused`, `test_the_edge_refuses_a_budget_exceeded_tenant_before_persisting_anything`, `test_only_a_budget_that_asks_for_it_refuses` |
 | INV-052 | `test_asking_for_a_person_hands_the_conversation_over_without_a_model`, `test_asking_for_a_person_hands_over_and_the_bot_stays_quiet`, `test_a_negation_or_a_long_message_is_not_a_request_for_a_person`, `test_an_agent_with_nobody_behind_it_answers_honestly_and_keeps_the_conversation`, `test_an_agent_without_the_block_treats_the_message_like_any_other` |
 | INV-053 | `test_a_question_while_the_subject_is_awaited_goes_to_the_model_not_into_the_subject`, `test_a_question_that_really_is_the_subject_is_kept_whole`, `test_a_plain_subject_never_costs_a_model_call`, `test_without_the_opt_in_a_free_text_slot_still_takes_whatever_comes_next`, `test_agents_that_do_not_use_the_new_features_keep_the_digest_they_always_had` |
+| INV-054 | `test_a_worker_whose_clock_runs_ahead_does_not_delay_its_own_messages` |
 
 Os casos `C01`–`C16` (ponto de falha, resultado esperado e fase em que passam a ser exigidos) estão definidos em [`ROADMAP.md`](./ROADMAP.md#chaos-gates).
 

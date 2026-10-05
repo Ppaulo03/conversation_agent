@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 12 — Lacunas de conversa (implementada; aguardando revisão/merge). Fases 1–11 em `main`.
+**Fase atual:** 13 — Uso real (em andamento: `serve` pronto). Fases 1–12 em `main`.
 
 ## Phase 1
 
@@ -801,3 +801,23 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 - Uma confirmação pendente no momento do handoff não é cancelada: expira pelo TTL (a conversa está com uma pessoa).
 - Quando o modelo roteia uma pergunta como `other`, o fluxo reperguntará o slot (comportamento já existente de "não entendi").
 - `question_check` só existe para slots `text`; não há equivalente para `choose` (opções) nem para pedidos de humano durante uma confirmação.
+
+
+## Phase 13 — Uso real (em andamento)
+
+Status: **parcial**. Pronto: o runtime durável montado em um lugar só (`serve`). Falta (ver ROADMAP): pacote instalável do wiring, extras de dependências, guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
+
+| Item | Entrega | Prova |
+|---|---|---|
+| Composition root do runtime durável | `app/runtime.py`: `Runtime.build(db, compiled, llm, providers, sender, ...)` monta coordinator + ledger executor + confirmação + outbox + timers + reconciliador; `receive`, `tick`, `drain`, `run` | `tests/postgres/test_runtime_serve.py` |
+| Canal de terminal oficial | `adapters/senders/console.py`: `ConsoleChannel` (sender com dedupe por idempotency key e `provider_accepted_at`; eventos de entrada com `provider_occurred_at` e `reply_to`) | idem |
+| Comando | `python -m conversation_agent.app.serve <manifest> --http ID=URL`: o caminho feliz (proposta -> confirmação -> execução real) no terminal | `test_a_reservation_is_proposed_confirmed_and_executed_through_the_runtime` |
+
+Achados corrigidos no caminho:
+- `available_at` do outbox era gravado com o relógio da aplicação e comparado com o do banco: um worker adiantado atrasava as próprias mensagens (INV-054). Agora vem do relógio de coordenação.
+- `PostgresUnitOfWork` não satisfazia o protocolo `ConversationUnitOfWork` para o mypy (atributos invariantes); só aparecia ao usar o adapter em `src/`. Anotado.
+
+Decisões: o teste de arquitetura de INV-007 passou a aceitar `app/runtime.py` (só nomeia o tipo para entregar o sender ao OutboxWorker; nunca chama `send`). Os testes de confiabilidade seguem usando `tests/postgres/world.py` (relógios fixos); migrá-los para o `Runtime` fica como débito.
+
+Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem); não há entrypoint de produção com webhook.
+
