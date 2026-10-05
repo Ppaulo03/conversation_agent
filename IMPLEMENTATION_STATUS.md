@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14.1 — fechamento de segurança de produção (em andamento). Fases 1–14 em `main`.
+**Fase atual:** 15 — Mídia (15a transcriber implementada; 15b e 15c por vir). Fases 1–14.1 em `main`.
 
 ## Phase 1
 
@@ -958,4 +958,21 @@ Segundo audit externo, sobre a versão com debounce. Todos os achados de código
 Decisões: um UNKNOWN só bloqueia a ordem enquanto a janela de idempotência está aberta (com `delivery_policy`, `safe_resend_until`; sem ela, 24 h): depois disso uma mensagem presa não silencia a conversa (a ordem dessa mensagem deixa de ser garantida). NÃO apertei `retry_horizon <= safe_resend_until` como o plano sugeria: o contrato documentado (`RELAYPLANE_CONTRACT.md`) é `retry_horizon <= retention` e o teste de contrato do gateway real o usa.
 
 Observação de ambiente: o relógio da VM do Docker oscila (a oscilação passa de 1 s); os testes de debounce, que medem no relógio do banco, ganharam margens largas. Em produção o banco é a fonte única, então a oscilação entre hosts não afeta a janela.
+
+## Phase 15a — Transcriber real (INV-067)
+
+Status: **PASS** para 15a (transcriber, custo, interruptor). 15b (mídia como argumento de tool) e 15c (visão opcional) seguem no ROADMAP.
+
+Decisões (combinadas com o usuário): provedor é CONFIGURAÇÃO, não código (um adaptador para o protocolo OpenAI-compatible cobre Groq, OpenAI e servidores locais); transcrição desligada por padrão; Groq como exemplo principal.
+
+| Peça | Entrega | Prova |
+|---|---|---|
+| Adaptador | `adapters/transcribers/openai_compat.py`: `POST /audio/transcriptions` (arquivo nomeado pela MIME, modelo, idioma, `verbose_json`), baixa o áudio pelo `MediaFetcher` com limite próprio, erros só com código curto (nunca corpo, áudio ou chave), chave opcional (servidor local) | `tests/contracts/test_openai_compat_transcriber.py` |
+| Interruptor | `AgentDefinition.transcription: off|on` (padrão off) + `media.audio_disabled`; com off o áudio nem é baixado; exige operador (transcriber configurado) E agente. Fora do digest quando padrão | `tests/engine/test_transcription_policy.py` |
+| Custo | `LLMCallRecord.audio_seconds`, `ModelPrice.audio_per_minute`, relatório soma segundos e precifica por minuto (sem preço de áudio: não precificado, nunca grátis); migração 0025; `MeteredTranscriber` grava por segundo (nunca áudio nem texto) | `tests/observability/test_audio_cost.py`, `tests/postgres/test_llm_usage_ledger.py` |
+| Configuração | `app/stt_factory.py` (`STT_PROVIDER/KEY/MODEL/BASE_URL/LANGUAGE/MAX_AUDIO_BYTES`; ausente = sem transcriber) | `tests/contracts/test_stt_factory.py` |
+
+Impacto em quem já usava: os testes que passavam um `FakeTranscriber` precisaram do agente com `transcription="on"` (`build_agent(transcription="on")`). Um agente que antes transcrevia só por ter transcriber agora precisa declarar `transcription: on`.
+
+Débitos: sem adaptador de áudio de saída; o limite de duração (não só bytes) é do provedor; sem conversão de formato embutida (servidor local sem ogg precisa converter); o transcriber de cassette para evals não foi feito (os cenários de áudio usam o `FakeTranscriber`); `serve` (terminal) não tem áudio.
 

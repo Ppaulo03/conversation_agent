@@ -178,12 +178,59 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
 
-Voice messages are transcribed when you pass a `Transcriber` (`transcriber=` to `Runtime.build`);
-images, video and documents are named to the agent, never described. Tools do not receive media yet.
+Voice messages are transcribed when the agent says `transcription: on` AND you pass a `Transcriber`
+(`transcriber=` to `Runtime.build`; see *Voice messages*); images, video and documents are named to the
+agent, never described. Tools do not receive media yet.
 
 Two flows can never share a trigger phrase at the same priority (the compiler says `FLOW_TRIGGER_TIE`).
 If different phrases both match one message with equal priority and specificity ("cancelar minha
 reserva"), no flow starts and the runtime logs `flow trigger tie: a, b`; set `priority`.
+
+## Voice messages (speech-to-text)
+
+A voice message reaches the agent as text only when two things are both true: you (the operator) built a
+transcriber, and the agent's manifest says `transcription: on`. The default is **off**: with `off` the
+audio is only named to the agent (`media.audio_disabled`) and is never downloaded or sent anywhere. A voice
+is personal data and the transcriber may be a third-party API, so neither side can turn it on alone.
+
+```yaml
+transcription: on        # in the agent manifest
+```
+
+```bash
+# the operator side, in the environment (see .env.example)
+STT_PROVIDER=groq        # or openai, or openai_compat for a local server
+STT_API_KEY=...          # (groq/openai) falls back to GROQ_API_KEY / OPENAI_API_KEY
+STT_LANGUAGE=pt
+```
+
+```python
+from conversation_agent.app.stt_factory import STTConfig, build_transcriber
+
+config = STTConfig.from_env(os.environ)  # None when STT_PROVIDER is unset: no transcriber
+transcriber = build_transcriber(config, media_fetcher, usage=usage_store) if config else None
+runtime = Runtime.build(..., transcriber=transcriber)
+```
+
+One adapter speaks the OpenAI-compatible `POST /audio/transcriptions` protocol, so the choice is a
+configuration, not code:
+
+| You want | Configure |
+|---|---|
+| Groq (hosted, same key as the LLM) | `STT_PROVIDER=groq` (model `whisper-large-v3-turbo`) |
+| OpenAI | `STT_PROVIDER=openai` (model `whisper-1`) |
+| Audio that never leaves your infrastructure | `STT_PROVIDER=openai_compat`, `STT_BASE_URL=http://localhost:8000/v1`, `STT_MODEL=<the server's model>`, no key: any server that implements the protocol (faster-whisper server, whisper.cpp server, LocalAI, vLLM) |
+
+Notes: WhatsApp voice notes are ogg/opus (the adapter names the file from the MIME type, since servers
+decide the format from the name; a local server that cannot read ogg needs conversion on its side). The
+size limit is `STT_MAX_AUDIO_BYTES` (default 25 MiB, what hosted endpoints accept) and the audio is
+fetched with that bound. A failed or empty transcription never fails the turn: the agent is told the
+message could not be transcribed. A replayed turn reuses the stored text and is never billed twice.
+
+Cost: every transcription is written to the usage books by the **second of audio** (never the audio or the
+text), under purpose `transcription`; give the model an `audio_per_minute` price in `ops/llm_prices.yaml`
+or its calls are reported as unpriced. The `Transcriber` port is also the place to plug something else
+entirely (a different provider, an in-house service): implement `transcribe(media, context)`.
 
 ## 7. When something does not work
 
@@ -195,6 +242,8 @@ reserva"), no flow starts and the runtime logs `flow trigger tie: a, b`; set `pr
 | `schema ... pending/drift` | `python -m conversation_agent.app.migrate status`, then `apply` |
 | a tool call is refused | the capability is not in `allowed_capabilities`, or the connection id has no provider |
 | the agent says it cannot see an image | by design: media is only named, not read |
+| voice messages arrive as "this assistant does not process voice messages" | `transcription` is `off` (the default) for that agent: set `transcription: on` and give `Runtime.build` a transcriber |
+| voice arrives as "could not be transcribed" | the agent asked for it but the operator built no transcriber, or the provider failed (check the `outbox`/usage books for purpose `transcription` errors) |
 
 **Secrets you must provide.** `PSEUDONYM_KEY` (>= 32 random bytes; `app.wiring.configure_pseudonyms_from_env`
 or `core.models.audit.configure_pseudonym_key`) keys the references written by erasure and ownership
