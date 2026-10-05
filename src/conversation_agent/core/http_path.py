@@ -8,6 +8,7 @@ checked separately where they are filled in.
 
 from __future__ import annotations
 
+import re
 from urllib.parse import unquote
 
 
@@ -25,9 +26,13 @@ def http_path_problem(path: str) -> str | None:
     for index, segment in enumerate(segments):
         if segment == "" and index != len(segments) - 1:
             return "must not contain empty segments ('//')"
+        if re.search(r"%(?![0-9A-Fa-f]{2})", segment):
+            return "must not contain a malformed percent-escape"
         decoded = unquote(segment)
         if decoded in (".", ".."):
             return "must not contain '.' or '..' segments (even percent-encoded)"
-        if "/" in decoded or "\\" in decoded:
-            return "must not contain an encoded path separator"
+        if any(ch in decoded for ch in ("/", "\\", "?", "#")):
+            return "must not contain an encoded separator, query or fragment mark"
+        if any(ord(ch) < 0x21 or ord(ch) == 0x7F for ch in decoded):
+            return "must not contain encoded spaces or control characters"
     return None

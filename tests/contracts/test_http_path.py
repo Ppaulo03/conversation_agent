@@ -34,6 +34,14 @@ BAD = [
     "/a b",
     "/a//b",
     "/\x00x",
+    "/%00",  # decoded, a control character: proxies and servers disagree on it
+    "/%09",
+    "/%20",
+    "/%0a",
+    "/%3f",  # an encoded query mark
+    "/%23",  # an encoded fragment mark
+    "/a%2",  # malformed escape
+    "/%zz",
 ]
 
 
