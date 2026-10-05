@@ -262,8 +262,8 @@ Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e 
 ## Futuro (sem fase atribuída)
 
 - **Visão (imagens):** desenho em [`FUTURE_VISION.md`](./FUTURE_VISION.md). Hoje uma imagem é só nomeada ao agente.
-- **Grupos, menções e allowlist de contatos:** desenho em [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md); pedido ao
-  gateway em [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md). Hoje grupos são ignorados.
+- **Grupos, menções e allowlist de contatos:** desenho em [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md) (inclui o que se espera do
+  gateway). Hoje grupos são ignorados.
 
 ## Chaos gates
 

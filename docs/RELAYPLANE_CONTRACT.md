@@ -65,7 +65,7 @@ Envelope: `schema_version` (só `1`; outro → 400), `event_id`, `sequence`, `ev
 | `message.status`, `instance.status_changed`, outros | reconhecidos (200) e ignorados |
 
 Fora de escopo, reconhecidos e ignorados: mensagens de grupo (`chat_id`) e edições `secretEncrypted`.
-Suporte futuro a grupos (campos que o gateway precisaria entregar): [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md).
+Suporte futuro a grupos (campos que o gateway precisaria entregar): [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md), seção 4.
 Mídia chega como referência com status do gateway (`READY` / `REJECTED` / `FAILED`); bytes só por
 `GET /api/v1/media/{id}/content`, com `ETag` = sha256 verificado (`RelayPlaneMediaFetcher`).
 

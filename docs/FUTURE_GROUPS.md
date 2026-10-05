@@ -1,8 +1,8 @@
 # Futuro: grupos, menções e quem pode falar com o bot
 
 > **Status: FUTURO. Nada disto está implementado.** Este documento registra a decisão de desenho para
-> quando for priorizado. O pedido ao gateway está em
-> [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md); o que existe hoje está descrito abaixo.
+> quando for priorizado. O que o bot espera do gateway está na seção 4 (a especificação detalhada foi
+> entregue ao projeto do RelayPlane); o que existe hoje está descrito abaixo.
 
 ## 1. Onde estamos
 
@@ -81,8 +81,19 @@ com implicação de LGPD que precisa de decisão própria).
 
 ## 4. Dependências
 
-1. O gateway entrega os campos da spec (`chat_type`, `from` = autor, `mentioned`, `quoted_from_me`) e a
-   entrega opt-in de grupos (`include_groups`). Sem isso 3.2 não é seguro.
+1. **O que o bot espera do gateway** (pedido ao RelayPlane, todos os campos aditivos):
+
+   | No `message.received` | Significado |
+   |---|---|
+   | `chat_type` | `direct` \| `group` \| `other`, sempre presente |
+   | `chat_id` | só em chat não direto (compatibilidade) |
+   | `from` | o AUTOR da mensagem, também em grupo |
+   | `mentioned` | a própria instância foi marcada, em qualquer formato do provedor (número, LID, JID) |
+   | `quoted_from_me` | a mensagem citada foi enviada pela instância |
+
+   Na assinatura: `include_groups` (padrão `false`, o comportamento de hoje) e, opcional, `group_ids`. No
+   envio para grupo: `to` aceita o id do grupo, com `reply_to_provider_message_id` e `mentions`.
+   Sem esses fatos estruturados o item 3.2 não é seguro: o bot nunca deduz menção lendo o texto.
 2. 3.1 (allowlist/blocklist) não depende do gateway e pode vir antes e separado.
 
 ## 5. Fora de escopo
