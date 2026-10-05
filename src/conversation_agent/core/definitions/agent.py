@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
 from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Invoke, Propose
+from conversation_agent.core.definitions.media_args import media_fields
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
@@ -345,6 +346,12 @@ class AgentDefinition(BaseModel):
                         f"lookup {name!r} returns a different schema than {b.capability!r}: "
                         "declare `recovery.result_map` to convert it"
                     )
+
+    @property
+    def takes_files(self) -> bool:
+        """True when some capability has an input that is a file the contact sent: only then do
+        the contact's files get handles the model can name."""
+        return any(media_fields(c.input_model) for c in self.capabilities)
 
     def resolve(self, capability_name: str) -> ResolvedToolBinding | None:
         binding = next((b for b in self.bindings if b.capability == capability_name), None)

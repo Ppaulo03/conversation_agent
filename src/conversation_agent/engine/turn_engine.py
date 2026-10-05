@@ -33,7 +33,12 @@ from conversation_agent.core.models.llm import (
     ToolResultPart,
     llm_request_hash,
 )
-from conversation_agent.core.models.media import MediaReference, TranscriptionContext
+from conversation_agent.core.models.media import (
+    MediaArg,
+    MediaReference,
+    TranscriptionContext,
+    register_media,
+)
 from conversation_agent.core.models.runtime import InboundRef, Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction, ToolContext
 from conversation_agent.core.observability import bind
@@ -142,7 +147,11 @@ class TurnEngine:
         )
         reference_time = datetime.fromisoformat(aggregated["turn_reference_time"])  # INV-018
         if media:
-            user_text = await self._normalize_media(cursor, identity, turn_id, user_text, media)
+            kept, seq, handles = register_media(state.media, state.media_seq, media)
+            state = state.model_copy(update={"media": kept, "media_seq": seq})
+            user_text = await self._normalize_media(
+                cursor, identity, turn_id, user_text, media, handles
+            )
         system = build_system_prompt(self._agent.persona, reference_time, self._agent.timezone)
 
         working: list[LLMMessage] = [
@@ -247,6 +256,7 @@ class TurnEngine:
         proposals: dict[str, CapabilityRequest] = {}
         proposed: list[ProposedAction] = []
         policy_state = _PolicyTurnState(cancel)
+        policy_state.media = {m.handle: m for m in state.media}  # this conversation's files
         human = self._agent.human_request
         if human is not None and matches_request(user_text, human.triggers, human.max_words):
             # A person was asked for: decided by rules, before any flow or model, so it cannot
@@ -380,8 +390,11 @@ class TurnEngine:
         turn_id: str,
         user_text: str,
         media: tuple[MediaReference, ...],
+        handles: dict[str, str] | None = None,
     ) -> str:
-        """The turn text including what the media said (journaled: replay never re-transcribes)."""
+        """The turn text including what the media said (journaled: replay never re-transcribes).
+        When the agent has capabilities that take a file, each line also names the file's handle
+        so the model can pass it on."""
 
         async def produce() -> dict[str, Any]:
             context = TranscriptionContext(
@@ -394,7 +407,13 @@ class TurnEngine:
         step = await cursor.step(
             JournalStepType.MEDIA_NORMALIZED, stable_hash([m.media_id for m in media]), produce
         )
-        return "\n".join(part for part in (user_text, *step["lines"]) if part)
+        lines: list[str] = list(step["lines"])
+        if handles and self._agent.takes_files:
+            lines = [
+                f"{line} [{handles[m.media_id]}]" if m.media_id in handles else line
+                for line, m in zip(lines, media, strict=True)
+            ]
+        return "\n".join(part for part in (user_text, *lines) if part)
 
     def _with_confirmation(self, reply: str, proposal: ProposedAction) -> str:
         line = self._agent.confirmation.prompt.format(
@@ -431,6 +450,8 @@ class TurnEngine:
             ),
             proposals={**state.proposals, **proposals},
             flows=state.flows if flows is None else flows,
+            media=state.media,
+            media_seq=state.media_seq,
         )
         return TurnOutcome(
             turn_id=turn_id,
@@ -559,6 +580,7 @@ class TurnEngine:
                 tool_calls_this_turn=policy_state.calls,
                 recent_args_hashes=tuple(policy_state.hashes),
                 now=reference_time,
+                media=policy_state.media,
             )
             return self._pipeline.evaluate(capability, arguments, ctx).model_dump(mode="json")
 
@@ -755,6 +777,7 @@ class _PolicyTurnState:
         self.hashes: list[str] = []
         self.effects = 0
         self.cancel = cancel
+        self.media: dict[str, MediaArg] = {}
 
 
 def _const(payload: dict[str, Any]) -> Callable[[], Awaitable[dict[str, Any]]]:

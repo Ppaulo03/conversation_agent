@@ -108,7 +108,13 @@ def test_runtime_does_not_own_business_state() -> None:  # INV-008
 
     from conversation_agent.core.models.conversation import ConversationState
 
-    assert set(ConversationState.model_fields) == {"history", "proposals", "flows"}
+    assert set(ConversationState.model_fields) == {
+        "history",
+        "proposals",
+        "flows",
+        "media",
+        "media_seq",
+    }  # conversational data only: files are REFERENCES (handles), never bytes
 
 
 def test_outbound_delivery_only_from_outbox() -> None:  # INV-007 (structural half)

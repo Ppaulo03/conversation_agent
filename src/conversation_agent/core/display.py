@@ -16,6 +16,8 @@ from conversation_agent.core.temporal_ptbr import format_local, format_moment
 def display_value(value: Any, timezone: str | None) -> str:
     """People's words for a value. A datetime with an offset becomes 'ter 06/10 às 10:00' in the
     agent's timezone, or, with no timezone given, in the offset it carries (as the person said)."""
+    if isinstance(value, dict) and "media_id" in value:  # a file the contact sent
+        return str(value.get("filename") or f"{value.get('kind', 'file')} ({value.get('handle')})")
     if isinstance(value, str):
         try:
             moment = datetime.fromisoformat(value)

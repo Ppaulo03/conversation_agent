@@ -26,9 +26,10 @@ from pydantic import (
 )
 
 from conversation_agent.core.canonical import canonicalize
+from conversation_agent.core.models.media import MediaArg
 
 FieldType = Literal[
-    "string", "integer", "number", "boolean", "date", "datetime", "enum", "list", "object"
+    "string", "integer", "number", "boolean", "date", "datetime", "enum", "list", "object", "media"
 ]
 
 
@@ -120,6 +121,8 @@ def value_problem(spec: FieldSpec, value: Any, *, allow_none: bool = False) -> s
         except ValueError:
             return f"expected an ISO {kind}"
         return None
+    if kind == "media":
+        return "a file argument takes no literal value (it is a file the contact sent)"
     if kind == "enum":
         return None if value in spec.values else f"expected one of {list(spec.values)}"
     if kind == "list":
@@ -186,6 +189,8 @@ def _python_type(spec: FieldSpec, name: str, strict: bool) -> Any:
             base = date
         case "datetime":
             base = AwareDatetime
+        case "media":
+            base = MediaArg  # the model sees a handle; the runtime fills in the file
         case "enum":
             base = Literal[spec.values]
         case "list":

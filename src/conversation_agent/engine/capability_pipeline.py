@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict, model_validator
 
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
+from conversation_agent.core.definitions.media_args import llm_input_schema
 from conversation_agent.core.errors import ConnectionNotFoundError, InvalidConnectionError
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.core.models.runtime import ExecutionIntent
@@ -110,7 +111,7 @@ class CapabilityPipeline:
                 LLMToolDefinition(
                     name=cap.llm_name,
                     description=cap.description + note,
-                    input_schema=cap.input_model.model_json_schema(),
+                    input_schema=llm_input_schema(cap.input_model),
                 )
             )
         return tuple(tools)
@@ -227,7 +228,9 @@ class CapabilityPipeline:
         if decision.outcome == "deny" or resolved is None:
             return Evaluation(capability=capability_name, decision=decision)
         try:
-            request = build_capability_request(resolved.capability, raw_args)
+            request = build_capability_request(
+                resolved.capability, raw_args, ctx.media if ctx is not None else None
+            )
         except RequestRejected as exc:
             return Evaluation(capability=capability_name, decision=decision, rejection=exc.error)
         decision = self._policy.refine(decision, request, resolved, ctx)  # needs the request

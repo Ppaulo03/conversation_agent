@@ -14,6 +14,7 @@ Hardening (DESIGN §30-31) lives in `guard.GuardedTransport`, shared with the MC
 
 from __future__ import annotations
 
+import base64
 import json
 import re
 import time
@@ -34,8 +35,10 @@ from conversation_agent.adapters.tools.guard import (
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.http_path import http_path_problem
 from conversation_agent.core.models.connections import ResolvedConnection
-from conversation_agent.core.models.tooling import ToolContext, ToolResult
+from conversation_agent.core.models.media import MediaReference
+from conversation_agent.core.models.tooling import ToolContext, ToolError, ToolResult
 from conversation_agent.ports.connections import ConnectionResolver
+from conversation_agent.ports.media_fetcher import MediaFetcher
 from conversation_agent.ports.secrets import SecretProvider
 from conversation_agent.tools.error_mapping import (
     classify_http_status,
@@ -72,9 +75,11 @@ class HTTPToolProvider:
         secrets: SecretProvider | None = None,
         client: httpx.AsyncClient | None = None,
         resolve_host: HostResolver | None = None,
+        media_fetcher: MediaFetcher | None = None,
     ) -> None:
         self._guard = GuardedTransport(connections, secrets, client, resolve_host)
         self._client = self._guard.client
+        self._media = media_fetcher  # only for tools that ask for a file's CONTENT
 
     @classmethod
     def static(
@@ -83,8 +88,11 @@ class HTTPToolProvider:
         secrets: SecretProvider | None = None,
         client: httpx.AsyncClient | None = None,
         resolve_host: HostResolver | None = None,
+        media_fetcher: MediaFetcher | None = None,
     ) -> HTTPToolProvider:
-        return cls(StaticConnectionResolver(connections), secrets, client, resolve_host)
+        return cls(
+            StaticConnectionResolver(connections), secrets, client, resolve_host, media_fetcher
+        )
 
     async def aclose(self) -> None:
         await self._guard.aclose()
@@ -149,6 +157,10 @@ class HTTPToolProvider:
             raise Rejected(validation_error("INVALID_PATH_PARAMETER", str(exc))) from exc
         query = {k: args[k] for k in spec.query if args.get(k) is not None and k not in path_params}
         body = {k: args[k] for k in spec.body if k in args and k not in path_params}
+        for name in spec.media_content:  # the tool wants the file itself, not just who it is
+            item = body.get(name)
+            if isinstance(item, dict) and item.get("media_id"):
+                body[name] = await self._with_content(item, context, connection)
         payload = json.dumps(body).encode() if body else None
         if payload is not None and len(payload) > connection.max_request_bytes:
             raise Rejected(configuration_error("REQUEST_TOO_LARGE", "Request body too large."))
@@ -229,6 +241,40 @@ class HTTPToolProvider:
         if not isinstance(data, dict | list):
             return classify_invalid_response(binding.effective_risk)
         return ToolResult(status="success", data=data, provider_metadata=metadata)
+
+    async def _with_content(
+        self, item: dict[str, Any], context: ToolContext, connection: ResolvedConnection
+    ) -> dict[str, Any]:
+        """The file's reference plus its bytes (base64), fetched now, integrity-checked by the
+        fetcher, and bounded by what the connection lets a request carry. Nothing has been sent to
+        the tool yet, so a failure here is a safe, pre-send error."""
+        if self._media is None:
+            raise Rejected(
+                configuration_error("MEDIA_FETCHER_NOT_CONFIGURED", "No media fetcher is set up.")
+            )
+        reference = MediaReference(
+            media_id=item["media_id"],
+            kind=item["kind"],
+            mime_type=item["mime_type"],
+            size_bytes=item.get("size_bytes"),
+            sha256=item.get("sha256"),
+            filename=item.get("filename"),
+        )
+        limit = connection.max_request_bytes * 3 // 4 - 1024  # base64 is 4/3 of the bytes
+        try:
+            content = await self._media.fetch(context.tenant_id, reference, max_bytes=limit)
+        except Exception as exc:
+            raise Rejected(
+                ToolResult(
+                    status="technical_error",
+                    error=ToolError(
+                        code="MEDIA_UNAVAILABLE",
+                        message_safe="The file could not be retrieved.",
+                    ),
+                    provider_metadata={"request_sent": False},
+                )
+            ) from exc
+        return {**item, "content_base64": base64.b64encode(content).decode("ascii")}
 
     @staticmethod
     def _path_value(args: dict[str, Any], name: str) -> str:

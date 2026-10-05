@@ -13,6 +13,8 @@ from pydantic import BaseModel, ConfigDict, Field
 
 MediaKind = Literal["audio", "image", "document", "video"]
 MAX_MEDIA_ITEMS = 10  # per inbound event: a message with more is refused at the edge
+MAX_MEDIA_HANDLES = 10  # files a conversation keeps addressable (the newest ones)
+MEDIA_HANDLE_PATTERN = r"^media_[0-9]{1,9}$"
 
 
 class MediaReference(BaseModel):
@@ -51,3 +53,57 @@ class TranscriptionContext(BaseModel):
     conversation_id: str
     turn_id: str
     language_hint: str | None = None
+
+
+class MediaArg(BaseModel):
+    """A file the contact sent, as a tool receives it: what identifies it, never its bytes.
+
+    The model never writes one of these (it only names a handle, `media_3`); the runtime resolves
+    the handle against the conversation's own files. Because the checksum travels with the
+    argument, a confirmation covers THIS file, not "whatever media_3 is later".
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    handle: str = Field(pattern=MEDIA_HANDLE_PATTERN)
+    media_id: str = Field(min_length=1, max_length=200)
+    kind: MediaKind
+    mime_type: str = Field(max_length=100)
+    size_bytes: int | None = Field(default=None, ge=0)
+    sha256: str | None = Field(default=None, pattern=r"^[0-9a-f]{64}$")
+    filename: str | None = Field(default=None, max_length=200)
+
+
+def register_media(
+    kept: tuple[MediaArg, ...], seq: int, arrived: tuple[MediaReference, ...]
+) -> tuple[tuple[MediaArg, ...], int, dict[str, str]]:
+    """Give the files of an inbound message their handles. -> (kept, seq, {media_id: handle}).
+
+    Only files the channel could deliver (`ready`) get one. The sequence only grows, so a handle is
+    never reused for another file; the oldest handles are dropped beyond MAX_MEDIA_HANDLES (a file
+    leaves with the conversation: its handle lives in the conversation state and goes with it).
+    A redelivered file keeps the handle it already had."""
+    by_media = {m.media_id: m for m in kept}
+    handles: dict[str, str] = {}
+    out = list(kept)
+    for ref in arrived:
+        if ref.status != "ready":
+            continue
+        known = by_media.get(ref.media_id)
+        if known is not None:
+            handles[ref.media_id] = known.handle
+            continue
+        seq += 1
+        arg = MediaArg(
+            handle=f"media_{seq}",
+            media_id=ref.media_id,
+            kind=ref.kind,
+            mime_type=ref.mime_type,
+            size_bytes=ref.size_bytes,
+            sha256=ref.sha256,
+            filename=ref.filename,
+        )
+        by_media[ref.media_id] = arg
+        out.append(arg)
+        handles[ref.media_id] = arg.handle
+    return tuple(out[-MAX_MEDIA_HANDLES:]), seq, handles

@@ -54,6 +54,7 @@ from conversation_agent.core.definitions.mapping import (
     MapExpr,
     Ref,
 )
+from conversation_agent.core.definitions.media_args import media_fields
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
@@ -228,6 +229,22 @@ def _capability_document(c: CapabilityDefinition) -> dict[str, Any]:
     return document
 
 
+def _tool_document(t: ToolDefinition) -> dict[str, Any]:
+    document: dict[str, Any] = {
+        # `mcp` only appears for MCP tools: an agent without any keeps its digest
+        **t.model_dump(
+            mode="json",
+            exclude={"input_model", "output_model"} | ({"mcp"} if t.mcp is None else set()),
+        ),
+        "input": schema_fingerprint(t.input_model),
+        "output": schema_fingerprint(t.output_model) if t.output_model else None,
+    }
+    http = document.get("http")
+    if isinstance(http, dict) and not http.get("media_content"):
+        http.pop("media_content", None)  # only tools that ask for a file's content carry it
+    return document
+
+
 def _media_document(agent: AgentDefinition) -> dict[str, Any]:
     document = agent.media.model_dump(mode="json")
     if document.get("audio_disabled") == type(agent.media).model_fields["audio_disabled"].default:
@@ -251,18 +268,7 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "capabilities": [
             _capability_document(c) for c in sorted(agent.capabilities, key=lambda c: c.name)
         ],
-        "tools": [
-            {
-                # `mcp` only appears for MCP tools: an agent without any keeps its digest
-                **t.model_dump(
-                    mode="json",
-                    exclude={"input_model", "output_model"} | ({"mcp"} if t.mcp is None else set()),
-                ),
-                "input": schema_fingerprint(t.input_model),
-                "output": schema_fingerprint(t.output_model) if t.output_model else None,
-            }
-            for t in sorted(agent.tools, key=lambda t: t.name)
-        ],
+        "tools": [_tool_document(t) for t in sorted(agent.tools, key=lambda t: t.name)],
         "bindings": [
             _binding_document(b) for b in sorted(agent.bindings, key=lambda b: b.capability)
         ],
@@ -421,6 +427,7 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
         found += _check_transport(tool, mapped)
         found += _check_result_map(agent, tool)
     found += _check_trigger_ties(agent)
+    found += _check_media_tools(agent)
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
         found += _check_executed(cap)
@@ -522,6 +529,35 @@ def _check_summary(name: str, template: str | None, model: type[BaseModel]) -> l
         Diagnostic("SUMMARY_UNKNOWN_FIELD", f"capabilities.{name}.summary_template", f"{{{u}}}")
         for u in unknown
     ]
+
+
+def _check_media_tools(agent: AgentDefinition) -> list[Diagnostic]:
+    """A file argument can only travel in an HTTP body: not in a path or query, not to an MCP tool
+    (which would receive it as an opaque argument nobody checked)."""
+    found: list[Diagnostic] = []
+    for tool in agent.tools:
+        names = media_fields(tool.input_model)
+        if not names:
+            continue
+        if tool.http is None:
+            found.append(
+                Diagnostic(
+                    "MEDIA_NEEDS_HTTP_BODY",
+                    f"tools.{tool.name}",
+                    f"{', '.join(names)} take a file: only an HTTP tool can send one (in its body)",
+                )
+            )
+            continue
+        found += [
+            Diagnostic(
+                "MEDIA_NOT_IN_BODY",
+                f"tools.{tool.name}.http.body",
+                f"{name!r} takes a file and must be a body field, not a path or query value",
+            )
+            for name in names
+            if name not in tool.http.body
+        ]
+    return found
 
 
 def _check_trigger_ties(agent: AgentDefinition) -> list[Diagnostic]:

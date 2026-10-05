@@ -7,6 +7,7 @@ from typing import Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from conversation_agent.core.models.flow import FlowInstance
+from conversation_agent.core.models.media import MediaArg
 from conversation_agent.core.models.tooling import CapabilityRequest, ProposedAction
 
 
@@ -41,6 +42,10 @@ class ConversationState(_Frozen):
     proposals: dict[str, CapabilityRequest] = Field(default_factory=dict)
     # Flow stack: the LAST item is the active flow, earlier ones are suspended (DESIGN §23.3).
     flows: tuple[FlowInstance, ...] = ()
+    # Files the contact sent, addressable by handle (`media_1`...): references only, the newest
+    # MAX_MEDIA_HANDLES. They live and die with the conversation (retention, erasure).
+    media: tuple[MediaArg, ...] = ()
+    media_seq: int = 0  # the last handle number given: handles are never reused
 
     @property
     def active_flow(self) -> FlowInstance | None:

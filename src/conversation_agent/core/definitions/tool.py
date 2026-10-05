@@ -27,6 +27,17 @@ class HTTPRequestSpec(BaseModel):
     # Optional tool arguments that are deliberately NOT sent (runtime-only). Anything else the
     # binding can produce must travel in the path, query or body, or it would silently vanish.
     ignored: tuple[str, ...] = ()
+    # Body fields that are files the contact sent: the tool also receives the file's CONTENT
+    # (`content_base64`), fetched at send time. Without it the tool gets only who the file is
+    # (id, type, size, checksum), which is enough for a service that can fetch it itself.
+    media_content: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _content_is_in_the_body(self) -> HTTPRequestSpec:
+        stray = sorted(set(self.media_content) - set(self.body))
+        if stray:
+            raise ValueError(f"media_content {stray} must be body fields")
+        return self
 
     @field_validator("path")
     @classmethod

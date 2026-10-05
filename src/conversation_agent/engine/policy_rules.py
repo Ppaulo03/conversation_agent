@@ -8,12 +8,14 @@ A rule returns a DENY decision, or None to abstain. The first DENY wins.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 from zoneinfo import ZoneInfo
 
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
+from conversation_agent.core.models.media import MediaArg
 from conversation_agent.core.models.runtime import Ownership
 from conversation_agent.core.models.tooling import CapabilityRequest, PolicyDecision
 
@@ -27,6 +29,7 @@ class PolicyContext:
     tool_calls_this_turn: int = 0
     recent_args_hashes: tuple[str, ...] = field(default_factory=tuple)  # earlier calls this turn
     now: datetime | None = None  # the turn's reference time
+    media: Mapping[str, MediaArg] = field(default_factory=dict)  # handle -> the conversation's file
 
 
 def _deny(reason: str) -> PolicyDecision:
