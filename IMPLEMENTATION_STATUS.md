@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (em andamento: itens 4, 5, 9, 10, 12, 13 e 14 feitos). Fases 1–13 em `main`.
+**Fase atual:** 14 — Achados do POC (lista do POC concluída). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -881,4 +881,14 @@ Débito: conversas legadas sem escopo ficam invisíveis a runtimes com escopo at
 - Campos novos dos steps ficam fora do digest quando não usados.
 
 Débitos: as opções só entendem um período por vez e usam horas inteiras; o período ainda precisa ser declarado como slot enum no Flow (não há detecção embutida de "à noite" sem o slot); templates por status de falha seguem abertos.
+
+### Itens 7, 8, 6 e 15 — pequenos (INV-059)
+
+- **7:** `FlowDefinition.start_on_questions` (padrão `true`, comportamento antigo): com `false`, uma mensagem com cara de pergunta nunca INICIA o Flow por palavra-gatilho e o agente a responde.
+- **8:** a mesma frase-gatilho em dois Flows com a mesma prioridade não compila (`FLOW_TRIGGER_TIE`); empate entre frases diferentes, em tempo de execução, não inicia nada mas agora é logado (`conversation_agent.flows`: `flow trigger tie: a, b`).
+- **6:** `AgentDefinition.split_replies` (padrão `false`): um parágrafo por mensagem de saída (no máximo 4; o último carrega o prompt de confirmação); histórico e estado seguem com o texto inteiro.
+- **15 (opt-in por conexão, decisão do usuário):** `ResolvedConnection.send_contact_id` envia `X-Contact-Id` em HTTP e MCP; desligado por padrão; o cabeçalho é reservado ao runtime (`auth` não pode usá-lo).
+- Campos novos fora do digest quando no valor padrão.
+
+Débitos: `send_contact_id` precisa ser ligado por quem monta o resolver de conexões (não há campo no manifest, de propósito: é decisão do operador). Com `split_replies` as partes do mesmo turno saem em mensagens separadas sem pausa entre elas.
 

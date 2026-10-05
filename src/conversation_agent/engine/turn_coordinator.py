@@ -12,6 +12,7 @@ write is a short fenced UoW. A crash at any point leaves the turn open; the next
 from __future__ import annotations
 
 import logging
+import re
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -104,6 +105,19 @@ def default_side_effect_notice(invocations: list[ToolInvocation]) -> str | None:
     ):
         return f"Your request was carried out, but I could not compose the full reply. Ref: {ref}."
     return f"I could not confirm the outcome of your request; a person will check it. Ref: {ref}."
+
+
+MAX_REPLY_PARTS = 4
+
+
+def reply_parts(reply: str) -> list[str]:
+    """The paragraphs of a reply (separated by blank lines), at most MAX_REPLY_PARTS: any more are
+    kept together in the last one. A reply with none stays whole."""
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", reply) if p.strip()]
+    if not paragraphs:
+        return [reply]
+    head, tail = paragraphs[: MAX_REPLY_PARTS - 1], paragraphs[MAX_REPLY_PARTS - 1 :]
+    return [*head, "\n\n".join(tail)] if tail else head
 
 
 class TurnCoordinator:
@@ -387,7 +401,7 @@ class TurnCoordinator:
         await self._faults.hit("C16_after_apply_before_compose")
         async with self._uows.begin(fence) as uow:
             await uow.state.save(outcome.state, last_event_at=opened.last_event_at)
-            await self._persist_reply(uow, opened, outcome)
+            await self._persist_reply(uow, opened, outcome, engine.agent.split_replies)
             if outcome.handoff_requested:  # the reply and the ownership change are ONE decision
                 await uow.state.set_ownership(Ownership.HANDOFF_PENDING)
             await uow.turns.complete(opened.turn_id)
@@ -447,12 +461,19 @@ class TurnCoordinator:
         return compiled
 
     async def _persist_reply(
-        self, uow: ConversationUnitOfWork, opened: OpenedTurn, outcome: TurnOutcome
+        self,
+        uow: ConversationUnitOfWork,
+        opened: OpenedTurn,
+        outcome: TurnOutcome,
+        split: bool = False,
     ) -> None:
         """The reply, and - in the SAME transaction - the PendingAction it asks the user to
         confirm (or the re-prompt of an existing one), so the prompt row and the action it
         refers to can never disagree (DESIGN §26.1)."""
-        message = self._outbound(opened, outcome.reply)
+        parts = reply_parts(outcome.reply) if split else [outcome.reply]
+        for index, part in enumerate(parts[:-1]):  # the LAST one carries the confirmation prompt
+            await uow.outbox.add(self._outbound(opened, part, index))
+        message = self._outbound(opened, parts[-1], len(parts) - 1)
         action_id: str | None = None
         new_attempt = False
         if outcome.proposed:

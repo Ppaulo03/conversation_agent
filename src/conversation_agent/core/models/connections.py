@@ -29,6 +29,7 @@ RUNTIME_OWNED_HEADERS: frozenset[str] = frozenset(
         "connection",
         "idempotency-key",
         "x-tenant-id",
+        "x-contact-id",
         "x-conversation-id",
         "x-trace-id",
         "x-invocation-id",
@@ -66,6 +67,9 @@ class ResolvedConnection(_Frozen):
     max_request_bytes: int = 256 * 1024
     max_response_bytes: int = 1024 * 1024
     auth: AuthSpec | None = None
+    # The contact's identifier (a phone number, often) is personal data: it reaches this external
+    # system as `X-Contact-Id` only when the OPERATOR turns it on for this connection.
+    send_contact_id: bool = False
 
     @field_validator("base_url")
     @classmethod

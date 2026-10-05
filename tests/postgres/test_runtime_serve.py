@@ -222,3 +222,20 @@ def test_the_command_line_is_parsed_strictly() -> None:
     ):
         with pytest.raises(ValueError):
             parse_args(bad)
+
+
+async def test_an_agent_that_splits_replies_sends_each_paragraph_as_its_own_message(
+    db: PostgresDatabase, clock: Clock, api: ApiHandle
+) -> None:
+    from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
+    from conversation_agent.core.compiler import compile_manifest
+    from vertical_slice.wiring import MANIFEST_PATH
+
+    raw = load_manifest_file(MANIFEST_PATH)
+    raw["split_replies"] = True
+    out: list[str] = []
+    llm = FakeLLM([text_response("Primeiro assunto.\n\nSegundo assunto.")])
+    runtime, channel = build(db, clock, api, llm, out, compile_manifest(raw))
+    await runtime.receive(channel.inbound("oi"))
+    await runtime.drain()
+    assert out == ["bot> Primeiro assunto.", "bot> Segundo assunto."]

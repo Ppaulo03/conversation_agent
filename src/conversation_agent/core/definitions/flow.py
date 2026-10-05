@@ -210,6 +210,9 @@ class FlowDefinition(_Frozen):
     digressions_allowed: bool = True
     max_digressions: int = 5
     priority: int = 0  # breaks a tie between flows whose triggers both match (higher wins)
+    # False: a message that looks like a question ("how much is tennis?") never STARTS this flow
+    # on a trigger word; the normal agent loop answers it instead.
+    start_on_questions: bool = True
     digression_capabilities: tuple[str, ...] = ()  # read capabilities usable in a digression
 
     @model_validator(mode="after")

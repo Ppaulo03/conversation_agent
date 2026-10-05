@@ -58,6 +58,7 @@ from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.packs import PackCatalog, expand_packs
+from conversation_agent.core.temporal_ptbr import fold
 from conversation_agent.core.versioning import (
     COMPILER_VERSION,
     FRAMEWORK_VERSION,
@@ -195,6 +196,8 @@ def _flow_document(flow: FlowDefinition) -> dict[str, Any]:
     for slot in document["slots"]:
         if slot.get("question_check") == "off":  # only flows that opt in carry it: others keep
             slot.pop("question_check")  # the digest they always had
+    if document.get("start_on_questions") is True:
+        document.pop("start_on_questions")
     for step in document["steps"]:
         if step.get("kind") != "choose":
             continue
@@ -268,6 +271,8 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "media": agent.media.model_dump(mode="json"),
         "max_media_bytes": agent.max_media_bytes,
     }
+    if agent.split_replies:  # only agents that use it carry it (digests stay stable)
+        document["split_replies"] = True
     if agent.human_request is not None:  # only agents that use it carry it (digests stay stable)
         document["human_request"] = agent.human_request.model_dump(mode="json")
     return document
@@ -406,6 +411,7 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
         mapped = frozenset(k for b in agent.bindings if b.tool == tool.name for k in b.input_map)
         found += _check_transport(tool, mapped)
         found += _check_result_map(agent, tool)
+    found += _check_trigger_ties(agent)
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
         found += _check_executed(cap)
@@ -507,6 +513,27 @@ def _check_summary(name: str, template: str | None, model: type[BaseModel]) -> l
         Diagnostic("SUMMARY_UNKNOWN_FIELD", f"capabilities.{name}.summary_template", f"{{{u}}}")
         for u in unknown
     ]
+
+
+def _check_trigger_ties(agent: AgentDefinition) -> list[Diagnostic]:
+    """Two flows with the SAME trigger phrase at the same priority can never start: the runtime
+    refuses to guess between them. (Overlapping words in different phrases are only a runtime
+    tie, logged when it happens.)"""
+    found: list[Diagnostic] = []
+    seen: dict[tuple[int, str], str] = {}
+    for flow in agent.flows:
+        for phrase in {fold(t) for t in flow.triggers}:
+            other = seen.setdefault((flow.priority, phrase), flow.name)
+            if other != flow.name:
+                found.append(
+                    Diagnostic(
+                        "FLOW_TRIGGER_TIE",
+                        f"flows.{flow.name}.triggers",
+                        f"{phrase!r} also starts flow {other!r} at the same priority: neither "
+                        "would ever start (set `priority` on one)",
+                    )
+                )
+    return found
 
 
 def _check_executed(cap: CapabilityDefinition) -> list[Diagnostic]:

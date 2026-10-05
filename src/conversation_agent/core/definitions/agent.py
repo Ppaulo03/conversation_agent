@@ -111,6 +111,9 @@ class AgentDefinition(BaseModel):
     confirmation_prompt_enabled: bool = True
     media: MediaTexts = MediaTexts()
     max_media_bytes: int = 25 * 1024 * 1024  # larger media is not fetched or transcribed
+    # True: a reply with blank-line separated paragraphs goes out as one message per paragraph
+    # (at most MAX_REPLY_PARTS), e.g. an answer and then the flow's question as its own message.
+    split_replies: bool = False
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:

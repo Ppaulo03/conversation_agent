@@ -85,6 +85,7 @@ class AgentManifest(_Strict):
     confirmation_prompt_enabled: bool = True
     media: MediaTexts = Field(default_factory=MediaTexts)
     max_media_bytes: int = 25 * 1024 * 1024
+    split_replies: bool = False
     cancelled_after_effect_reply: str | None = None  # None: the framework default
     # Packs to install (input) and what was installed (provenance, set by the compiler). The
     # runtime never reads either: installation turns Pack content into ordinary definitions.
@@ -137,6 +138,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
     extra: dict[str, Any] = {}
     if manifest.human_request is not None:
         extra["human_request"] = manifest.human_request
+    if manifest.split_replies:
+        extra["split_replies"] = True
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply
     return AgentDefinition(

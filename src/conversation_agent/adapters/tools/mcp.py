@@ -588,6 +588,8 @@ class MCPToolProvider:
             "X-Invocation-Id": context.invocation_id,
             **(extra or {}),
         }
+        if connection.send_contact_id:
+            headers["X-Contact-Id"] = context.contact_id
         if session.session_id is not None:
             headers["Mcp-Session-Id"] = session.session_id
         if host_header is not None:

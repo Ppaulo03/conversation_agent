@@ -156,6 +156,8 @@ class HTTPToolProvider:
             "X-Trace-Id": context.trace_id,
             "X-Invocation-Id": context.invocation_id,
         }
+        if connection.send_contact_id:
+            headers["X-Contact-Id"] = context.contact_id
         if payload is not None:
             headers["Content-Type"] = "application/json"
         if host_header is not None:

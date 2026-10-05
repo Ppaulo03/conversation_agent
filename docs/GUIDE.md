@@ -146,11 +146,18 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | options that read well and pick more than one value | on a `choose` step: `label: "{court} - {start_at}"` (item fields; datetimes read as "ter 06/10 às 10:00") and `also: {court: court}` to fill other slots from the picked row |
 | a part of the day ("à noite") narrowing the options | an enum slot (`morning`/`afternoon`/`evening`/`night` as canonical values) + `period_slot:` on the choose step; `period_hours:` redefines the hours |
 | skip the question when one option is left | `auto_select_single: true` on the choose step |
+| a question with a trigger word must not start a flow | `start_on_questions: false` on the flow (the agent answers the question instead) |
+| a reply sent as several messages (answer, then the flow's question) | `split_replies: true` on the agent: one message per blank-line paragraph, at most 4 |
+| the contact's id in your API | `send_contact_id: true` on the CONNECTION (operator-side, off by default): sent as `X-Contact-Id` |
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
 
 Voice messages are transcribed when you pass a `Transcriber` (`transcriber=` to `Runtime.build`);
 images, video and documents are named to the agent, never described. Tools do not receive media yet.
+
+Two flows can never share a trigger phrase at the same priority (the compiler says `FLOW_TRIGGER_TIE`).
+If different phrases both match one message with equal priority and specificity ("cancelar minha
+reserva"), no flow starts and the runtime logs `flow trigger tie: a, b`; set `priority`.
 
 ## 7. When something does not work
 

@@ -190,3 +190,18 @@ async def test_204_no_content_is_a_known_success_not_an_unusable_response(api: A
     )
     assert result.status == "success" and result.data == {}
     assert api.state.bookings[created.json()["id"]]["state"] == "cancelled"
+
+
+async def test_the_contact_id_reaches_the_api_only_when_the_connection_opts_in(
+    api: ApiHandle,
+) -> None:  # personal data: off by default, turned on per connection by the operator
+    await provider_for(api.base_url).execute(availability_binding(), tool_args(), CONTEXT)
+    plain = api.availability_requests()[0]["headers"]
+    assert isinstance(plain, dict) and "x-contact-id" not in plain
+
+    opted = local_dev_connection(api.base_url).model_copy(update={"send_contact_id": True})
+    await HTTPToolProvider.static({CONNECTION: opted}).execute(
+        availability_binding(), tool_args(), CONTEXT
+    )
+    headers = api.availability_requests()[1]["headers"]
+    assert isinstance(headers, dict) and headers["x-contact-id"] == CONTEXT.contact_id

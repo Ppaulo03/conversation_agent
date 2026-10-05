@@ -220,3 +220,53 @@ def test_the_summary_of_a_proposal_reads_the_date_as_people_do() -> None:
         {"service_id": "haircut", "start_at": "2026-10-06T10:00:00-03:00", "duration_minutes": 30},
     )
     assert request.summary == "Agendar haircut em ter 06/10 às 10:00 (30 min)"
+
+
+# --- POC items 7, 8 and 6 ---
+
+
+def starts(definition: FlowDefinition, text: str) -> bool:
+    agent = build_agent(flows=True).model_copy(update={"flows": (definition,)})
+    return FlowRunner(agent)._trigger(text, None) is not None
+
+
+def test_a_trigger_word_in_a_question_starts_the_flow_unless_the_flow_opts_out() -> None:
+    assert starts(flow(), "quanto custa reservar uma quadra?")  # the old behaviour, unchanged
+    careful = flow().model_copy(update={"start_on_questions": False})
+    assert not starts(careful, "quanto custa reservar uma quadra?")  # the agent answers it
+    assert starts(careful, "quero reservar uma quadra")  # a request still starts it
+
+
+def test_two_flows_with_the_same_trigger_at_the_same_priority_do_not_compile() -> None:
+    from conversation_agent.core.compiler import check_agent
+
+    agent = build_agent(flows=True)
+    twin = SCHEDULING_FLOW.model_copy(update={"name": "twin"})
+    broken = agent.model_copy(update={"flows": (SCHEDULING_FLOW, twin)})
+    codes = [d.code for d in check_agent(broken)]
+    assert "FLOW_TRIGGER_TIE" in codes
+    fixed = broken.model_copy(
+        update={"flows": (SCHEDULING_FLOW, twin.model_copy(update={"priority": 1}))}
+    )
+    assert "FLOW_TRIGGER_TIE" not in [d.code for d in check_agent(fixed)]
+
+
+def test_a_tie_between_different_phrases_is_logged_not_silent(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    a = flow().model_copy(update={"name": "a", "triggers": ("cancelar",)})
+    b = flow().model_copy(update={"name": "b", "triggers": ("reserva",)})
+    agent = build_agent(flows=True).model_copy(update={"flows": (a, b)})
+    assert FlowRunner(agent)._trigger("cancelar minha reserva", None) is None
+    assert "flow trigger tie: a, b" in caplog.text
+
+
+def test_replies_split_into_paragraphs_only_up_to_a_limit() -> None:
+    from conversation_agent.engine.turn_coordinator import MAX_REPLY_PARTS, reply_parts
+
+    assert reply_parts("só uma linha\ncom quebra simples") == ["só uma linha\ncom quebra simples"]
+    assert reply_parts("resposta\n\nQual horário?") == ["resposta", "Qual horário?"]
+    many = "\n\n".join(f"p{i}" for i in range(7))
+    parts = reply_parts(many)
+    assert len(parts) == MAX_REPLY_PARTS and parts[-1] == "p3\n\np4\n\np5\n\np6"
+    assert reply_parts("   ") == ["   "]

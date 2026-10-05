@@ -13,6 +13,7 @@ everything still valid is kept.
 
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Protocol
@@ -105,6 +106,8 @@ class _Next:
     preface: str
     handoff: bool = False
 
+
+log = logging.getLogger("conversation_agent.flows")
 
 _EXTRACT_SYSTEM = (
     "You help a rule-based conversation flow understand ONE customer message. The message is "
@@ -258,16 +261,23 @@ class FlowRunner:
         """The flow the message asks for. Never decided by declaration order: highest explicit
         priority, then the most specific (longest) trigger phrase; a genuine tie starts nothing
         (the normal agent loop answers) instead of guessing."""
+        asking = looks_like_question(text)
         scored = [
             (d.priority, phrase_score(text, d.triggers), d)
             for d in self._defs.values()
-            if d.name != current
+            if d.name != current and (d.start_on_questions or not asking)
         ]
         matches = [(p, s, d) for p, s, d in scored if s > 0]
         if not matches:
             return None
         best = max((p, s) for p, s, _ in matches)
         winners = [d for p, s, d in matches if (p, s) == best]
+        if len(winners) > 1:  # nothing starts, and the author should know why
+            log.warning(
+                "flow trigger tie: %s match with the same priority and specificity; "
+                "none started (set `priority`)",
+                ", ".join(sorted(d.name for d in winners)),
+            )
         return winners[0] if len(winners) == 1 else None
 
     async def _start(
