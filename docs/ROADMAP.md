@@ -248,7 +248,8 @@ Do POC de agendamento de quadras (lista consolidada, abertos após a fase 13).
 
 ## Fase 15 — Mídia de ponta a ponta
 
-> 15a (transcriber real) e 15b (mídia como argumento de tool) implementadas; 15c (visão opcional) por vir.
+> 15a (transcriber real) e 15b (mídia como argumento de tool) implementadas. A visão opcional (antes 15c)
+> ficou como ideia futura: [`FUTURE_VISION.md`](./FUTURE_VISION.md).
 
 Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
 
@@ -260,6 +261,7 @@ Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e 
 
 ## Futuro (sem fase atribuída)
 
+- **Visão (imagens):** desenho em [`FUTURE_VISION.md`](./FUTURE_VISION.md). Hoje uma imagem é só nomeada ao agente.
 - **Grupos, menções e allowlist de contatos:** desenho em [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md); pedido ao
   gateway em [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md). Hoje grupos são ignorados.
 

@@ -2,6 +2,8 @@
 
 Arquivos:
 
+- [`FUTURE_VISION.md`](./FUTURE_VISION.md): visão (imagens) como evolução futura (FUTURO, não implementado).
+
 - [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md) e [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md): grupos, menções e allowlist de contatos (FUTURO, não implementado).
 
 - [`GUIDE.md`](./GUIDE.md): guia de uso (em inglês, como o README e o código): do manifest ao runtime, o que o canal precisa fornecer. Os demais documentos são de desenho e ficam em português.

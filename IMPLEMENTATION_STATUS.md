@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 15 — Mídia (15a transcriber e 15b mídia como argumento implementadas; 15c por vir). Fases 1–14.1 em `main`.
+**Fase atual:** 15 — Mídia (15a transcriber e 15b mídia como argumento implementadas; a visão virou ideia futura). Fases 1–14.1 em `main`.
 
 ## Phase 1
 
