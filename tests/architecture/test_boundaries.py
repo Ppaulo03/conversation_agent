@@ -113,7 +113,8 @@ def test_runtime_does_not_own_business_state() -> None:  # INV-008
 
 def test_outbound_delivery_only_from_outbox() -> None:  # INV-007 (structural half)
     """Only the OutboxWorker may depend on the MessageSender port; nothing else in the
-    framework can put bytes on a channel."""
+    framework can put bytes on a channel. The composition root (`app/runtime.py`) only NAMES the
+    type to hand the sender to that worker; it never calls it."""
     users = sorted(
         p.relative_to(SRC).as_posix()
         for p in SRC.rglob("*.py")
@@ -121,4 +122,5 @@ def test_outbound_delivery_only_from_outbox() -> None:  # INV-007 (structural ha
         and p.parent.name != "adapters"
         and "adapters" not in p.parts
     )
-    assert users == ["engine/outbox_worker.py"]
+    assert users == ["app/runtime.py", "engine/outbox_worker.py"]
+    assert ".send(" not in (SRC / "app" / "runtime.py").read_text(encoding="utf-8")
