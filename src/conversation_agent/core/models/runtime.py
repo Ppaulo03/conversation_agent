@@ -161,6 +161,10 @@ class OutboundMessage(_Frozen):
     reconcile_attempts: int = 0
     channel_message_id: str | None = None  # the GATEWAY's id for this send (not the provider's)
     trace_id: str | None = None  # correlation with the turn (and inbound event) that produced it
+    # Set by the reconciler when it authorises a resend: the instant after which the channel may
+    # have forgotten the idempotency key, so sending again could duplicate. The sender checks it
+    # at the moment of sending, not only when the authorisation was given.
+    resend_authorized_until: AwareDatetime | None = None
 
 
 class SendResult(_Frozen):

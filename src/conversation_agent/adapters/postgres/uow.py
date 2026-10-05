@@ -105,14 +105,26 @@ class _StateRepo(_Repo):
         )
 
     async def set_ownership(self, ownership: Ownership) -> None:
+        now = self._clock.now()
         await self._c.execute(
             "UPDATE conversation_states SET ownership=$3, updated_at=$4 "
             "WHERE tenant_id=$1 AND conversation_id=$2",
             self._f.tenant_id,
             self._f.conversation_id,
             ownership.value,
-            self._clock.now(),
+            now,
         )
+        if ownership is not Ownership.BOT:
+            # A person is (or is about to be) in the conversation: what the bot proposed BEFORE
+            # that is no longer something a later "yes" may authorise, even if the conversation
+            # comes back to the bot before the confirmation would have expired. Same transaction.
+            await self._c.execute(
+                "UPDATE pending_actions SET status='INVALIDATED', updated_at=$3 "
+                "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PENDING_CONFIRMATION'",
+                self._f.tenant_id,
+                self._f.conversation_id,
+                now,
+            )
 
     async def pin_agent(self, agent_id: str, version: str) -> None:
         await self._c.execute(

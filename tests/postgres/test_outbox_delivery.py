@@ -260,3 +260,46 @@ async def test_two_reconcilers_cannot_both_claim_the_same_row(
     first = await world.outbox.claim_unsettled("r1", 10, TTL, timedelta(0))
     second = await world.outbox.claim_unsettled("r2", 10, TTL, timedelta(0))
     assert len(first) == 1 and second == []  # the claim is exclusive
+
+
+async def test_a_resend_authorised_inside_the_window_is_not_sent_after_it_closes(
+    world: World, relay: RelayHandle
+) -> None:  # the authorisation has a deadline of its own; the sender checks it AT SEND TIME
+    await make_message(world)
+    relay.state.fault = {"status_after_effect": 503}  # taken by the gateway, answer lost
+    await send(world, relay)
+    assert len(relay.sent) == 1
+
+    relay.state.fault = None
+    await reconciler(world, relay).run_once()  # inside the window: the resend is authorised
+    stored = await row(world)
+    assert stored["status"] == OutboxStatus.PENDING
+    assert stored["resend_authorized_until"] is not None
+
+    # the sender was down; it comes back after the gateway may have forgotten the key
+    tick(world, relay, RELAY_RETENTION + timedelta(minutes=1))
+    requests_before = len(relay.state.requests)
+    assert await world.outbox_worker("late", sender=gateway(relay)).run_once() == 1
+    assert len(relay.state.requests) == requests_before  # ZERO calls on the wire
+    assert (await row(world))["status"] == OutboxStatus.UNKNOWN
+
+    await reconciler(world, relay).run_once()  # now it is past retention: no resend is safe
+    stored = await row(world)
+    assert (
+        stored["status"] == OutboxStatus.UNKNOWN
+        and stored["last_error"] == "UNPROVEN_PAST_RETENTION"
+    )
+    assert len(relay.sent) == 1  # one message, never two
+
+
+async def test_a_resend_authorised_inside_the_window_and_sent_inside_it_still_goes_out(
+    world: World, relay: RelayHandle
+) -> None:
+    await make_message(world)
+    relay.state.fault = {"status_after_effect": 503}
+    await send(world, relay)
+    relay.state.fault = None
+    await reconciler(world, relay).run_once()
+    tick(world, relay, timedelta(minutes=3))  # slow, but well inside the window
+    await send(world, relay, "s2")
+    assert (await row(world))["status"] == OutboxStatus.QUEUED and len(relay.sent) == 1

@@ -152,7 +152,15 @@ class TurnEngine:
         catalog = self._pipeline.exposed_tools(  # only what this tenant may actually call
             PolicyContext(tenant_id=identity.tenant_id, ownership=Ownership.BOT, now=reference_time)
         )
-        if pending is not None and self._confirmation is not None:
+        human = self._agent.human_request
+        asks_for_a_person = (
+            human is not None
+            and human.available
+            and matches_request(user_text, human.triggers, human.max_words)
+        )
+        # Asking for a person comes BEFORE an open confirmation: it is never read as an answer to
+        # it, and the handoff invalidates the pending action (INV-060).
+        if pending is not None and self._confirmation is not None and not asks_for_a_person:
             staged = await self._confirmation.run(
                 cursor,
                 StageInput(

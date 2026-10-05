@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 from typing import Protocol
 
 from conversation_agent.core.models.runtime import OutboundMessage, SendResult
@@ -47,6 +47,7 @@ class OutboxStore(Protocol):
         resend: bool,
         retry_after: timedelta,
         note: str | None = None,
+        resend_until: datetime | None = None,
     ) -> None:
         """`found`: the channel knows the message (record its state). `resend`: the channel
         proved it never received it and the idempotency window is open (-> PENDING, same key).

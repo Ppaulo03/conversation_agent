@@ -88,8 +88,17 @@ class OutboxReconciler:
                 else timedelta(0)
             )
             if age <= self._policy.safe_resend_until:
+                now = await self._coordination.now()
+                # the authorisation expires when the channel may forget the key, not when a worker
+                # gets around to it
+                until = (message.first_sent_at or now) + self._policy.safe_resend_until
                 await self._outbox.record_reconciliation(
-                    message, self._owner, found=None, resend=True, retry_after=self._retry_after
+                    message,
+                    self._owner,
+                    found=None,
+                    resend=True,
+                    retry_after=self._retry_after,
+                    resend_until=until,
                 )
                 return
             log.error(

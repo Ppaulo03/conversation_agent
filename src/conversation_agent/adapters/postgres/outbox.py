@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import datetime, timedelta
 
 from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
@@ -149,6 +149,7 @@ class PostgresOutboxStore:
         resend: bool,
         retry_after: timedelta,
         note: str | None = None,
+        resend_until: datetime | None = None,
     ) -> None:
         now = await self._time.now()
         if found is not None:
@@ -175,7 +176,8 @@ class PostgresOutboxStore:
                    channel_message_id = COALESCE($10, channel_message_id),
                    available_at = $7, claim_owner = NULL, claim_expires_at = NULL,
                    reconcile_attempts = reconcile_attempts + 1,
-                   last_error = COALESCE($8, last_error), updated_at = $9
+                   last_error = COALESCE($8, last_error), updated_at = $9,
+                   resend_authorized_until = COALESCE($11, resend_authorized_until)
              WHERE tenant_id = $1 AND outbox_id = $2 AND status = 'RECONCILING'
                AND claim_owner = $3
             """,
@@ -189,6 +191,7 @@ class PostgresOutboxStore:
             note,
             now,
             found.channel_message_id if found is not None else None,
+            resend_until if resend else None,
         )
 
     async def apply_channel_status(

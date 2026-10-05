@@ -96,11 +96,13 @@ class OutboxWorker:
         await self._outbox.record_result(message, self._owner, result, self._retry_after)
 
     async def _past_the_horizon(self, message: OutboundMessage) -> bool:
+        if message.resend_authorized_until is not None and self._coordination is not None:
+            # The reconciler proved the channel had no such message, and allowed a resend UNTIL a
+            # deadline. That was then; a worker that wakes up after it must not send (INV-021).
+            return (await self._coordination.now()) > message.resend_authorized_until
         if self._horizon is None or self._coordination is None:
             return False
         if message.attempts <= 1 or message.first_sent_at is None:
             return False  # the first send is always allowed
-        if message.reconcile_attempts > 0:
-            return False  # the reconciler proved the channel has no such message (window open)
         age = (await self._coordination.now()) - message.first_sent_at
         return age > self._horizon
