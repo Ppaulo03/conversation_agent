@@ -15,7 +15,6 @@ from dataclasses import dataclass
 
 import httpx
 
-from conversation_agent.adapters.llm.anthropic import AnthropicLLM
 from conversation_agent.adapters.llm.openai_compat import (
     GROQ_BASE_URL,
     GROQ_DEFAULT_MODEL,
@@ -80,6 +79,8 @@ class LLMConfig:
 
 def build_llm(config: LLMConfig) -> LLMProvider:
     if config.provider == "anthropic":
+        from conversation_agent.adapters.llm.anthropic import AnthropicLLM  # extra `anthropic`
+
         return AnthropicLLM.from_api_key(config.api_key, config.model)
     base_url = {"groq": GROQ_BASE_URL, "openai": OPENAI_BASE_URL}.get(config.provider)
     base_url = base_url or config.base_url
@@ -91,5 +92,6 @@ def build_llm(config: LLMConfig) -> LLMProvider:
 
 async def close_llm(llm: LLMProvider) -> None:
     """Releases HTTP clients held by real adapters (no-op for fakes)."""
-    if isinstance(llm, OpenAICompatLLM | AnthropicLLM):
-        await llm.aclose()
+    close = getattr(llm, "aclose", None)  # real adapters hold an HTTP client; fakes do not
+    if close is not None:
+        await close()

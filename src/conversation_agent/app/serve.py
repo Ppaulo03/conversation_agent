@@ -23,14 +23,12 @@ from collections.abc import Callable, Sequence
 from typing import NamedTuple
 
 from conversation_agent.adapters.clock import SystemClock
-from conversation_agent.adapters.manifest.pack_loader import DirectoryPackLoader
-from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.senders.console import ConsoleChannel
-from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.app.llm_factory import LLMConfig, build_llm, close_llm
 from conversation_agent.app.runtime import Runtime
-from conversation_agent.core.compiler import CompiledAgent, CompileError, compile_manifest
+from conversation_agent.app.wiring import load_agent, local_http_provider
+from conversation_agent.core.compiler import CompileError
 from conversation_agent.core.errors import ConversationAgentError, DefinitionError
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.ports.clock import Clock
@@ -84,17 +82,6 @@ def parse_args(argv: Sequence[str]) -> Args:
     )
 
 
-def load_agent(manifest: str, packs_dir: str | None) -> CompiledAgent:
-    raw = load_manifest_file(manifest)
-    catalog = None
-    if packs_dir is not None:
-        declared = raw.get("packs")
-        catalog = DirectoryPackLoader(packs_dir).catalog_for(
-            declared if isinstance(declared, list) else []
-        )
-    return compile_manifest(raw, catalog)
-
-
 async def converse(
     runtime: Runtime,
     channel: ConsoleChannel,
@@ -134,9 +121,7 @@ async def run(
 ) -> int:
     compiled = load_agent(args.manifest, args.packs_dir)
     clock = clock or SystemClock(compiled.agent.timezone)  # the channel and the agent share "now"
-    http = HTTPToolProvider.static(
-        {name: local_dev_connection(url, name) for name, url in args.connections.items()}
-    )
+    http = local_http_provider(args.connections)
     identity = ConversationIdentity(
         tenant_id=args.tenant,
         channel_id="console",

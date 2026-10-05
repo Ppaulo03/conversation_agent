@@ -6,11 +6,15 @@
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from conversation_agent.adapters.llm.metrics import Histogram, InMemoryLLMMetrics
 from conversation_agent.adapters.observability.runtime_metrics import InMemoryRuntimeMetrics
-from conversation_agent.adapters.postgres.health import HealthSnapshot
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 from conversation_agent.core.llm_budget import BudgetStatus
+
+if TYPE_CHECKING:  # a type only: rendering SLO artifacts must not need the postgres extra
+    from conversation_agent.adapters.postgres.health import HealthSnapshot
 
 PREFIX = "conversation_agent_"
 

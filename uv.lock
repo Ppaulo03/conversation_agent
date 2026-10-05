@@ -191,16 +191,27 @@ name = "conversation-agent"
 version = "0.1.0"
 source = { editable = "." }
 dependencies = [
-    { name = "anthropic" },
-    { name = "asyncpg" },
     { name = "httpx" },
     { name = "pydantic" },
     { name = "pyyaml" },
     { name = "tzdata" },
 ]
 
+[package.optional-dependencies]
+all = [
+    { name = "anthropic" },
+    { name = "asyncpg" },
+]
+anthropic = [
+    { name = "anthropic" },
+]
+postgres = [
+    { name = "asyncpg" },
+]
+
 [package.dev-dependencies]
 dev = [
+    { name = "conversation-agent", extra = ["all"] },
     { name = "fastapi" },
     { name = "import-linter" },
     { name = "mypy" },
@@ -213,16 +224,20 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "anthropic", specifier = ">=0.40" },
-    { name = "asyncpg", specifier = ">=0.30" },
+    { name = "anthropic", marker = "extra == 'anthropic'", specifier = ">=0.40" },
+    { name = "asyncpg", marker = "extra == 'postgres'", specifier = ">=0.30" },
+    { name = "conversation-agent", extras = ["anthropic"], marker = "extra == 'all'" },
+    { name = "conversation-agent", extras = ["postgres"], marker = "extra == 'all'" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "pydantic", specifier = ">=2.7" },
     { name = "pyyaml", specifier = ">=6.0.3" },
     { name = "tzdata", specifier = ">=2024.1" },
 ]
+provides-extras = ["postgres", "anthropic", "all"]
 
 [package.metadata.requires-dev]
 dev = [
+    { name = "conversation-agent", extras = ["all"] },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "import-linter", specifier = ">=2.0" },
     { name = "mypy", specifier = ">=1.11" },

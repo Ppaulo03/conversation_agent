@@ -7,7 +7,12 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-import anthropic
+try:
+    import anthropic
+except ModuleNotFoundError as exc:  # pragma: no cover - exercised in a subprocess
+    raise ImportError(
+        'the Anthropic adapter needs its SDK: pip install "conversation-agent[anthropic]"'
+    ) from exc
 
 from conversation_agent.core.errors import LLMProviderError
 from conversation_agent.core.models.llm import (
