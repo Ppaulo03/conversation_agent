@@ -175,8 +175,14 @@ reserva"), no flow starts and the runtime logs `flow trigger tie: a, b`; set `pr
 | a tool call is refused | the capability is not in `allowed_capabilities`, or the connection id has no provider |
 | the agent says it cannot see an image | by design: media is only named, not read |
 
+**Secrets you must provide.** `PSEUDONYM_KEY` (>= 32 random bytes; `app.wiring.configure_pseudonyms_from_env`
+or `core.models.audit.configure_pseudonym_key`) keys the references written by erasure and ownership
+audit. Without it they refuse to produce one. Rotating it changes every reference from then on: keep the
+old key if you must prove an earlier erasure.
+
 ## 8. Operating it
 
 `app.migrate` (schema), `app.ops check|render` (SLOs, alerts, dashboard), `app.integrity`,
 `app.usage` (LLM cost and budgets) and the runbook in [`OPERATIONS.md`](./OPERATIONS.md). Release
-and rollback of agent versions are described there too.
+and rollback of agent versions are described there too. Before a production pilot, validate the
+RelayPlane contract against the deployed gateway and keep the evidence: [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md).

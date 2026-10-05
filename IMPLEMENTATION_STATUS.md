@@ -914,3 +914,17 @@ Correção: com várias correspondências o Flow mostra exatamente essas linhas,
 
 Itens 2 e 3 da lista do POC: o 2 já está resolvido (o nome mais longo vence, INV-055; não há aviso de compilação porque deixou de ser ambíguo); o 3 já tem `FLOW_TRIGGER_TIE` para frases idênticas e log para o empate em tempo de execução; um aviso estático para frases DIFERENTES não é possível sem ruído (qualquer par de Flows pode se cruzar em alguma mensagem).
 
+## Auditoria externa (pós-fase 14): achados fechados
+
+Um audit externo apontou cinco riscos; os quatro de código foram reproduzidos e corrigidos (o quinto é uma execução do operador).
+
+| # | Achado | Correção | Prova |
+|---|---|---|---|
+| 1 (P0) | A autorização de reenvio do reconciliador sobrevivia à janela de idempotência do gateway (`reconcile_attempts > 0` liberava para sempre) | `resend_authorized_until` (migração 0022), gravado pelo reconciliador (primeiro envio + janela segura) e conferido pelo sender no momento do envio; passado o prazo: zero chamadas de rede, volta a UNKNOWN (INV-061) | `test_a_resend_authorised_inside_the_window_is_not_sent_after_it_closes` |
+| 2 (P0/P1) | Handoff não invalidava a `PendingAction` e a confirmação vinha antes do pedido de humano | `set_ownership` != BOT invalida a ação pendente na mesma transação; pedir pessoa (disponível) tem precedência sobre a confirmação (INV-060). Antes era débito "expira pelo TTL" | `tests/postgres/test_handoff_invalidates_pending.py` (falha sem a correção) |
+| 3 (P1) | `subject_ref` era SHA-256 simples: telefone/CPF enumeráveis offline | HMAC-SHA256 com chave por deployment (derivada por tenant); sem chave não gera referência; referência de log separada e independente da chave (INV-063). Sem produção, sem compatibilidade: substituiu a função | `tests/engine/test_pseudonyms.py` |
+| 4 (P1) | `HTTPRequestSpec.path` aceitava `/../admin` etc. (escapava do base path) | `core/http_path.py`: uma regra no compilador/definição e no adapter (INV-062) | `tests/contracts/test_http_path.py` |
+| 5 | Contrato real do RelayPlane nunca executado | Execução do operador: roteiro e tabela de evidência em `docs/RELEASE_EVIDENCE.md` | pendente (você) |
+
+Notas: o valor de path param vindo do LLM já era restrito; o achado 4 era do `path` escrito pelo autor do agente. Os débitos operacionais do audit (STT real, exporter OTel, métricas distribuídas, auditoria de ownership atômica, media fetch com GuardedTransport, orçamento rígido de LLM) seguem listados como débitos conhecidos.
+
