@@ -9,6 +9,7 @@ from conversation_agent.core.models.journal import JournalStepType
 from conversation_agent.core.models.llm import LLMRequest
 from conversation_agent.core.models.media import MediaReference
 from support.builders import IDENTITY, new_clock, new_journal
+from vertical_slice.definitions import build_agent
 from vertical_slice.wiring import build_engine
 
 
@@ -23,6 +24,7 @@ def engine_with(llm: FakeLLM, transcriber: FakeTranscriber | None, journal=None)
         journal=journal or new_journal(),
         clock=new_clock(),
         transcriber=transcriber,
+        agent=build_agent(transcription="on"),  # voice is only transcribed when the agent says so
     )
     return engine
 

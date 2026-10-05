@@ -7,7 +7,7 @@ Loading never executes anything: parsing a manifest builds definitions, nothing 
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -86,6 +86,7 @@ class AgentManifest(_Strict):
     media: MediaTexts = Field(default_factory=MediaTexts)
     max_media_bytes: int = 25 * 1024 * 1024
     split_replies: bool = False
+    transcription: Literal["off", "on"] = "off"
     cancelled_after_effect_reply: str | None = None  # None: the framework default
     # Packs to install (input) and what was installed (provenance, set by the compiler). The
     # runtime never reads either: installation turns Pack content into ordinary definitions.
@@ -140,6 +141,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         extra["human_request"] = manifest.human_request
     if manifest.split_replies:
         extra["split_replies"] = True
+    if manifest.transcription != "off":
+        extra["transcription"] = manifest.transcription
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply
     return AgentDefinition(

@@ -20,6 +20,8 @@ LIGHT = [
     "conversation_agent.adapters.llm.openai_compat",
     "conversation_agent.adapters.tools.http",
     "conversation_agent.adapters.senders.console",
+    "conversation_agent.adapters.transcribers.openai_compat",  # speech-to-text over plain httpx
+    "conversation_agent.app.stt_factory",
     "conversation_agent.adapters.manifest.yaml_loader",
     "conversation_agent.app.llm_factory",
     "conversation_agent.app.compile",

@@ -7,6 +7,10 @@
 # or just "<model>". Several entries per model let a price change take effect on its date without
 # re-pricing history. `cache_read_per_mtok` / `cache_write_per_mtok` default to the input price.
 #
+# Speech-to-text models are priced per MINUTE of audio (`audio_per_minute`); audio with no audio
+# price is reported as unpriced, never as free. The key is the provider and model as configured
+# (STT_PROVIDER / STT_MODEL), e.g. `groq/whisper-large-v3-turbo`.
+#
 # Example (replace with real values):
 #   anthropic/example-model:
 #     - effective_from: 2026-01-01
@@ -15,3 +19,9 @@
 #       cache_read_per_mtok: 0.0
 currency: USD
 models: {}
+# Example for a speech-to-text model (take the figure from the provider's price page):
+#   groq/whisper-large-v3-turbo:
+#     - effective_from: 2026-01-01
+#       input_per_mtok: 0
+#       output_per_mtok: 0
+#       audio_per_minute: 0.0   # replace

@@ -293,3 +293,51 @@ async def test_the_compare_cli_exits_one_when_the_candidate_is_worse(
     assert await cli(*window, "--compare", "1.0.0,1.0.0", "--prices", str(prices)) == 0
     assert "no regression found" in capsys.readouterr().out
     assert await cli(*window, "--compare", "1.0.0") == 2  # needs STABLE,CANDIDATE
+
+
+async def test_the_durable_ledger_keeps_the_seconds_of_audio_and_prices_the_minutes(
+    db: PostgresDatabase,
+) -> None:
+    from datetime import UTC, date, datetime
+
+    from conversation_agent.core.llm_prices import ModelPrice
+    from conversation_agent.core.models.llm_usage import LLMCallRecord
+
+    store = PostgresLLMUsageStore(db)
+    at = datetime(2026, 10, 5, 12, 0, tzinfo=UTC)
+    for seconds in (30, 90):
+        await store.record(
+            LLMCallRecord(
+                tenant_id="t1",
+                started_at=at,
+                purpose="transcription",
+                provider="groq",
+                model="whisper-large-v3-turbo",
+                audio_seconds=seconds,
+            )
+        )
+    prices = PriceTable(
+        models={
+            "groq/whisper-large-v3-turbo": (
+                ModelPrice(
+                    effective_from=date(2026, 1, 1),
+                    input_per_mtok=0,
+                    output_per_mtok=0,
+                    audio_per_minute=0.0006,
+                ),
+            )
+        }
+    )
+    (row,) = await store.report(
+        UsageQuery(
+            tenant_id="t1",
+            since=datetime(2026, 10, 1, tzinfo=UTC),
+            until=datetime(2026, 11, 1, tzinfo=UTC),
+            group_by=("purpose",),
+        ),
+        prices,
+    )
+    assert row.audio_seconds == 120 and row.calls == 2
+    assert row.cost_usd == pytest.approx(0.0012) and row.unpriced_calls == 0
+    with pytest.raises(asyncpg.PostgresError):  # a negative duration is refused by the database too
+        await db.pool.execute("UPDATE llm_usage SET audio_seconds = -1")  # (append-only anyway)

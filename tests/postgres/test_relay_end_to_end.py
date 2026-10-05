@@ -27,6 +27,7 @@ from conversation_agent.core.models.connections import ResolvedConnection
 from conversation_agent.ports.subscriptions import Subscription
 from postgres.world import World
 from relayplane_sim.main import envelope, message_received, webhook_headers
+from vertical_slice.definitions import build_agent
 
 SECRET = "whsec_e2e"
 SUB = Subscription(subscription_id="s1", tenant_id="tenant-1", secret_ref="wh")
@@ -78,7 +79,9 @@ async def test_a_voice_note_goes_in_one_end_and_the_answer_comes_out_the_other(
 
     transcriber = FakeTranscriber({"voz-1": "queria saber se vocês abrem sábado"})
     llm = FakeLLM([text_response("Abrimos de segunda a sexta.")])
-    run = await world.coordinator("w", llm, transcriber=transcriber).run_once()
+    run = await world.coordinator(
+        "w", llm, transcriber=transcriber, agent=build_agent(transcription="on")
+    ).run_once()
     assert [r.status for r in run] == ["done"]
     seen = "".join(p.text for p in llm.requests[0].messages[-1].parts if hasattr(p, "text"))
     assert seen == "[voice message] queria saber se vocês abrem sábado"

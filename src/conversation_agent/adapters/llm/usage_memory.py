@@ -55,6 +55,7 @@ class InMemoryLLMUsageStore:
                     "cache_read_tokens",
                     "cache_write_tokens",
                     "reasoning_tokens",
+                    "audio_seconds",
                 )
             }
             at = calls[0].started_at.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -67,6 +68,7 @@ class InMemoryLLMUsageStore:
                 output_tokens=totals["output_tokens"],
                 cache_read_tokens=totals["cache_read_tokens"],
                 cache_write_tokens=totals["cache_write_tokens"],
+                audio_seconds=totals["audio_seconds"],
             )
             latencies = [c.latency_ms for c in calls]
             rows.append(

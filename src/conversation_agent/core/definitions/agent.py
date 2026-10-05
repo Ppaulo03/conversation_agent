@@ -5,7 +5,7 @@ No Pack and no YAML/DSL: those arrive only after this model is proven.
 
 from __future__ import annotations
 
-from typing import get_args, get_origin
+from typing import Literal, get_args, get_origin
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from pydantic import BaseModel, ConfigDict, model_validator
@@ -76,6 +76,9 @@ class MediaTexts(BaseModel):
 
     audio: str = "[voice message] {text}"
     audio_failed: str = "[voice message that could not be transcribed]"
+    # Said when this agent does not transcribe (`transcription: off`, the default): the audio is
+    # named, never sent anywhere, never pretended to have been heard.
+    audio_disabled: str = "[voice message received; this assistant does not process voice messages]"
     image: str = "[image received]"
     video: str = "[video received]"
     document: str = "[document received: {name}]"
@@ -114,6 +117,9 @@ class AgentDefinition(BaseModel):
     # True: a reply with blank-line separated paragraphs goes out as one message per paragraph
     # (at most MAX_REPLY_PARTS), e.g. an answer and then the flow's question as its own message.
     split_replies: bool = False
+    # Voice messages leave the system only when BOTH the operator configured a transcriber (it may
+    # be a third-party API) AND the agent says `on`. The default is off: audio is personal data.
+    transcription: Literal["off", "on"] = "off"
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
@@ -157,7 +163,15 @@ class AgentDefinition(BaseModel):
         m = self.media
         check_template("media.audio", m.audio, {"text"}, required=frozenset({"text"}))
         check_template("media.document", m.document, {"name"})
-        for label in ("audio_failed", "image", "video", "too_large", "unsupported", "unavailable"):
+        for label in (
+            "audio_failed",
+            "audio_disabled",
+            "image",
+            "video",
+            "too_large",
+            "unsupported",
+            "unavailable",
+        ):
             check_template(f"media.{label}", getattr(m, label), set())
         check_template("confirmation.prompt", c.prompt, {"summary"}, required=summary)
         check_template("confirmation.reprompt", c.reprompt, {"summary"}, required=summary)

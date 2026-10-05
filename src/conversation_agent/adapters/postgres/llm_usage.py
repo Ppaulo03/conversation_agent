@@ -28,8 +28,8 @@ class PostgresLLMUsageStore:
             "INSERT INTO llm_usage (tenant_id, started_at, purpose, agent_id, agent_version, "
             "conversation_ref, turn_id, trace_id, request_id, provider, model, input_tokens, "
             "output_tokens, cache_read_tokens, cache_write_tokens, reasoning_tokens, latency_ms, "
-            "outcome, error_code, stop_reason) VALUES "
-            "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
+            "outcome, error_code, stop_reason, audio_seconds) VALUES "
+            "($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)",
             call.tenant_id,
             call.started_at,
             call.purpose,
@@ -50,6 +50,7 @@ class PostgresLLMUsageStore:
             call.outcome,
             call.error_code,
             call.stop_reason,
+            call.audio_seconds,
         )
 
     async def report(self, query: UsageQuery, prices: PriceTable) -> list[UsageRow]:
@@ -67,6 +68,7 @@ class PostgresLLMUsageStore:
             "sum(cache_read_tokens)::bigint AS cache_read_tokens, "
             "sum(cache_write_tokens)::bigint AS cache_write_tokens, "
             "sum(reasoning_tokens)::bigint AS reasoning_tokens, "
+            "sum(audio_seconds)::float8 AS audio_seconds, "
             "(percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms))::float8 AS p50, "
             "(percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms))::float8 AS p95 "
             "FROM llm_usage WHERE tenant_id = $1 AND started_at >= $2 AND started_at < $3 "
@@ -97,6 +99,7 @@ class PostgresLLMUsageStore:
             output_tokens=int(row["output_tokens"]),
             cache_read_tokens=int(row["cache_read_tokens"]),
             cache_write_tokens=int(row["cache_write_tokens"]),
+            audio_seconds=float(row["audio_seconds"] or 0),
         )
         return UsageRow(
             keys={k: row[f"k_{k}"] for k in keys},
@@ -109,6 +112,7 @@ class PostgresLLMUsageStore:
             cache_read_tokens=int(row["cache_read_tokens"]),
             cache_write_tokens=int(row["cache_write_tokens"]),
             reasoning_tokens=int(row["reasoning_tokens"]),
+            audio_seconds=float(row["audio_seconds"] or 0),
             latency_p50_ms=float(row["p50"] or 0),
             latency_p95_ms=float(row["p95"] or 0),
             cost_usd=cost or 0.0,

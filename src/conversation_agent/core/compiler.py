@@ -228,6 +228,13 @@ def _capability_document(c: CapabilityDefinition) -> dict[str, Any]:
     return document
 
 
+def _media_document(agent: AgentDefinition) -> dict[str, Any]:
+    document = agent.media.model_dump(mode="json")
+    if document.get("audio_disabled") == type(agent.media).model_fields["audio_disabled"].default:
+        document.pop("audio_disabled")  # untouched wording: the digest agents had before it existed
+    return document
+
+
 def _confirmation_document(agent: AgentDefinition) -> dict[str, Any]:
     document = agent.confirmation.model_dump(mode="json")
     if document.get("reprompt_unproven") is None:  # only agents that set it carry it: the others
@@ -268,11 +275,13 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "max_flow_depth": agent.max_flow_depth,
         "confirmation": _confirmation_document(agent),
         "confirmation_prompt_enabled": agent.confirmation_prompt_enabled,
-        "media": agent.media.model_dump(mode="json"),
+        "media": _media_document(agent),
         "max_media_bytes": agent.max_media_bytes,
     }
     if agent.split_replies:  # only agents that use it carry it (digests stay stable)
         document["split_replies"] = True
+    if agent.transcription != "off":
+        document["transcription"] = agent.transcription
     if agent.human_request is not None:  # only agents that use it carry it (digests stay stable)
         document["human_request"] = agent.human_request.model_dump(mode="json")
     return document

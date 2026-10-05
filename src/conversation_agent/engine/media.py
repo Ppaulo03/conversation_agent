@@ -42,8 +42,10 @@ class MediaNormalizer:
 
     async def _audio(self, item: MediaReference, context: TranscriptionContext) -> str:
         texts = self._agent.media
+        if self._agent.transcription != "on":
+            return texts.audio_disabled  # the audio goes nowhere: this agent did not ask for it
         if self._transcriber is None:
-            return texts.audio_failed
+            return texts.audio_failed  # asked for, but the operator configured no transcriber
         try:
             transcript = await self._transcriber.transcribe(item, context)
         except Exception:  # a failed transcription must never fail the turn

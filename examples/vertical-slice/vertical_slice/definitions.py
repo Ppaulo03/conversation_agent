@@ -374,7 +374,7 @@ SCHEDULING_FLOW = FlowDefinition(
 )
 
 
-def build_agent(*, flows: bool = False) -> AgentDefinition:
+def build_agent(*, flows: bool = False, transcription: str = "off") -> AgentDefinition:
     return AgentDefinition(
         agent_id="scheduling-demo",
         version="0.1.0",
@@ -385,6 +385,7 @@ def build_agent(*, flows: bool = False) -> AgentDefinition:
         bindings=(AVAILABILITY_BINDING, CREATE_BINDING, LOOKUP_BINDING),
         allowed_capabilities=frozenset({"scheduling.availability", "scheduling.create"}),
         flows=(SCHEDULING_FLOW,) if flows else (),
+        transcription=transcription,
         fallback_reply="Desculpe, não consegui concluir agora. Pode tentar novamente?",
         confirmation=ConfirmationTexts(
             prompt="Posso confirmar? {summary}. Responda SIM para confirmar ou NÃO para cancelar.",

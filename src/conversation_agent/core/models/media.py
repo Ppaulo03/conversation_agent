@@ -39,6 +39,7 @@ class Transcript(BaseModel):
     text: str
     language: str | None = None
     confidence: float | None = Field(default=None, ge=0, le=1)
+    duration_seconds: float | None = Field(default=None, ge=0)  # as the provider measured it
 
 
 class TranscriptionContext(BaseModel):

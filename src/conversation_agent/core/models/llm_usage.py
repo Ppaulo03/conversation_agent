@@ -36,6 +36,7 @@ class LLMCallRecord(BaseModel):
     cache_read_tokens: int = Field(default=0, ge=0)
     cache_write_tokens: int = Field(default=0, ge=0)
     reasoning_tokens: int = Field(default=0, ge=0)
+    audio_seconds: float = Field(default=0.0, ge=0)  # speech-to-text: audio minutes are the unit
     latency_ms: float = Field(default=0.0, ge=0)
     outcome: Literal["ok", "error"] = "ok"
     error_code: str | None = None  # the exception type, never its message
@@ -68,6 +69,7 @@ class UsageRow(BaseModel):
     cache_read_tokens: int = 0
     cache_write_tokens: int = 0
     reasoning_tokens: int = 0
+    audio_seconds: float = 0.0
     latency_p50_ms: float = 0.0
     latency_p95_ms: float = 0.0
     # The PRICED part only: `unpriced_calls > 0` means the true cost is higher (a lower bound).

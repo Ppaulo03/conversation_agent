@@ -27,6 +27,9 @@ class ModelPrice(BaseModel):
     # Unset: a cache read costs the input price, a cache write too (no discount assumed).
     cache_read_per_mtok: float | None = Field(default=None, ge=0)
     cache_write_per_mtok: float | None = Field(default=None, ge=0)
+    # Speech-to-text models are priced per minute of audio. Unset: audio is NOT priced (a call with
+    # audio and no audio price is reported as unpriced, never as free).
+    audio_per_minute: float | None = Field(default=None, ge=0)
 
 
 class PriceTable(BaseModel):
@@ -66,11 +69,18 @@ def cost_of(
     output_tokens: int,
     cache_read_tokens: int = 0,
     cache_write_tokens: int = 0,
+    audio_seconds: float = 0.0,
 ) -> float | None:
-    """Estimated cost, or None when the model has no price on that date."""
+    """Estimated cost, or None when the model has no price on that date (or has audio and no
+    audio price)."""
     price = prices.price_for(provider, model, at)
     if price is None:
         return None
+    audio = 0.0
+    if audio_seconds > 0:
+        if price.audio_per_minute is None:
+            return None
+        audio = audio_seconds / 60 * price.audio_per_minute
     read = price.input_per_mtok if price.cache_read_per_mtok is None else price.cache_read_per_mtok
     write = (
         price.input_per_mtok if price.cache_write_per_mtok is None else price.cache_write_per_mtok
@@ -80,7 +90,7 @@ def cost_of(
         + output_tokens * price.output_per_mtok
         + cache_read_tokens * read
         + cache_write_tokens * write
-    ) / 1_000_000
+    ) / 1_000_000 + audio
 
 
 def cost_of_record(prices: PriceTable, record: LLMCallRecord) -> float | None:
@@ -93,6 +103,7 @@ def cost_of_record(prices: PriceTable, record: LLMCallRecord) -> float | None:
         output_tokens=record.output_tokens,
         cache_read_tokens=record.cache_read_tokens,
         cache_write_tokens=record.cache_write_tokens,
+        audio_seconds=record.audio_seconds,
     )
 
 
@@ -124,6 +135,7 @@ def rollup(rows: list[UsageRow], group_by: tuple[str, ...]) -> list[UsageRow]:
                 "cache_read_tokens": into.cache_read_tokens + row.cache_read_tokens,
                 "cache_write_tokens": into.cache_write_tokens + row.cache_write_tokens,
                 "reasoning_tokens": into.reasoning_tokens + row.reasoning_tokens,
+                "audio_seconds": into.audio_seconds + row.audio_seconds,
                 "latency_p50_ms": max(into.latency_p50_ms, row.latency_p50_ms),
                 "latency_p95_ms": max(into.latency_p95_ms, row.latency_p95_ms),
                 "cost_usd": into.cost_usd + row.cost_usd,
