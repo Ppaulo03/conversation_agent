@@ -4,7 +4,21 @@ Framework for stateful conversational agents. **It owns conversational state, no
 state.** Architecture lives in [`docs/`](docs/README.md); implementation progress in
 [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
-## Setup
+## Install
+
+The base install is light (pydantic, httpx, pyyaml): compile manifests, run evals, build an
+in-memory engine. Add what you use:
+
+```bash
+pip install "conversation-agent[postgres]"   # durable runtime: Runtime, serve, migrate, ops (asyncpg)
+pip install "conversation-agent[anthropic]"  # the Anthropic provider (Groq/OpenAI-compatible need nothing)
+pip install "conversation-agent[all]"
+```
+
+Composition helpers that need no extra: `conversation_agent.app.wiring` (`load_agent`,
+`local_http_provider`, `build_memory_engine`). A missing extra is reported with the extra's name.
+
+## Setup (development)
 
 ```bash
 uv sync

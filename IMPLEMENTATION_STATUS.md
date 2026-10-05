@@ -805,7 +805,7 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 
 ## Phase 13 — Uso real (em andamento)
 
-Status: **parcial**. Pronto: o runtime durável montado em um lugar só (`serve`). Falta (ver ROADMAP): pacote instalável do wiring, extras de dependências, guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
+Status: **parcial**. Pronto: o runtime durável montado em um lugar só (`serve`). Pronto também: wiring genérico no pacote e extras de dependências. Falta (ver ROADMAP): guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
 
 | Item | Entrega | Prova |
 |---|---|---|
@@ -820,4 +820,14 @@ Achados corrigidos no caminho:
 Decisões: o teste de arquitetura de INV-007 passou a aceitar `app/runtime.py` (só nomeia o tipo para entregar o sender ao OutboxWorker; nunca chama `send`). Os testes de confiabilidade seguem usando `tests/postgres/world.py` (relógios fixos); migrá-los para o `Runtime` fica como débito.
 
 Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem); não há entrypoint de produção com webhook.
+
+### Pacote instalável e extras (Fase 13, passo 2)
+
+| Item | Entrega | Prova |
+|---|---|---|
+| Wiring no wheel | `app/wiring.py`: `load_agent`, `local_http_provider`, `build_memory_engine` (sem exemplos, sem extras). `vertical_slice` segue sendo exemplo (domínio de agendamento, que o framework não pode conter: INV-008) | `tests/packaging/test_wiring.py` |
+| Extras | base = pydantic, httpx, pyyaml, tzdata; `[postgres]` = asyncpg; `[anthropic]` = anthropic; `[all]`. `adapters/postgres` e o adapter Anthropic dizem qual extra falta | `tests/packaging/test_extras.py` (subprocesso com os pacotes bloqueados) |
+| `ops check` sem banco | `prometheus.py` só tipa `HealthSnapshot` (TYPE_CHECKING): gerar/validar SLOs roda no CI sem asyncpg | idem |
+
+Decisão: `close_llm` fecha qualquer provider com `aclose` (não precisa mais importar o SDK da Anthropic). O grupo `dev` instala `[all]`.
 
