@@ -23,6 +23,9 @@ from conversation_agent.ports.sender import MessageSender
 log = logging.getLogger(__name__)
 
 
+MAX_PASSES = 8  # back-to-back claims per run (a reply has at most a handful of parts)
+
+
 class OutboxWorker:
     def __init__(
         self,
@@ -36,8 +39,12 @@ class OutboxWorker:
         retry_horizon: timedelta | None = None,
         coordination: CoordinationClock | None = None,
         scope: str | None = None,
+        unknown_blocks_for: timedelta = timedelta(hours=24),
     ) -> None:
         self._scope = scope  # only messages of this scope's conversations are claimed
+        self._unknown_blocks_for = (
+            unknown_blocks_for  # how long an unknown send holds back the next
+        )
         if retry_horizon is not None and coordination is None:
             raise ValueError("a retry horizon needs the coordination clock to measure message age")
         self._outbox = outbox
@@ -50,19 +57,28 @@ class OutboxWorker:
         self._coordination = coordination
 
     async def run_once(self, limit: int = 20) -> int:
-        messages = await self._outbox.claim_ready(self._owner, limit, self._claim_ttl, self._scope)
-        for message in messages:
-            with (
-                bind(
-                    tenant_id=message.tenant_id,
-                    outbox_id=message.outbox_id,
-                    trace_id=message.trace_id,
-                    component="outbox_worker",
-                ),
-                span("outbox.send", attempts=message.attempts),
-            ):
-                await self._deliver(message)
-        return len(messages)
+        """Claim and send what is ready. A conversation yields ONE message per claim (the next
+        waits for it), so several passes run back to back: the parts of one reply leave together."""
+        total = 0
+        for _ in range(MAX_PASSES):
+            messages = await self._outbox.claim_ready(
+                self._owner, limit, self._claim_ttl, self._scope, self._unknown_blocks_for
+            )
+            if not messages:
+                break
+            for message in messages:
+                with (
+                    bind(
+                        tenant_id=message.tenant_id,
+                        outbox_id=message.outbox_id,
+                        trace_id=message.trace_id,
+                        component="outbox_worker",
+                    ),
+                    span("outbox.send", attempts=message.attempts),
+                ):
+                    await self._deliver(message)
+            total += len(messages)
+        return total
 
     async def _deliver(self, message: OutboundMessage) -> None:
         if await self._past_the_horizon(message):

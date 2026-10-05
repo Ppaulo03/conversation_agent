@@ -8,9 +8,15 @@ from conversation_agent.core.models.runtime import OutboundMessage, SendResult
 
 class OutboxStore(Protocol):
     async def claim_ready(
-        self, owner: str, limit: int, claim_ttl: timedelta, scope: str | None = None
+        self,
+        owner: str,
+        limit: int,
+        claim_ttl: timedelta,
+        scope: str | None = None,
+        unknown_blocks_for: timedelta = timedelta(hours=24),
     ) -> list[OutboundMessage]:
-        """PENDING (available) or stale-SENDING rows -> SENDING."""
+        """PENDING (available) or stale-SENDING rows -> SENDING, never ahead of an earlier message
+        of the same conversation that is still waiting to go out (see the adapter)."""
         ...
 
     async def record_result(

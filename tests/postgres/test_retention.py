@@ -226,6 +226,11 @@ async def test_a_conversation_being_processed_cannot_be_erased(
     await world.outbox_worker("sender").run_once()
     lease = await world.leases.acquire(KEY, "a-turn-is-running", timedelta(seconds=30))
     assert lease is not None
+    # the lease is stamped with the test's fixed clock (2026-10-05 08:00), the erasure check reads
+    # the DATABASE clock: once real time passed that instant the lease would look expired
+    await world.db.pool.execute(
+        "UPDATE conversation_states SET lease_expires_at = clock_timestamp() + interval '30 s'"
+    )
     result = await service.erase_contact(TENANT, CONTACT, actor="dpo", reason="x", force=True)
     assert result.status == "blocked" and "conversation_leased" in result.blockers
     await world.leases.release(lease)

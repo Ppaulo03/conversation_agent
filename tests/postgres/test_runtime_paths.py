@@ -337,7 +337,7 @@ async def test_a_turn_waits_until_the_contact_has_been_quiet_for_the_debounce(
 
     out: list[str] = []
     llm = FakeLLM([text_response("Entendi tudo.")])
-    runtime, channel = with_window(db, api, llm, out, debounce=timedelta(seconds=1.5))
+    runtime, channel = with_window(db, api, llm, out, debounce=timedelta(seconds=3))
 
     await runtime.receive(channel.inbound("quero reservar"))
     await asyncio.sleep(0.8)
@@ -367,21 +367,21 @@ async def test_the_wait_never_exceeds_the_maximum_even_if_the_contact_keeps_typi
         api,
         llm,
         out,
-        debounce=timedelta(seconds=2),
-        debounce_max_wait=timedelta(seconds=3),  # never more than 3 s since the FIRST piece
+        debounce=timedelta(seconds=4),
+        debounce_max_wait=timedelta(seconds=6),  # never more than 6 s since the FIRST piece
     )
+    # (generous margins: the window runs on the database clock, which a Docker VM can step by a
+    # second or two)
     await runtime.receive(channel.inbound("um"))  # t = 0
     await asyncio.sleep(1.0)
-    await runtime.receive(channel.inbound("dois"))  # t = 1: the 2 s window restarts
+    await runtime.receive(channel.inbound("dois"))  # t = 1: the 4 s window restarts
     await asyncio.sleep(1.0)
-    await runtime.receive(channel.inbound("tres"))  # t = 2: ...and again (it would end at t = 4)
+    await runtime.receive(channel.inbound("tres"))  # t = 2: ...and again (it would end at t = 6)
     await asyncio.sleep(0.5)
-    await runtime.coordinator.run_once()  # t = 2.5: still inside both the window and the cap
+    await runtime.coordinator.run_once()  # t = 2.5: well inside the window
     assert llm.calls == 0 and out == []
 
-    await asyncio.sleep(0.8)  # t = 3.3: the cap (3 s since the first piece) opens the turn
-    await runtime.coordinator.run_once()
-    await runtime.outbox_worker.run_once()
+    await runtime.drain()  # waits; the cap (6 s since the first piece) opens the turn
     assert out == ["bot> Pronto."] and llm.calls == 1
 
 

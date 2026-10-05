@@ -9,6 +9,7 @@ from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
 
+DEFAULT_UNKNOWN_BLOCKS_FOR = timedelta(hours=24)  # RelayPlane's default idempotency window
 _O_COLUMNS = ", ".join(f"o.{c.strip()}" for c in OUTBOX_COLUMNS.split(","))
 
 
@@ -27,11 +28,22 @@ class PostgresOutboxStore:
         self._max_attempts = max_attempts
 
     async def claim_ready(
-        self, owner: str, limit: int, claim_ttl: timedelta, scope: str | None = None
+        self,
+        owner: str,
+        limit: int,
+        claim_ttl: timedelta,
+        scope: str | None = None,
+        unknown_blocks_for: timedelta = DEFAULT_UNKNOWN_BLOCKS_FOR,
     ) -> list[OutboundMessage]:
         """PENDING-and-due or stale-SENDING rows -> SENDING. A stale SENDING row is a message
         whose sender died mid-flight: it is retried with the *same* payload and idempotency
-        key (never regenerated)."""
+        key (never regenerated).
+
+        A message is only claimable when no EARLIER message of its conversation is still waiting to
+        go out (PENDING, SENDING, RECONCILING) or has an unknown outcome inside the idempotency
+        window (`unknown_blocks_for` since its first send): otherwise a second worker could send
+        part 2 of a reply before part 1. Past that window an unresolved UNKNOWN stops blocking, so
+        one stuck message cannot silence the conversation for ever."""
         now = await self._time.now()
         rows = await self._db.pool.fetch(
             f"""
@@ -44,7 +56,15 @@ class PostgresOutboxStore:
                            WHERE c.tenant_id = o.tenant_id
                              AND c.conversation_id = o.conversation_id
                              AND c.scope = $5))
-                 ORDER BY o.created_at, o.message_index
+                   AND NOT EXISTS (
+                          SELECT 1 FROM outbox_messages p
+                           WHERE p.tenant_id = o.tenant_id
+                             AND p.conversation_id = o.conversation_id
+                             AND p.conversation_seq < o.conversation_seq
+                             AND (p.status IN ('PENDING', 'SENDING', 'RECONCILING')
+                                  OR (p.status = 'UNKNOWN'
+                                      AND COALESCE(p.first_sent_at, p.created_at) > $6)))
+                 ORDER BY o.created_at, o.conversation_seq
                  LIMIT $2 FOR UPDATE SKIP LOCKED
             )
             UPDATE outbox_messages o
@@ -60,6 +80,7 @@ class PostgresOutboxStore:
             owner,
             now + claim_ttl,
             scope,
+            now - unknown_blocks_for,
         )
         return [outbox_from_row(r) for r in rows]
 

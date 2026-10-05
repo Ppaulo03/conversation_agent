@@ -222,6 +222,11 @@ class Runtime:
                 retry_horizon=outbox_retry_horizon,
                 coordination=coordination,
                 scope=scope,
+                **(
+                    {"unknown_blocks_for": delivery_policy.safe_resend_until}
+                    if delivery_policy is not None
+                    else {}
+                ),
             ),
             scheduler_worker=SchedulerWorker(
                 scheduler,

@@ -640,12 +640,21 @@ class _OutboxRepo(_Repo):
     async def add(self, message: OutboundMessage) -> bool:
         now = self._clock.now()
         available_at = self._coordination_now or now
+        # The conversation's counter gives the message its place in the conversation's order, in
+        # THIS transaction (the row lock serialises writers); a replayed insert leaves a harmless
+        # gap.
         status = await self._c.execute(
             """
+            WITH next AS (
+                UPDATE conversation_states SET outbound_seq = outbound_seq + 1
+                 WHERE tenant_id = $1 AND conversation_id = $3
+                RETURNING outbound_seq
+            )
             INSERT INTO outbox_messages (tenant_id, outbox_id, conversation_id, channel_id,
                 contact_id, turn_id, message_index, action_id, text, idempotency_key, status,
-                available_at, created_at, updated_at, trace_id)
-            VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$13,$11,$11,$12)
+                available_at, created_at, updated_at, trace_id, conversation_seq)
+            SELECT $1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'PENDING',$13,$11,$11,$12, next.outbound_seq
+              FROM next
             ON CONFLICT DO NOTHING
             """,
             message.tenant_id,
