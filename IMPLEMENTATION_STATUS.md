@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (concluída; aguardando revisão/merge da cobertura). Fases 1–13 em `main`.
+**Fase atual:** 14.1 — fechamento de segurança de produção (em andamento). Fases 1–14 em `main`.
 
 ## Phase 1
 
@@ -798,7 +798,7 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 
 - Gatilhos e detecção de pergunta/negação são pt-BR; outro idioma pede outra lista (e outra heurística).
 - Negação mais distante que três palavras antes do gatilho não é vista; a lista de frases é do autor.
-- Uma confirmação pendente no momento do handoff não é cancelada: expira pelo TTL (a conversa está com uma pessoa).
+- ~~Uma confirmação pendente no momento do handoff não é cancelada~~: resolvido na auditoria pós-fase 14 (INV-060: o handoff invalida a ação e retira o prompt ainda não enviado).
 - Quando o modelo roteia uma pergunta como `other`, o fluxo reperguntará o slot (comportamento já existente de "não entendi").
 - `question_check` só existe para slots `text`; não há equivalente para `choose` (opções) nem para pedidos de humano durante uma confirmação.
 
@@ -842,7 +842,7 @@ Decisão: a elegibilidade continua exatamente como era (INV-022/013); só a RESP
 Débito: sem métrica (só log) para a taxa de confirmações não provadas por canal.
 
 
-## Phase 14 — Achados do POC (em andamento)
+## Phase 14 — Achados do POC (concluída)
 
 Lista consolidada do POC de agendamento de quadras; ordem e escopo no ROADMAP.
 
@@ -940,4 +940,22 @@ O turno já agrupava tudo que estava pronto (`\n`, ordem de entrega) e respondia
 - `Runtime.drain` espera uma janela de debounce pendente (conta eventos READY; limite de 30 s) em vez de sair com a conversa ainda segurada.
 
 Padrões inalterados (`debounce=0`, reinício desligado). Custo: o debounce atrasa toda resposta em até N s; o reinício pode descartar chamadas de LLM já pagas.
+
+## Phase 14.1 — Fechamento de segurança de produção
+
+Segundo audit externo, sobre a versão com debounce. Todos os achados de código reproduzidos e corrigidos.
+
+| # | Achado | Correção | Prova |
+|---|---|---|---|
+| 1a (P0) | `reconcile_margin` negativo estendia a janela segura de reenvio além da retenção (retention - (-5 min) = 15 min com retenção de 10) | `DeliveryPolicy`: `0 <= reconcile_margin < retention` (INV-066) | `test_a_negative_reconcile_margin_cannot_extend_the_idempotency_window` |
+| 1b (P0) | `outbox_retry_horizon` explícito vencia a `delivery_policy` no `Runtime.build` (o worker faria reenvio cego por 48 h enquanto o reconciliador acreditava na política) | com política, o horizonte é o dela; valor diferente dá `ValueError` | `test_with_a_delivery_policy_the_retry_horizon_has_one_source` |
+| 2 (P1) | `claim_ready` (`SKIP LOCKED`) deixava dois workers reivindicarem mensagens diferentes da MESMA conversa: parte 2 podia sair antes da parte 1; e a ordem dependia de `created_at` (relógio da aplicação) | `conversation_seq` por conversa atribuído na transação que escreve (migração 0024, contador em `conversation_states.outbound_seq`); `claim_ready` só pega a mensagem se nenhuma anterior da conversa espera para sair; `OutboxWorker.run_once` faz passadas seguidas para as partes de uma resposta saírem juntas (INV-065) | `tests/postgres/test_outbox_order.py` |
+| 3 (P1) | Handoff invalidava a ação mas o prompt ainda PENDING no outbox saía para uma conversa já com humano | `set_ownership` != BOT também passa a SUPERSEDED os prompts PENDING das ações invalidadas (a mensagem do próprio handoff, sem `action_id`, sai; SENDING/QUEUED não são tocadas) | `test_a_confirmation_prompt_not_yet_sent_is_withdrawn_when_a_person_takes_over` e vizinhos |
+| 4 (P2) | `/%00`, `/%20`, `/%09`, `/%3f`, `/%23` passavam no path estático | a regra compartilhada valida DEPOIS do `unquote` (controles, espaços, `? # / \`) e recusa percent-escapes malformados | `tests/contracts/test_http_path.py` |
+| 5 | Drift de documentação | débito antigo da fase 12 marcado como resolvido; título da fase 14 corrigido | n/a |
+| 6 | Contrato real do RelayPlane | execução do operador (`docs/RELEASE_EVIDENCE.md`) | pendente |
+
+Decisões: um UNKNOWN só bloqueia a ordem enquanto a janela de idempotência está aberta (com `delivery_policy`, `safe_resend_until`; sem ela, 24 h): depois disso uma mensagem presa não silencia a conversa (a ordem dessa mensagem deixa de ser garantida). NÃO apertei `retry_horizon <= safe_resend_until` como o plano sugeria: o contrato documentado (`RELAYPLANE_CONTRACT.md`) é `retry_horizon <= retention` e o teste de contrato do gateway real o usa.
+
+Observação de ambiente: o relógio da VM do Docker oscila (a oscilação passa de 1 s); os testes de debounce, que medem no relógio do banco, ganharam margens largas. Em produção o banco é a fonte única, então a oscilação entre hosts não afeta a janela.
 
