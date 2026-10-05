@@ -140,6 +140,15 @@ class Invoke(_Frozen):
     default: Transition  # required: the safe answer for any outcome not listed in `on`
 
 
+# Hours [from, to) of the parts of the day a Choose can filter by (`period_hours` overrides).
+DEFAULT_PERIODS: dict[str, tuple[int, int]] = {
+    "morning": (6, 12),
+    "afternoon": (12, 18),
+    "evening": (18, 24),
+    "night": (18, 24),
+}
+
+
 class Choose(_Frozen):
     """Let the user pick one of the REAL items a previous Invoke returned (never invented)."""
 
@@ -155,6 +164,17 @@ class Choose(_Frozen):
     prefer_time_slot: str | None = None  # a time the user already stated: auto-select if unique
     prefer_date_slot: str | None = None
     no_match_text: str = ""  # shown first when a stated preference matches none of the options
+    # What each option says: a template over the item's fields ("{court} - R$ {price}"); a
+    # datetime field reads as "ter 06/10 as 10:00". Absent: the value itself (datetimes formatted).
+    label: str | None = None
+    # More slots the pick fills, {slot: item field}: choosing a row can set court AND time at once.
+    also: dict[str, str] = Field(default_factory=dict)
+    # When exactly one option is left, take it instead of asking (it shows in the next message).
+    auto_select_single: bool = False
+    # A part of the day the user stated ("a noite"): the slot holds a key of `period_hours`
+    # (or morning / afternoon / evening / night), and the options shown are those in that period.
+    period_slot: str | None = None
+    period_hours: dict[str, tuple[int, int]] = Field(default_factory=dict)  # key -> [from, to) h
 
 
 class Propose(_Frozen):
@@ -246,9 +266,17 @@ class FlowDefinition(_Frozen):
                 if step.max_options < 1:
                     raise DefinitionError(f"flow {self.name!r}: choose {step.id!r} max_options < 1")
                 need(step.into, f"choose {step.id!r}.into")
-                for ref in (step.prefer_time_slot, step.prefer_date_slot):
+                for ref in (step.prefer_time_slot, step.prefer_date_slot, step.period_slot):
                     if ref is not None:
                         need(ref, f"choose {step.id!r}")
+                for extra in step.also:
+                    need(extra, f"choose {step.id!r}.also")
+                for key, (start, end) in {**DEFAULT_PERIODS, **step.period_hours}.items():
+                    if not 0 <= start < end <= 24:
+                        raise DefinitionError(
+                            f"flow {self.name!r}: choose {step.id!r} period {key!r} must be "
+                            "hours with 0 <= from < to <= 24"
+                        )
                 self._check_transition(step.empty, known)
                 check_template(
                     f"flow {self.name!r} choose {step.id!r}.prompt",

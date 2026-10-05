@@ -8,6 +8,7 @@ from pydantic import ValidationError
 
 from conversation_agent.core.canonical import canonicalize, stable_hash
 from conversation_agent.core.definitions.capability import CapabilityDefinition
+from conversation_agent.core.display import display_value
 from conversation_agent.core.models.tooling import CapabilityRequest, ToolError
 
 
@@ -28,7 +29,8 @@ def _summary(capability: CapabilityDefinition, shown_args: dict[str, Any]) -> st
     canonical UTC form."""
     if capability.summary_template:
         try:
-            return capability.summary_template.format_map(shown_args)
+            shown = {name: display_value(value, None) for name, value in shown_args.items()}
+            return capability.summary_template.format_map(shown)
         except (KeyError, IndexError, ValueError):
             pass
     pairs = ", ".join(f"{k}={v}" for k, v in sorted(shown_args.items()))

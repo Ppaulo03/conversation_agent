@@ -195,6 +195,18 @@ def _flow_document(flow: FlowDefinition) -> dict[str, Any]:
     for slot in document["slots"]:
         if slot.get("question_check") == "off":  # only flows that opt in carry it: others keep
             slot.pop("question_check")  # the digest they always had
+    for step in document["steps"]:
+        if step.get("kind") != "choose":
+            continue
+        for name, unused in (
+            ("label", None),
+            ("also", {}),
+            ("auto_select_single", False),
+            ("period_slot", None),
+            ("period_hours", {}),
+        ):
+            if step.get(name) == unused:  # only steps that opt in carry the newer fields
+                step.pop(name)
     return document
 
 

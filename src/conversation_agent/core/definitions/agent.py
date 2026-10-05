@@ -247,15 +247,16 @@ class AgentDefinition(BaseModel):
             )
         args = get_args(field.annotation)
         item = args[0] if get_origin(field.annotation) is list and args else None
-        if (
-            isinstance(item, type)
-            and issubclass(item, BaseModel)
-            and (step.value_field not in item.model_fields)
-        ):
-            raise DefinitionError(
-                f"flow {flow.name!r} choose {step.id!r}: items of {step.list_field!r} have no "
-                f"field {step.value_field!r}"
-            )
+        if isinstance(item, type) and issubclass(item, BaseModel):
+            wanted = {step.value_field, *step.also.values()}
+            if step.label:
+                wanted |= set(placeholders(step.label))
+            missing = sorted(wanted - set(item.model_fields))
+            if missing:
+                raise DefinitionError(
+                    f"flow {flow.name!r} choose {step.id!r}: items of {step.list_field!r} have "
+                    f"no field {missing[0]!r}"
+                )
 
     def _check_retry_against_effective_risk(
         self, by_cap: dict[str, CapabilityDefinition], by_tool: dict[str, ToolDefinition]

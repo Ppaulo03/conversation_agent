@@ -210,7 +210,11 @@ def _number(token: str) -> int:
 
 def format_local(moment: datetime, timezone: str) -> tuple[str, str]:
     """('ter 06/10', '10:00') in the agent's timezone."""
-    local = moment.astimezone(ZoneInfo(timezone))
+    return format_moment(moment.astimezone(ZoneInfo(timezone)))
+
+
+def format_moment(local: datetime) -> tuple[str, str]:
+    """('ter 06/10', '10:00') as the datetime is (in the offset it carries)."""
     return (
         f"{WEEKDAY_ABBREV[local.weekday()]} {local.day:02d}/{local.month:02d}",
         f"{local.hour:02d}:{local.minute:02d}",

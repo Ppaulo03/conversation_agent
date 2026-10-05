@@ -7,12 +7,14 @@ flow asks (or, later, the journaled LLM extractor proposes a raw span that is va
 
 from __future__ import annotations
 
+import contextlib
 import re
 from datetime import date, datetime
 from typing import Any
 from zoneinfo import ZoneInfo
 
 from conversation_agent.core.definitions.flow import FlowDefinition, SlotDefinition
+from conversation_agent.core.display import display_value
 from conversation_agent.core.temporal_ptbr import (
     fold,
     format_local,
@@ -162,13 +164,20 @@ def _time_value(text: str, _today: date) -> str | None:
 
 # --- choosing among real options ---
 def build_options(
-    items: list[dict[str, Any]], value_field: str, timezone: str
+    items: list[dict[str, Any]],
+    value_field: str,
+    timezone: str,
+    *,
+    label: str | None = None,
+    also: dict[str, str] | None = None,
 ) -> list[dict[str, Any]]:
-    """Numbered options in the agent's timezone. The value is exactly what the tool returned."""
+    """Numbered options in the agent's timezone. The value is exactly what the tool returned;
+    `label` (a template over the item's fields) says what each option reads as, and `also` maps
+    more slots to item fields that the pick fills."""
     options: list[dict[str, Any]] = []
     for item in items:
         value = item.get(value_field)
-        label, local_date, local_time = str(value), None, None
+        text, local_date, local_time = str(value), None, None
         if isinstance(value, str):
             try:
                 moment = datetime.fromisoformat(value)
@@ -176,12 +185,22 @@ def build_options(
                 moment = None
             if moment is not None and moment.tzinfo is not None:
                 day, hour = format_local(moment, timezone)
-                label = f"{day} às {hour}"
+                text = f"{day} às {hour}"
                 local = moment.astimezone(ZoneInfo(timezone))
                 local_date, local_time = local.date().isoformat(), hour
-        options.append(
-            {"value": value, "label": label, "local_date": local_date, "local_time": local_time}
-        )
+        if label is not None:
+            shown = {k: display_value(v, timezone) for k, v in item.items()}
+            with contextlib.suppress(KeyError, IndexError, ValueError):  # a field the item lacks:
+                text = label.format_map(shown)  # the option reads as its value instead
+        option: dict[str, Any] = {
+            "value": value,
+            "label": text,
+            "local_date": local_date,
+            "local_time": local_time,
+        }
+        if also:
+            option["extras"] = {slot: item.get(field) for slot, field in also.items()}
+        options.append(option)
     return options
 
 

@@ -10,7 +10,7 @@ Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 Em conflito real entre eles, vale a ordem INVARIANTS > RUNTIME_PROTOCOL > DESIGN > ROADMAP, e o ROADMAP nunca
 relaxa uma invariante.
 
-**Fase atual:** 14 — Achados do POC (em andamento: itens 4, 5 e 13 feitos). Fases 1–13 em `main`.
+**Fase atual:** 14 — Achados do POC (em andamento: itens 4, 5, 9, 10, 12, 13 e 14 feitos). Fases 1–13 em `main`.
 
 ## Phase 1
 
@@ -871,4 +871,14 @@ Correção (escolhida pelo usuário: escopo por agente): `conversation_states.sc
 
 Decisão: os timers (`SchedulerWorker`) NÃO têm escopo: o de reconciliação só levanta o backoff e o proativo apenas enfileira um evento na conversa, que o runtime dono processa; consumido por outro runtime é inofensivo.
 Débito: conversas legadas sem escopo ficam invisíveis a runtimes com escopo até o primeiro evento carimbado (documentado no guia).
+
+### Itens 14, 10, 9 e 12 — datas, escolhas e mensagens (INV-058)
+
+- **14 (data ISO crua no `summary_template`):** valores datetime com offset aparecem como "ter 06/10 às 10:00" na pergunta de confirmação, no offset que a pessoa deu; `display_value` é a mesma função do `executed_template` (que usa o fuso do agente). Só a exibição muda: os argumentos canônicos e o hash protegido ficam iguais.
+- **10 (`choose` limitado):** `label` (template sobre os campos do item), `also` (outros slots preenchidos pela mesma escolha, ex. quadra + horário num `choose` só) e `auto_select_single`; o compilador confere que os campos existem no item da ferramenta. Opções guardam `extras` só quando `also` é usado.
+- **9 (período do dia ignorado):** `period_slot` + `period_hours` no `choose`: um slot enum (morning/afternoon/evening/night) filtra as opções mostradas; sem opção no período, o `no_match_text` avisa e mostra as demais; mudar o período durante a escolha refaz a lista.
+- **12:** resolvido pelo `executed_template` por capability (fase 14, item 13) e pelos campos de resultado nos templates; o `executed_fallback` global segue só com `{status}` (usado apenas quando o modelo falha).
+- Campos novos dos steps ficam fora do digest quando não usados.
+
+Débitos: as opções só entendem um período por vez e usam horas inteiras; o período ainda precisa ser declarado como slot enum no Flow (não há detecção embutida de "à noite" sem o slot); templates por status de falha seguem abertos.
 

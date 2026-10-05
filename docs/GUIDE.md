@@ -143,6 +143,9 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | a free-text slot that must not swallow questions | `question_check: model` on the slot |
 | let the contact ask for a person | `human_request:` (`available: false` if nobody is behind the bot) |
 | the exact words after a confirmed action succeeds (no model) | `executed_template` on the capability, e.g. `"Reserva {booking_id} confirmada para {start_at}."` (arguments and output fields; datetimes in the agent's timezone) |
+| options that read well and pick more than one value | on a `choose` step: `label: "{court} - {start_at}"` (item fields; datetimes read as "ter 06/10 às 10:00") and `also: {court: court}` to fill other slots from the picked row |
+| a part of the day ("à noite") narrowing the options | an enum slot (`morning`/`afternoon`/`evening`/`night` as canonical values) + `period_slot:` on the choose step; `period_hours:` redefines the hours |
+| skip the question when one option is left | `auto_select_single: true` on the choose step |
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
 

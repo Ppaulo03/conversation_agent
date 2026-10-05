@@ -20,6 +20,7 @@ from typing import Any, Protocol
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.definitions.flow import (
+    DEFAULT_PERIODS,
     AddDays,
     Ask,
     Choose,
@@ -159,6 +160,29 @@ def _digression_note(definition: FlowDefinition, instance: FlowInstance) -> str:
         f"cancel anything. Do NOT repeat the pending question: the system adds it "
         f"({instance.last_question!r})."
     )
+
+
+def _picked(slots: dict[str, Any], step: Choose, option: dict[str, Any]) -> dict[str, Any]:
+    """The slots after choosing `option`: its value, and whatever else the step maps from it."""
+    return {**slots, step.into: option["value"], **option.get("extras", {})}
+
+
+def _shown(
+    every: list[dict[str, Any]], step: Choose, instance: FlowInstance
+) -> tuple[list[dict[str, Any]], bool]:
+    """The options to show (at most `max_options`) and whether a stated part of the day matched
+    none (then the unfiltered ones are shown, and the user is told)."""
+    hours = {**DEFAULT_PERIODS, **step.period_hours}
+    period = instance.slots.get(step.period_slot) if step.period_slot else None
+    if period not in hours:
+        return every[: step.max_options], False
+    start, end = hours[period]
+    inside = [
+        o for o in every if o["local_time"] is not None and start <= int(o["local_time"][:2]) < end
+    ]
+    if inside:
+        return inside[: step.max_options], False
+    return every[: step.max_options], True
 
 
 class _Slots(dict[str, Any]):
@@ -361,7 +385,7 @@ class FlowRunner:
         ):  # only an option that was really shown
             step = next(s for s in definition.steps if s.id == instance.awaiting_choice)
             assert isinstance(step, Choose)
-            slots[step.into] = options[picked - 1]["value"]
+            slots = _picked(slots, step, options[picked - 1])
             instance = instance.model_copy(update={"awaiting_choice": None})
             understood = True
         spans = data.get("slots")
@@ -407,7 +431,7 @@ class FlowRunner:
                 unlisted=instance.unlisted.get(step.id, []),
             )
             if picked is not None:
-                slots[step.into] = picked["value"]
+                slots = _picked(slots, step, picked)
                 return instance.model_copy(update={"slots": slots, "awaiting_choice": None}), True
         understood = False
         for name, value in extract_slots(definition, text, today, instance.awaiting_slot).items():
@@ -533,10 +557,21 @@ class FlowRunner:
         # Everything the tool returned is a REAL option; only the number SHOWN is capped. A stated
         # preference is matched against all of them, never just the ones that fit in the message
         # (otherwise "at 4pm" is refused while the system has 4pm free).
-        every = build_options(found, step.value_field, self._agent.timezone)
-        options = every[: step.max_options]
+        every = build_options(
+            found,
+            step.value_field,
+            self._agent.timezone,
+            label=step.label,
+            also=step.also or None,
+        )
         if instance.slots.get(step.into) in [o["value"] for o in every]:
             return None  # still valid for the current search
+        if step.auto_select_single and len(every) == 1:  # nothing to choose between
+            flows[-1] = instance.model_copy(
+                update={"slots": _picked(instance.slots, step, every[0])}
+            )
+            return None
+        options, period_missed = _shown(every, step, instance)
         wanted_time = instance.slots.get(step.prefer_time_slot) if step.prefer_time_slot else None
         wanted_date = instance.slots.get(step.prefer_date_slot) if step.prefer_date_slot else None
         stated = wanted_time is not None or wanted_date is not None
@@ -549,10 +584,10 @@ class FlowRunner:
             ]
             if len(matches) == 1:
                 flows[-1] = instance.model_copy(
-                    update={"slots": {**instance.slots, step.into: matches[0]["value"]}}
+                    update={"slots": _picked(instance.slots, step, matches[0])}
                 )
                 return None
-        lead = f"{step.no_match_text} " if stated and step.no_match_text else ""
+        lead = f"{step.no_match_text} " if (stated or period_missed) and step.no_match_text else ""
         question = step.prompt.replace("{options}", render_options(options)).format_map(
             _Slots(self._display(instance))
         )
@@ -561,7 +596,10 @@ class FlowRunner:
                 "awaiting_choice": step.id,
                 "awaiting_slot": None,
                 "options": {**instance.options, step.id: options},
-                "unlisted": {**instance.unlisted, step.id: every[step.max_options :]},
+                "unlisted": {
+                    **instance.unlisted,
+                    step.id: [o for o in every if o not in options],
+                },
                 "last_question": question,
             }
         )
