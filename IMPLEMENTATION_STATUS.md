@@ -906,3 +906,11 @@ Achado no caminho: o `Runtime` não montava o `OutboxReconciler`, então um cana
 
 Cancelamento: já coberto em `tests/postgres/test_cancellation.py` (coordenador); não repliquei no Runtime, que apenas o delega.
 
+### Pós-POC: horário que casa com várias linhas (INV-058)
+
+Causa: com `label` e `also` há uma linha por horário e quadra. O ramo `prefer_time_slot` do `_choose` só auto-selecionava com exatamente 1 correspondência; com 2 ou mais caía na lista completa com o `no_match_text` ("Não tenho exatamente esse horário"), informação errada, e repetia a mesma mensagem a cada "18h".
+
+Correção: com várias correspondências o Flow mostra exatamente essas linhas, sem o aviso (o aviso fica para quando NENHUMA linha casa); e a escolha por palavras ganhou um desempate pelo rótulo (`_by_label`): "quadra 2" / "quadra 2 às 18h" escolhe a linha, considerando só as palavras que distinguem as linhas, primeiro entre as mostradas, e nunca escolhe entre iguais.
+
+Itens 2 e 3 da lista do POC: o 2 já está resolvido (o nome mais longo vence, INV-055; não há aviso de compilação porque deixou de ser ambíguo); o 3 já tem `FLOW_TRIGGER_TIE` para frases idênticas e log para o empate em tempo de execução; um aviso estático para frases DIFERENTES não é possível sem ruído (qualquer par de Flows pode se cruzar em alguma mensagem).
+

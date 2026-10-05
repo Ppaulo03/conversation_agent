@@ -67,6 +67,13 @@ def flow(**choose: Any) -> FlowDefinition:
                 choices={"morning": ("de manha", "manha"), "evening": ("a noite", "noite")},
                 invalidates=("start_at", "court"),
             ),
+            SlotDefinition(
+                name="preferred_time",
+                type="time",
+                prompt="",
+                required=False,
+                invalidates=("start_at", "court"),
+            ),
             SlotDefinition(name="start_at", type="text", prompt="", required=False),
             SlotDefinition(name="court", type="text", prompt="", required=False),
         ),
@@ -270,3 +277,69 @@ def test_replies_split_into_paragraphs_only_up_to_a_limit() -> None:
     parts = reply_parts(many)
     assert len(parts) == MAX_REPLY_PARTS and parts[-1] == "p3\n\np4\n\np5\n\np6"
     assert reply_parts("   ") == ["   "]
+
+
+# --- several rows share the stated time (one per court) ---
+
+BUSY = [
+    row(8, "Quadra 1"),
+    row(8, "Quadra 2"),
+    row(9, "Quadra 1"),
+    row(18, "Quadra 1"),
+    row(18, "Quadra 2"),
+]
+PER_COURT = {
+    "label": "{court} - {start_at}",
+    "also": {"court": "court"},
+    "prefer_time_slot": "preferred_time",
+    "no_match_text": "Não tenho exatamente esse horário.",
+}
+
+
+async def test_a_stated_time_that_fits_several_rows_shows_exactly_those() -> None:
+    talk = Talk(flow(**PER_COURT), BUSY)
+    reply = await talk.say("quero reservar amanhã às 18h")
+    assert "Quadra 1 - ter 06/10 às 18:00" in reply.reply
+    assert "Quadra 2 - ter 06/10 às 18:00" in reply.reply
+    assert "08:00" not in reply.reply and "09:00" not in reply.reply
+    assert "Não tenho exatamente" not in reply.reply  # it HAS that time: twice
+    assert len(talk.flows[-1].options["pick"]) == 2  # a number picks among these two
+
+
+async def test_the_court_can_then_be_named_in_words() -> None:
+    talk = Talk(flow(**PER_COURT), BUSY)
+    await talk.say("quero reservar amanhã às 18h")
+    reply = await talk.say("quadra 2")
+    assert reply.reply == "Feito." and talk.flows == ()
+
+
+async def test_saying_the_time_while_the_full_list_is_shown_narrows_it() -> None:
+    talk = Talk(flow(**PER_COURT), BUSY)
+    first = await talk.say("quero reservar amanhã")
+    assert "08:00" in first.reply  # no time yet: the first rows
+    reply = await talk.say("18h")  # used to repeat the same list
+    assert "18:00" in reply.reply and "08:00" not in reply.reply
+    assert "Não tenho exatamente" not in reply.reply
+
+
+async def test_a_time_nobody_has_still_says_so_and_shows_everything() -> None:
+    talk = Talk(flow(**PER_COURT), BUSY)
+    reply = await talk.say("quero reservar amanhã às 17h")
+    assert reply.reply.startswith("Não tenho exatamente esse horário.") and "08:00" in reply.reply
+
+
+async def test_naming_the_court_and_the_time_together_picks_the_row() -> None:
+    talk = Talk(flow(**PER_COURT), BUSY)
+    await talk.say("quero reservar amanhã")
+    reply = await talk.say("quadra 2 às 18h")
+    assert reply.reply == "Feito." and talk.flows == ()
+
+
+def test_words_that_do_not_tell_the_rows_apart_never_pick_one() -> None:
+    from conversation_agent.engine.flow_understanding import _by_label
+
+    rows = [{"label": "Quadra 1 - 18:00"}, {"label": "Quadra 2 - 18:00"}]
+    assert _by_label("quadra", rows) is None  # in every row: says nothing
+    assert _by_label("quero uma quadra boa", rows) is None
+    assert _by_label("a quadra 2", rows) == rows[1]
+    assert _by_label("1", rows) == rows[0]

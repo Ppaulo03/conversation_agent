@@ -235,12 +235,31 @@ def select_option(
     wanted_time = _time_value(text, today)
     parsed_day = parse_date(text, today)
     wanted_date = parsed_day.isoformat() if parsed_day is not None else None
-    if wanted_time is None and wanted_date is None:
+    candidates = [*options, *(unlisted or [])]
+    if wanted_time is not None or wanted_date is not None:
+        candidates = [
+            o
+            for o in candidates
+            if (wanted_time is None or o["local_time"] == wanted_time)
+            and (wanted_date is None or o["local_date"] == wanted_date)
+        ]
+    if len(candidates) == 1:
+        return candidates[0] if wanted_time is not None or wanted_date is not None else None
+    # what is on screen is what is meant; the rows that did not fit are only a second chance
+    shown = [o for o in candidates if o in options]
+    return _by_label(text, shown) or _by_label(text, candidates)
+
+
+def _by_label(text: str, candidates: list[dict[str, Any]]) -> dict[str, Any] | None:
+    """Among several rows, the one the words name ("quadra 2"): only words that tell the rows
+    apart count, and only a single best row is taken. Never a guess between equals."""
+    if len(candidates) < 2:
         return None
-    matches = [
-        o
-        for o in [*options, *(unlisted or [])]
-        if (wanted_time is None or o["local_time"] == wanted_time)
-        and (wanted_date is None or o["local_date"] == wanted_date)
-    ]
-    return matches[0] if len(matches) == 1 else None
+    words = set(re.findall(r"[a-z0-9]+", fold(text)))
+    labels = [set(re.findall(r"[a-z0-9]+", fold(str(o["label"])))) for o in candidates]
+    common = set.intersection(*labels)
+    scores = [len((words & label) - common) for label in labels]
+    best = max(scores)
+    if best == 0 or scores.count(best) != 1:
+        return None
+    return candidates[scores.index(best)]

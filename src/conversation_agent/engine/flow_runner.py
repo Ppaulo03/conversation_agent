@@ -597,7 +597,14 @@ class FlowRunner:
                     update={"slots": _picked(instance.slots, step, matches[0])}
                 )
                 return None
-        lead = f"{step.no_match_text} " if (stated or period_missed) and step.no_match_text else ""
+            if len(matches) > 1:  # several rows fit (one per court, say): show exactly those
+                options = matches[: step.max_options]
+        none_matched = stated and not matches
+        lead = (
+            f"{step.no_match_text} "
+            if (none_matched or period_missed) and step.no_match_text
+            else ""
+        )
         question = step.prompt.replace("{options}", render_options(options)).format_map(
             _Slots(self._display(instance))
         )
