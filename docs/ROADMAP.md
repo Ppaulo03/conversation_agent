@@ -256,6 +256,11 @@ Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e 
 - **Ação protegida com anexo:** proposta/confirmação continuam valendo e o sha256 entra na chave de idempotência;
 - **Fora do escopo:** mídia de saída (o agente continua enviando só texto).
 
+## Futuro (sem fase atribuída)
+
+- **Grupos, menções e allowlist de contatos:** desenho em [`FUTURE_GROUPS.md`](./FUTURE_GROUPS.md); pedido ao
+  gateway em [`RELAYPLANE_GROUPS_SPEC.md`](./RELAYPLANE_GROUPS_SPEC.md). Hoje grupos são ignorados.
+
 ## Chaos gates
 
 Fonte única dos casos de fault injection. `C06`, `C07` e `C16` seguem o protocolo C1/C2 de [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md) §4:
