@@ -153,6 +153,7 @@ class World:
         **kwargs: Any,
     ) -> TurnCoordinator:
         injector = faults or NoFaults()
+        llm_gate = kwargs.pop("llm_gate", None)
 
         def journal_factory(fence: FenceToken) -> TurnJournal:
             return PostgresTurnJournal(self.uows, self.db, fence)
@@ -184,6 +185,8 @@ class World:
                 executor_factory=make_executor,
                 flows=flows,
                 transcriber=transcriber,
+                llm_gate=llm_gate,
+                tenant_id=fence.tenant_id if llm_gate is not None else None,
             )
             engine.attach_confirmation(
                 ConfirmationStage(

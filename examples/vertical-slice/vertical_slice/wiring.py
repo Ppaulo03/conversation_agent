@@ -19,6 +19,7 @@ from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.llm_budget import LLMCallGate
 from conversation_agent.ports.tool_provider import ToolProvider
 from conversation_agent.ports.transcriber import Transcriber
 from vertical_slice.definitions import CONNECTION, build_agent
@@ -57,6 +58,8 @@ def build_engine(
     flows: bool = False,
     agent: AgentDefinition | None = None,
     transcriber: Transcriber | None = None,
+    llm_gate: LLMCallGate | None = None,
+    tenant_id: str | None = None,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
@@ -73,6 +76,8 @@ def build_engine(
         clock or SystemClock(agent.timezone),
         tool_executor=executor_factory(pipeline) if executor_factory else None,
         transcriber=transcriber,
+        llm_gate=llm_gate,
+        tenant_id=tenant_id,
     )
     return engine, agent, http
 

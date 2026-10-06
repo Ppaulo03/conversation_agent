@@ -102,6 +102,11 @@ class PostgresInboxStore:
               JOIN conversation_states c
                 ON c.tenant_id = e.tenant_id AND c.conversation_id = e.conversation_id
              WHERE e.status IN ('READY', 'CLAIMED') AND ($2::text IS NULL OR c.scope = $2)
+               AND NOT EXISTS (
+                   SELECT 1 FROM turns t
+                    WHERE t.tenant_id=e.tenant_id AND t.conversation_id=e.conversation_id
+                      AND t.status='PROCESSING' AND t.deferred_until > clock_timestamp()
+               )
              GROUP BY e.tenant_id, e.conversation_id
             HAVING $3::float8 IS NULL
                 OR bool_or(e.status = 'CLAIMED')

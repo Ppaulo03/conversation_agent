@@ -9,7 +9,7 @@ CONFIRMED and the PREPARED invocation -> the ledger executes -> the user is told
 
 from __future__ import annotations
 
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -22,6 +22,7 @@ from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.errors import LLMProviderError
 from conversation_agent.core.models.llm import LLMResponse, LLMStopReason, LLMUsage
+from conversation_agent.ports.llm_budget import LLMCallAdmission
 from postgres.world import KEY, TTL, World, event
 
 BOOKING = {
@@ -54,6 +55,11 @@ def structured(decision: str, confidence: float) -> LLMResponse:
         usage=LLMUsage(input_tokens=1, output_tokens=1),
         structured={"decision": decision, "confidence": confidence},
     )
+
+
+class DeferredLLMGate:
+    async def admit_llm_call(self, tenant_id: str) -> LLMCallAdmission:
+        return LLMCallAdmission(datetime(2026, 10, 6, tzinfo=UTC))
 
 
 async def propose(world: World, api: ApiHandle, args: dict[str, Any] = BOOKING) -> None:
@@ -529,3 +535,23 @@ async def test_a_message_that_is_not_a_yes_still_gets_the_plain_reprompt(
     await deliver_prompt(world)
     await answer(world, api, "talvez", FakeLLM([structured("unclear", 0.9)]))
     assert "Não entendi" in await last_reply(world)  # nothing was provable OR said: just unclear
+
+
+async def test_a_confirmation_held_by_the_llm_budget_requires_a_fresh_answer(
+    world: World, api: ApiHandle
+) -> None:
+    await propose(world, api)
+    await deliver_prompt(world)
+
+    run = await answer(
+        world,
+        api,
+        "sounds good",
+        FakeLLM([structured("confirm", 1.0)]),
+        llm_gate=DeferredLLMGate(),
+    )
+
+    assert run.status == "done"
+    assert posts(api) == []  # no side effect based on the old answer
+    assert (await pending(world))["status"] == "PENDING_CONFIRMATION"
+    assert "Não entendi" in await last_reply(world)  # a new eligible prompt was issued

@@ -242,11 +242,8 @@ async def test_the_ops_endpoints(db: PostgresDatabase, monkeypatch: pytest.Monke
         assert not_ready.status_code == 503 and not_ready.json()["reason"] == "SchemaAheadError"
 
 
-async def test_a_dead_database_is_not_ready_but_the_process_is_alive() -> None:
-    dead = await PostgresDatabase.connect(
-        "postgresql://conversation_agent:conversation_agent_dev@127.0.0.1:5432/conversation_agent_test",
-        max_size=1,
-    )
+async def test_a_dead_database_is_not_ready_but_the_process_is_alive(pg_dsn: str) -> None:
+    dead = await PostgresDatabase.connect(pg_dsn, max_size=1)
     await dead.close()
     async with httpx.AsyncClient(
         transport=httpx.ASGITransport(app=ops_app(dead)), base_url="http://ops"

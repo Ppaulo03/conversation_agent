@@ -13,7 +13,7 @@ from typing import Any, Literal
 from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.agent import AgentDefinition
-from conversation_agent.core.errors import TurnCancelledError
+from conversation_agent.core.errors import LLMBudgetDeferredError, TurnCancelledError
 from conversation_agent.core.models.actions import PendingAction
 from conversation_agent.core.models.conversation import (
     ConversationIdentity,
@@ -59,6 +59,7 @@ from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep,
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.llm_budget import LLMCallGate
 from conversation_agent.ports.transcriber import Transcriber
 
 MAX_STEPS_DEFAULT = 8
@@ -76,6 +77,8 @@ class TurnEngine:
         max_steps: int = MAX_STEPS_DEFAULT,
         tool_executor: ToolStepExecutor | None = None,
         transcriber: Transcriber | None = None,
+        llm_gate: LLMCallGate | None = None,
+        tenant_id: str | None = None,
     ) -> None:
         # The engine only runs what the compiler produced (INV-029), and every part of the graph
         # must come from THAT compiled agent (INV-030): no split-brain between definitions.
@@ -96,6 +99,10 @@ class TurnEngine:
         self._confirmation: ConfirmationStage | None = None
         self._flows = FlowRunner(agent.agent) if agent.agent.flows else None
         self._media = MediaNormalizer(agent.agent, transcriber)
+        if (llm_gate is None) != (tenant_id is None):
+            raise ValueError("llm_gate and tenant_id go together")
+        self._llm_gate = llm_gate
+        self._tenant_id = tenant_id
 
     @property
     def pipeline(self) -> CapabilityPipeline:
@@ -483,6 +490,11 @@ class TurnEngine:
     ) -> LLMResponse:
         """One model call, journaled. `purpose` says WHY it is made (agent loop, confirmation
         decision, flow understanding, ...): usage is reported per purpose."""
+        if self._llm_gate is not None:
+            decision = await self._llm_gate.admit_llm_call(self._tenant_id or "")
+            if not decision.admitted:
+                assert decision.retry_at is not None
+                raise LLMBudgetDeferredError(decision.retry_at)
         request = LLMRequest(
             system=system,
             messages=tuple(messages),

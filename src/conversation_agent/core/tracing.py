@@ -41,6 +41,16 @@ class SpanRecord:
     attributes: dict[str, Any] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class SpanStart:
+    trace_id: str
+    span_id: str
+    parent_id: str | None
+    name: str
+    started_at: datetime
+    attributes: dict[str, Any] = field(default_factory=dict)
+
+
 class Tracer(Protocol):
     def on_end(self, span: SpanRecord) -> None: ...
 
@@ -88,7 +98,21 @@ def span(name: str, **attributes: Any) -> Iterator[None]:
     trace_id = current().get("trace_id") or new_trace_id()
     started_at, started = datetime.now(UTC), time.monotonic()
     status, error_type = "ok", None
+    cleaned = _clean(attributes)
     token = _SPAN.set(span_id)
+    with suppress(Exception):
+        on_start = getattr(_TRACER, "on_start", None)
+        if on_start is not None:
+            on_start(
+                SpanStart(
+                    trace_id=trace_id,
+                    span_id=span_id,
+                    parent_id=parent,
+                    name=name,
+                    started_at=started_at,
+                    attributes=cleaned,
+                )
+            )
     try:
         with bind(trace_id=trace_id):
             yield
@@ -108,6 +132,6 @@ def span(name: str, **attributes: Any) -> Iterator[None]:
                     duration_ms=(time.monotonic() - started) * 1000,
                     status=status,
                     error_type=error_type,
-                    attributes=_clean(attributes),
+                    attributes=cleaned,
                 )
             )
