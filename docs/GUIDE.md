@@ -73,6 +73,37 @@ await runtime.receive(inbound_event)  # from your webhook; duplicates are ignore
 await runtime.run(stop_event)  # or: while True: await runtime.tick()
 ```
 
+For a long-running ASGI deployment, let the package own startup and shutdown of the workers while
+your deployment chooses the channel adapter:
+
+```python
+from conversation_agent.adapters.observability.asgi import ops_app
+from conversation_agent.app.asgi import Deployment, runtime_app
+
+
+async def build() -> Deployment:
+    db = await PostgresDatabase.connect(DATABASE_URL)
+    runtime = Runtime.build(..., db=db, sender=my_channel_sender)
+
+    async def close() -> None:
+        await db.close()
+
+    return Deployment(
+        runtime=runtime,
+        ingress=my_channel_webhook_app,  # verifies/maps its protocol to InboundEvent
+        operations=ops_app(db),
+        close=close,
+    )
+
+
+app = runtime_app(build)  # uvicorn deployment:app
+```
+
+The host reserves `/healthz`, `/readyz` and `/metrics` for the operations app and delegates every
+other route to the selected ingress app. It contains no webhook schema, signature rule or gateway
+name. RelayPlane is one optional adapter; using another channel does not require or initialize it.
+If the background runtime stops unexpectedly, `/readyz` becomes 503.
+
 **Several agents in one database.** Each runtime handles only the conversations of its *scope*
 (default: its agent's id; override with `Runtime.build(scope=...)`). The scope is fixed when a
 conversation is first seen: `Runtime.receive` stamps it, and a webhook takes it from the

@@ -28,7 +28,7 @@ from conversation_agent.core.canonical import stable_hash
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.display import render_executed
-from conversation_agent.core.errors import ConfirmationConflictError
+from conversation_agent.core.errors import ConfirmationConflictError, LLMBudgetDeferredError
 from conversation_agent.core.models.actions import (
     ActionConfirmation,
     ConfirmationDecision,
@@ -180,7 +180,19 @@ class ConfirmationStage:
         interpreter = "rule"
         confidence: float | None = None
         if decision is None:
-            decision, confidence = await self._classify(cursor, inp)
+            try:
+                decision, confidence = await self._classify(cursor, inp)
+            except LLMBudgetDeferredError:
+                # Do not retain a potentially confirming answer across the budget reset. The
+                # action stays pending, but this reply is consumed by a fresh prompt now.
+                deferred = {
+                    "action_id": action.action_id,
+                    "decision": "unclear",
+                    "interpreter": "budget_deferred",
+                    "confidence": None,
+                    "prompt_outbox_id": action.latest_prompt_outbox_id,
+                }
+                return await self._reprompt(cursor, inp, deferred, llm_calls)
             interpreter = "llm"
             llm_calls += 1
 

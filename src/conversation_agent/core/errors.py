@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from datetime import datetime
+
 
 class ConversationAgentError(Exception):
     """Base class for framework errors."""
@@ -13,6 +15,14 @@ class LLMProviderError(ConversationAgentError):
     def __init__(self, message: str, *, retryable: bool = False) -> None:
         super().__init__(message)
         self.retryable = retryable
+
+
+class LLMBudgetDeferredError(ConversationAgentError):
+    """A call was not sent because the tenant's `defer_llm` budget is exhausted."""
+
+    def __init__(self, retry_at: datetime) -> None:
+        super().__init__(f"LLM budget exhausted; retry at {retry_at.isoformat()}")
+        self.retry_at = retry_at
 
 
 class JournalDivergenceError(ConversationAgentError):

@@ -17,6 +17,7 @@ from conversation_agent.core.llm_prices import PriceTable
 from conversation_agent.core.models.audit import AuditEntry
 from conversation_agent.core.models.llm_usage import UsageQuery, UsageRow
 from conversation_agent.ports.admission import ADMITTED, AdmissionDecision
+from conversation_agent.ports.llm_budget import LLMCallAdmission
 from conversation_agent.ports.llm_usage import LLMUsageStore
 
 
@@ -132,6 +133,13 @@ class BudgetEvaluator:
             if status is not None:
                 out.append(status)
         return out
+
+    async def admit_llm_call(self, tenant_id: str) -> LLMCallAdmission:
+        """The in-turn gate for `defer_llm`; all other policies allow the call."""
+        status = await self.status(tenant_id)
+        return LLMCallAdmission(
+            status.resets_at if status is not None and status.defers_llm else None
+        )
 
     async def _used(self, tenant_id: str, since: datetime, until: datetime) -> Consumption:
         rows = await self._usage.report(

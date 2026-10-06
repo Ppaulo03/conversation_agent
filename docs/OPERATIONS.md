@@ -17,9 +17,17 @@ at the rows, not at the processes.
 | Is a tenant over budget? | `conversation_agent_llm_budget_used_ratio`, `BudgetEvaluator.status(tenant)` |
 | What did an operator change? | `admin_audit` (`PostgresAuditLog.list`) |
 
-Wiring: `setup_observability()` turns on JSON logs (`LOG_LEVEL`, `LOG_STACK`), span lines (`TRACE=log|off`)
+Wiring: `setup_observability()` turns on JSON logs (`LOG_LEVEL`, `LOG_STACK`), spans (`TRACE=log|otlp|off`)
 and loads the price list (`LLM_PRICES_FILE`); wrap the LLM with `wrap_llm` (it goes on the books) and mount
 `ops_app` on a non-public port.
+
+`TRACE=otlp` needs `conversation-agent[otel]` and uses the standard OpenTelemetry environment variables
+(`OTEL_SERVICE_NAME`, `OTEL_EXPORTER_OTLP_ENDPOINT` or `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`, headers,
+certificate and timeout). It exports OTLP/HTTP in batches; point it at an OpenTelemetry Collector in
+production. Call `Observability.shutdown()` from the deployment's shutdown hook so the final batch is
+flushed. The durable framework `trace_id` is exported as `conversation_agent.trace_id` for correlation
+with rows and logs. W3C `traceparent` extraction/injection remains a channel/HTTP-adapter concern: the
+host does not invent propagation for protocols that do not define it.
 
 ## Alerts
 
@@ -126,7 +134,13 @@ whether to raise the budget or find the cause (`app.usage --tenant T --by agent_
 a release that got dearer, a flood from one contact). With `on_exceed: refuse_new` the edge already refuses
 NEW user messages with 503 and a `Retry-After` until the period resets; messages in flight finish. Mind that
 a gateway gives up redelivering after its own retry budget, so a long refusal can lose messages: it
-protects the bill, not the customer. USD figures are a lower bound while models are unpriced
+protects the bill, not the customer.
+
+With `on_exceed: defer_llm`, wire the `BudgetEvaluator` into `Runtime.build(..., llm_gate=evaluator)`.
+The edge still persists the message. The runtime pauses the open turn immediately before an LLM request,
+stores its reset time in the turn, and resumes it after the period rolls over; deterministic paths continue.
+A pending protected action whose answer needed LLM interpretation is re-prompted immediately, so a former
+"yes" can never execute after the reset. USD figures are a lower bound while models are unpriced
 (*llm-unpriced*). The budget is evaluated from the usage ledger and cached for seconds: a tenant can
 overshoot by what it spends inside one cache window.
 
@@ -183,7 +197,10 @@ Restore procedure:
    `idempotency_retention_seconds`); external writes that happened after the point are NOT in the ledger,
    so the system will not know they exist: reconcile those against the external systems by hand. Treat
    a restore older than the gateway's idempotency window as an incident, not a procedure.
-6. Rehearse this. A backup that was never restored is a hypothesis.
+6. Rehearse this. A backup that was never restored is a hypothesis. CI performs a real logical
+   `pg_dump`/`pg_restore` into another PostgreSQL 16 database, then runs both the schema check and
+   `app.integrity`. Environments that rely on WAL/PITR must additionally rehearse that infrastructure:
+   the logical CI rehearsal does not prove archive availability or the environment's RTO.
 
 ## Audit
 

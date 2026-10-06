@@ -10,6 +10,9 @@ make the figure a lower bound, which the status says). Evaluation is pure: usage
                Be deliberate: a refused message is redelivered by the gateway, but a gateway gives
                up after its own retry budget, so a long refusal can lose messages. It protects the
                bill, not the customer experience.
+  defer_llm    accepts inbound messages but pauses only a turn that is about to call an LLM until
+                the budget period resets. Deterministic paths may still complete. A confirmation
+                that needed LLM interpretation is re-prompted instead of retaining its old answer.
 """
 
 from __future__ import annotations
@@ -33,7 +36,7 @@ class LLMBudget(BaseModel):
     daily_usd: float | None = Field(default=None, gt=0)
     monthly_usd: float | None = Field(default=None, gt=0)
     warn_ratio: float = Field(default=0.8, gt=0, lt=1)
-    on_exceed: Literal["alert", "refuse_new"] = "alert"
+    on_exceed: Literal["alert", "refuse_new", "defer_llm"] = "alert"
 
     @model_validator(mode="after")
     def _has_a_limit(self) -> LLMBudget:
@@ -78,6 +81,10 @@ class BudgetStatus:
     @property
     def refuses_new(self) -> bool:
         return self.state == "exceeded" and self.on_exceed == "refuse_new"
+
+    @property
+    def defers_llm(self) -> bool:
+        return self.state == "exceeded" and self.on_exceed == "defer_llm"
 
 
 def period_start(period: Period, now: datetime) -> datetime:

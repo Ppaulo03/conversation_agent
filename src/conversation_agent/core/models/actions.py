@@ -66,7 +66,7 @@ class ActionConfirmation(_Frozen):
     prompt_outbox_id: str
     reply_to_provider_message_id: str | None = None
     decision: ConfirmationDecision
-    interpreter: Literal["rule", "llm"]
+    interpreter: Literal["rule", "llm", "budget_deferred"]
     confidence: float | None = None
     occurred_at: AwareDatetime
     confirmed_at: AwareDatetime | None = None

@@ -26,6 +26,7 @@ from conversation_agent.core.errors import (
     AgentVersionUnavailableError,
     FencingError,
     JournalDivergenceError,
+    LLMBudgetDeferredError,
     LLMProviderError,
     RegistryIntegrityError,
     StaleWorkerError,
@@ -388,6 +389,16 @@ class TurnCoordinator:
             return "completed"
         except ToolResultPendingError:
             return "waiting"
+        except LLMBudgetDeferredError as exc:
+            async with self._uows.begin(fence) as uow:
+                await uow.turns.defer(opened.turn_id, exc.retry_at)
+                await uow.commit()
+            log.info(
+                "turn.llm_budget_deferred",
+                extra={"fields": {"retry_at": exc.retry_at.isoformat()}},
+            )
+            trace.outcome = "budget_deferred"
+            return "retry"
         except LLMProviderError as exc:
             async with self._uows.begin(fence) as uow:
                 failures = await uow.turns.record_failure(opened.turn_id)

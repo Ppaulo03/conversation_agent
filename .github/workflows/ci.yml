@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  quality-and-core:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src examples
+      - run: uv run lint-imports
+      - run: uv run pytest --ignore=tests/postgres
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: conversation_agent
+          POSTGRES_PASSWORD: conversation_agent_dev
+          POSTGRES_DB: conversation_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U conversation_agent -d conversation_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: uv sync --locked
+      - run: uv run pytest tests/postgres
+      - name: Rehearse logical backup and restore
+        env:
+          DATABASE_URL: postgresql://conversation_agent:conversation_agent_dev@127.0.0.1:5432/conversation_agent_restore
+        run: |
+          set -euo pipefail
+          postgres_container="$(docker ps --filter ancestor=postgres:16-alpine --format '{{.ID}}')"
+          test -n "$postgres_container"
+          docker exec "$postgres_container" pg_dump \
+            --username conversation_agent \
+            --format custom \
+            --file /tmp/conversation_agent_test.dump \
+            conversation_agent_test
+          docker exec "$postgres_container" createdb \
+            --username conversation_agent \
+            conversation_agent_restore
+          docker exec "$postgres_container" pg_restore \
+            --username conversation_agent \
+            --dbname conversation_agent_restore \
+            --no-owner \
+            --exit-on-error \
+            /tmp/conversation_agent_test.dump
+          uv run python -m conversation_agent.app.migrate check
+          uv run python -m conversation_agent.app.integrity

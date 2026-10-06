@@ -49,6 +49,7 @@ from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.llm_budget import LLMCallGate
 from conversation_agent.ports.sender import MessageSender
 from conversation_agent.ports.tool_provider import ToolProvider
 from conversation_agent.ports.transcriber import Transcriber
@@ -101,6 +102,7 @@ class Runtime:
         debounce: timedelta = timedelta(0),
         debounce_max_wait: timedelta = timedelta(seconds=10),
         restart_on_new_message: bool = False,
+        llm_gate: LLMCallGate | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -177,6 +179,8 @@ class Runtime:
                 clock,
                 tool_executor=executor,
                 transcriber=transcriber,
+                llm_gate=llm_gate,
+                tenant_id=fence.tenant_id if llm_gate is not None else None,
             )
             engine.attach_confirmation(
                 ConfirmationStage(

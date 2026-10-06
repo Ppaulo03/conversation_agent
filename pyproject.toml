@@ -14,7 +14,8 @@ dependencies = [
 [project.optional-dependencies]
 postgres = ["asyncpg>=0.30"]  # the durable runtime (Runtime, serve, migrate, ops)
 anthropic = ["anthropic>=0.40"]  # the Anthropic provider; Groq/OpenAI-compatible need nothing
-all = ["conversation-agent[postgres]", "conversation-agent[anthropic]"]
+otel = ["opentelemetry-sdk>=1.45", "opentelemetry-exporter-otlp-proto-http>=1.45"]
+all = ["conversation-agent[postgres]", "conversation-agent[anthropic]", "conversation-agent[otel]"]
 
 [dependency-groups]
 dev = [
