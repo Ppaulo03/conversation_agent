@@ -32,6 +32,7 @@ from conversation_agent.core.errors import (
     ToolResultPendingError,
     TurnCancelledError,
 )
+from conversation_agent.core.llm_budget import DEFAULT_DEGRADED_REPLY
 from conversation_agent.core.models.actions import PendingAction
 from conversation_agent.core.models.audit import AuditEntry, subject_ref
 from conversation_agent.core.models.conversation import (
@@ -57,6 +58,7 @@ from conversation_agent.core.versioning import Version
 from conversation_agent.engine.heartbeat import LeaseHandle
 from conversation_agent.engine.journal_steps import TurnJournalCursor
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.budget import BudgetGate
 from conversation_agent.ports.channel_policy import ChannelPolicy
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
@@ -148,6 +150,7 @@ class TurnCoordinator:
         metrics: RuntimeMetrics | None = None,
         scope: str | None = None,
         audit_ownership: bool = False,
+        budget: BudgetGate | None = None,
         debounce: timedelta = timedelta(0),
         debounce_max_wait: timedelta = timedelta(seconds=10),
     ) -> None:
@@ -157,6 +160,7 @@ class TurnCoordinator:
         self._debounce_max_wait = debounce_max_wait
         self._scope = scope  # only conversations of this scope are claimed (None: all)
         self._audit_ownership = audit_ownership  # write the bot's own handoffs to the audit trail
+        self._budget = budget  # the LLM budget: a tenant over it on `degrade` is told, not served
         self._metrics = metrics
         if (registry is None) != (versioned_engine_factory is None) or (
             registry is not None and agent_id is None
@@ -358,17 +362,22 @@ class TurnCoordinator:
         trace: _TurnTrace,
     ) -> Literal["none", "completed", "retry", "waiting", "cancelled"]:
         try:
-            outcome = await engine.process_turn(
-                opened.identity,
-                stored.state,
-                opened.user_text,
-                opened.turn_id,
-                guard=handle.ensure_active,
-                late_event_ids=opened.late_event_ids,
-                pending=pending,
-                inbound=opened.inbound,
-                cancel=lambda: handle.cancel_requested,
-                media=opened.media,
+            degraded = await self._degraded(opened, stored, pending, engine)
+            outcome = (
+                degraded
+                if degraded is not None
+                else await engine.process_turn(
+                    opened.identity,
+                    stored.state,
+                    opened.user_text,
+                    opened.turn_id,
+                    guard=handle.ensure_active,
+                    late_event_ids=opened.late_event_ids,
+                    pending=pending,
+                    inbound=opened.inbound,
+                    cancel=lambda: handle.cancel_requested,
+                    media=opened.media,
+                )
             )
         except TurnCancelledError:
             # A newer message asked to restart and nothing irreversible had happened: abandon
@@ -438,6 +447,50 @@ class TurnCoordinator:
         trace.handoff = outcome.handoff_requested
         return "completed"
 
+    async def _degraded(
+        self,
+        opened: OpenedTurn,
+        stored: StoredConversation,
+        pending: PendingAction | None,
+        engine: TurnEngine,
+    ) -> TurnOutcome | None:
+        """A turn that would START new work for a tenant whose LLM budget is exceeded (policy
+        `degrade`): no model call, ONE fixed notice per exceeded period, the contact's later
+        messages recorded but not answered. Work already under way (a flow, a pending confirmation,
+        a resumed turn) is never cut off. Nothing here has an effect outside the turn's own
+        transaction, so a retried turn may simply decide again."""
+        if (
+            self._budget is None
+            or opened.system_only
+            or opened.resumed
+            or pending is not None
+            or stored.state.flows
+        ):
+            return None
+        status = await self._budget.status(opened.identity.tenant_id)
+        if status is None or not status.degrades:
+            return None
+        period = status.resets_at.isoformat()
+        told = stored.state.budget_notice == period
+        log.warning(
+            "turn.degraded_by_budget",
+            extra={"fields": {"notice": not told, "resets_at": period}},
+        )
+        if told:  # already told this period: the message is kept, not answered
+            return TurnOutcome(turn_id=opened.turn_id, reply="", state=stored.state, llm_calls=0)
+        reply = engine.agent.budget_exceeded_reply or DEFAULT_DEGRADED_REPLY
+        state = stored.state.model_copy(
+            update={
+                "budget_notice": period,
+                "history": (
+                    *stored.state.history,
+                    ConversationMessage(role="user", text=opened.user_text),
+                    ConversationMessage(role="assistant", text=reply),
+                ),
+            }
+        )
+        return TurnOutcome(turn_id=opened.turn_id, reply=reply, state=state, llm_calls=0)
+
     async def _resolve_agent(
         self,
         fence: FenceToken,
@@ -494,6 +547,8 @@ class TurnCoordinator:
         """The reply, and - in the SAME transaction - the PendingAction it asks the user to
         confirm (or the re-prompt of an existing one), so the prompt row and the action it
         refers to can never disagree (DESIGN §26.1)."""
+        if not outcome.reply.strip():  # a message kept without an answer (budget degrade)
+            return
         parts = reply_parts(outcome.reply) if split else [outcome.reply]
         for index, part in enumerate(parts[:-1]):  # the LAST one carries the confirmation prompt
             await uow.outbox.add(self._outbound(opened, part, index))

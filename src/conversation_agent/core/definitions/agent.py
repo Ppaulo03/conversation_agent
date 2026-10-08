@@ -118,6 +118,9 @@ class AgentDefinition(BaseModel):
     # True: a reply with blank-line separated paragraphs goes out as one message per paragraph
     # (at most MAX_REPLY_PARTS), e.g. an answer and then the flow's question as its own message.
     split_replies: bool = False
+    # Said once per exceeded LLM budget period when the tenant's budget is on `degrade`. None: the
+    # framework's English default; set it in the agent's language.
+    budget_exceeded_reply: str | None = None
     # Voice messages leave the system only when BOTH the operator configured a transcriber (it may
     # be a third-party API) AND the agent says `on`. The default is off: audio is personal data.
     transcription: Literal["off", "on"] = "off"

@@ -46,6 +46,9 @@ class ConversationState(_Frozen):
     # MAX_MEDIA_HANDLES. They live and die with the conversation (retention, erasure).
     media: tuple[MediaArg, ...] = ()
     media_seq: int = 0  # the last handle number given: handles are never reused
+    # The exceeded budget period (its reset instant) the contact was last told about: the notice
+    # is said once per period, not on every message.
+    budget_notice: str | None = None
 
     @property
     def active_flow(self) -> FlowInstance | None:

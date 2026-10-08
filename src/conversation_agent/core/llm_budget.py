@@ -6,6 +6,12 @@ make the figure a lower bound, which the status says). Evaluation is pure: usage
 
 `on_exceed`:
   alert        the default: the status and the metric say so, nothing is refused
+  degrade      the DEFAULT: nothing is lost. Messages are accepted and stored as always; a turn that
+               would START new work is not run through the model: the contact gets ONE fixed notice
+               per exceeded period (the agent's `budget_exceeded_reply`) and later messages in that
+               period are recorded but not answered. Work already under way (a flow in progress, a
+               pending confirmation, a resumed turn) finishes normally. It protects the bill and
+               tells the contact the truth.
   refuse_new   the edge stops taking NEW user messages for this tenant until the period rolls over.
                Be deliberate: a refused message is redelivered by the gateway, but a gateway gives
                up after its own retry budget, so a long refusal can lose messages. It protects the
@@ -20,6 +26,10 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+DEFAULT_DEGRADED_REPLY = (
+    "We are receiving a lot of requests right now and cannot answer in detail at the moment. "
+    "Please try again later."
+)
 State = Literal["ok", "warning", "exceeded"]
 Period = Literal["day", "month"]
 Unit = Literal["tokens", "usd"]
@@ -33,7 +43,7 @@ class LLMBudget(BaseModel):
     daily_usd: float | None = Field(default=None, gt=0)
     monthly_usd: float | None = Field(default=None, gt=0)
     warn_ratio: float = Field(default=0.8, gt=0, lt=1)
-    on_exceed: Literal["alert", "refuse_new"] = "alert"
+    on_exceed: Literal["alert", "degrade", "refuse_new"] = "degrade"
 
     @model_validator(mode="after")
     def _has_a_limit(self) -> LLMBudget:
@@ -78,6 +88,10 @@ class BudgetStatus:
     @property
     def refuses_new(self) -> bool:
         return self.state == "exceeded" and self.on_exceed == "refuse_new"
+
+    @property
+    def degrades(self) -> bool:
+        return self.state == "exceeded" and self.on_exceed == "degrade"
 
 
 def period_start(period: Period, now: datetime) -> datetime:
