@@ -6,7 +6,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 
 - Python >=3.12 (testado 3.13), `uv`, Pydantic v2, httpx, FastAPI/uvicorn (só a API de referência), pytest-asyncio.
 - Setup: `uv sync` · Testes: `uv run pytest` · Lint: `uv run ruff check . && uv run ruff format --check .`
-- Tipos: `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
+- Tipos (gate oficial; `mypy .` NÃO é gate): `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
 - API de referência: `uv run uvicorn scheduling_api.main:app --port 8001` · CLI: `uv run python -m vertical_slice`
 - Teste live com orçamento diário (`tests/support/live_budget.py`, `LIVE_LLM_DAILY_CALLS`=20, estado em `.live_llm_usage.json`
   git-ignored; 429 zera o dia). Não rodar em loop: o Groq tem limite diário baixo. Modelo Groq vigente: `openai/gpt-oss-120b`
@@ -15,7 +15,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - LLM provider-agnóstico via env: `LLM_PROVIDER` (groq|openai|openai_compat|anthropic), `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`;
   `GROQ_API_KEY`/`ANTHROPIC_API_KEY` valem como fallback. Resolução em `app/llm_factory.py`. `.env` é git-ignored e nunca deve ser lido/impresso.
 - Postgres local: `docker compose up -d` (`docker-compose.yml`, credenciais dev em `.env.example`).
-- Docs normativos em `docs/` (sem sufixo `_v4`). Progresso e DoD em `IMPLEMENTATION_STATUS.md`.
+- Memória canônica em `docs/00_PROJECT.md`…`06_AGENT_HANDOFF.md` (metodologia adotada: `docs/01_METHODOLOGY.md`; autoridade: ADR-020). Normativos: `docs/INVARIANTS.md`, `docs/RUNTIME_PROTOCOL.md`. `IMPLEMENTATION_STATUS.md` e `docs/ROADMAP.md` são HISTÓRICOS.
 - Repo git inicializado (`main` = baseline da Fase 1). Trabalho em `feature/*`; nada direto em `main`.
 
 ## Aprendizados acumulados

@@ -1,5 +1,9 @@
 # IMPLEMENTATION_STATUS
 
+> **Status: LOG HISTÓRICO de implementação** (ADR-020). Não é fonte de verdade do estado atual (use [`docs/02_ARCHITECTURE.md`](docs/02_ARCHITECTURE.md)),
+> nem do que vem a seguir ([`docs/04_ROADMAP.md`](docs/04_ROADMAP.md)), nem dos pendentes técnicos ([`docs/05_REVIEW_LOG.md`](docs/05_REVIEW_LOG.md)).
+> A ordem de precedência abaixo foi substituída pela de ADR-020 (`docs/03_DECISIONS.md`); permanece como registro do que valia até a iteration Baseline & Engineering Consolidation.
+
 Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 
 - `INVARIANTS.md` — invariantes normativas e mapa INV → teste;
@@ -803,7 +807,7 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 - `question_check` só existe para slots `text`; não há equivalente para `choose` (opções) nem para pedidos de humano durante uma confirmação.
 
 
-## Phase 13 — Uso real (em andamento)
+## Phase 13 — Uso real (concluída; o título original dizia “em andamento”)
 
 Status: **PASS** (itens 1–4, 8–11 da lista do POC; 5, 6 e 7 ficam para a fase seguinte). Pronto: o runtime durável montado em um lugar só (`serve`). Pronto também: wiring genérico no pacote e extras de dependências. Falta (ver ROADMAP): guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
 

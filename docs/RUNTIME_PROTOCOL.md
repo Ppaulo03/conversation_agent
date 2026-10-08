@@ -1,5 +1,7 @@
 # Runtime Protocol — conversation_agent v4
 
+> **Status: NORMATIVO e vigente** (3º na ordem de autoridade, ADR-020). Visão geral do estado atual: [`02_ARCHITECTURE.md`](./02_ARCHITECTURE.md).
+
 Este documento concentra o protocolo normativo de execução. A visão completa continua em `DESIGN.md`.
 
 ## 1. Regra central de ownership
@@ -269,7 +271,7 @@ A mesma linha de Outbox reutiliza a mesma idempotency key em retry técnico. Re-
 
 ### Retenção da idempotency key no RelayPlane
 
-A arquitetura anterior do RelayPlane não define uma janela temporal outbound formal. Produção deve configurar/documentar `relayplane_idempotency_retention` e garantir:
+O RelayPlane expõe a retenção da idempotency key em `GET /api/v1/limits` (`idempotency_retention_seconds`); depois dela a chave é esquecida e reenviar cria uma mensagem nova (ver [`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md), que também registra o valor padrão do gateway). Produção deve garantir:
 
 ```text
 sender_retry_horizon <= relayplane_idempotency_retention

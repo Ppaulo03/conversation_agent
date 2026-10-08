@@ -1,5 +1,9 @@
 # conversation_agent — Design mestre v4
 
+> **Status: racional de desenho (parcialmente histórico).** Não é a descrição do estado atual — para isso use [`02_ARCHITECTURE.md`](./02_ARCHITECTURE.md);
+> decisões vigentes estão em [`03_DECISIONS.md`](./03_DECISIONS.md). Este arquivo não foi auditado linha a linha contra o código (finding F-004 em [`05_REVIEW_LOG.md`](./05_REVIEW_LOG.md)).
+> Precedência: ver ADR-020. As afirmações “fonte única” abaixo valem apenas no sentido de ADR-020.
+
 Framework para construção e execução de **agentes conversacionais stateful**, com LLM, extração estruturada, flows, tool calling, policies, integrações externas e mensageria assíncrona.
 
 **Status:** documento mestre v4 para início da implementação. Decisões marcadas como normativas devem ser tratadas como invariantes do runtime; questões explicitamente abertas podem evoluir com evidência da implementação.
@@ -106,7 +110,7 @@ O runtime não depende de Pack durante a execução.
 
 ## 1.4. Invariantes arquiteturais
 
-As invariantes normativas (`INV-001` a `INV-022`), com o teste obrigatório de cada uma, vivem em [`INVARIANTS.md`](./INVARIANTS.md), que é a **fonte única**. Este documento descreve o desenho que as sustenta e não as repete.
+As invariantes normativas (`INV-001` em diante; o conjunto atual vai até `INV-071`), com o teste obrigatório de cada uma, vivem em [`INVARIANTS.md`](./INVARIANTS.md), que é a **fonte única**. Este documento descreve o desenho que as sustenta e não as repete.
 
 Resumo do que elas garantem: `core`/`engine` não conhecem adapters; o LLM nunca fornece identidade, secrets nem autoridade; toda operação externa cruza `Capability -> Binding -> PolicyGate -> ToolRunner`; ação protegida tem `action_id` persistente e confirmação restrita a ela; `UNKNOWN` nunca sofre retry cego; mutação de conversa e execução externa têm fences independentes; replay do journal é fail-closed; `HUMAN` nunca recebe resposta automática; e evento duplicado nunca cria turno duplicado.
 
@@ -2523,7 +2527,7 @@ Inspeção local:
 
 # 49. Fatias de entrega
 
-Escopo da v1, fases 1–10, DoD, o gate GO/NO-GO após a Fase 1 e os chaos gates exigidos por fase ficam em [`ROADMAP.md`](./ROADMAP.md) (fonte única). Resumo da ordem:
+Escopo da v1, fases 1–10, DoD, o gate GO/NO-GO após a Fase 1 e os chaos gates exigidos por fase ficam em [`ROADMAP.md`](./ROADMAP.md) (histórico; o roadmap vigente é [`04_ROADMAP.md`](./04_ROADMAP.md)). Resumo da ordem:
 
 ```text
 1 Vertical slice (+ GO/NO-GO)  ->  2 Reliability core  ->  3 Protected actions + confirmation + security
@@ -2643,11 +2647,11 @@ docs/
   DESIGN.md           # visão consolidada e racional (este arquivo)
   INVARIANTS.md       # fonte única: invariantes + mapa INV -> teste
   RUNTIME_PROTOCOL.md # fonte única: lease, claim, epochs, journal, side effects, confirmation, outbox
-  ROADMAP.md          # fonte única: fases, DoD, GO/NO-GO e chaos gates (C01–C16)
+  ROADMAP.md          # HISTÓRICO: fases, DoD, GO/NO-GO; referência viva só da tabela de chaos gates (C01–C16)
   README.md           # índice
 ```
 
-Regra de precedência: o que estiver em `INVARIANTS.md`, `RUNTIME_PROTOCOL.md` ou `ROADMAP.md` prevalece sobre este arquivo. Trechos normativos não devem ser duplicados aqui; o `DESIGN.md` explica o porquê e aponta para a fonte.
+Regra de precedência (substituída por ADR-020 em `03_DECISIONS.md`: código/testes > INVARIANTS > RUNTIME_PROTOCOL > canônicos 00–06 > este arquivo > IMPLEMENTATION_STATUS): o que estiver em `INVARIANTS.md` ou `RUNTIME_PROTOCOL.md` prevalece sobre este arquivo. Trechos normativos não devem ser duplicados aqui; o `DESIGN.md` explica o porquê e aponta para a fonte.
 
 Mudanças de protocolo que alterem persistência, idempotência, fencing, confirmação ou semântica de retry exigem:
 

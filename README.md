@@ -1,8 +1,8 @@
 # conversation_agent
 
 Framework for stateful conversational agents. **It owns conversational state, not business
-state.** **Start with the [usage guide](docs/GUIDE.md).** Architecture lives in [`docs/`](docs/README.md); implementation progress in
-[`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
+state.** **Start with the [usage guide](docs/GUIDE.md).** Project memory lives in [`docs/`](docs/README.md) (start at `00_PROJECT.md`; architecture in `02_ARCHITECTURE.md`); the historical
+per-phase log is [`IMPLEMENTATION_STATUS.md`](IMPLEMENTATION_STATUS.md).
 
 ## Install
 
@@ -69,7 +69,7 @@ docker compose down       # add -v to drop the data volume
 
 ```bash
 uv run ruff check . && uv run ruff format --check .
-uv run mypy src examples
+uv run mypy src examples   # the official type gate (not `mypy .`)
 uv run lint-imports
 uv run pytest
 ```

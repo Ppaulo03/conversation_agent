@@ -1,5 +1,7 @@
 # Invariantes normativas — conversation_agent v4
 
+> **Status: NORMATIVO e vigente** (2º na ordem de autoridade, ADR-020; só o código/testes o superam, e divergência é defeito a registrar em `05_REVIEW_LOG.md`).
+
 Este documento é a referência curta para invariantes que devem permanecer verdadeiras independentemente de adapter, provider, tenant ou domínio.
 
 Toda alteração arquitetural que possa violar uma invariante deve atualizar também o teste nomeado correspondente.

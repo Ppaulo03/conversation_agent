@@ -1,6 +1,10 @@
 # Roadmap e gates — conversation_agent v4
 
-Fonte única das fases, DoD, GO/NO-GO e chaos gates. Detalhes arquiteturais ficam em [`DESIGN.md`](./DESIGN.md) e [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md); invariantes em [`INVARIANTS.md`](./INVARIANTS.md).
+> **Status: HISTÓRICO** (desde a iteration Baseline & Engineering Consolidation, ADR-020). O roadmap vigente é [`04_ROADMAP.md`](./04_ROADMAP.md).
+> Este arquivo preserva as fases 1–10 e 13–15 como foram planejadas, o DoD e os GO/NO-GO. **Não contém** as Fases 11 (observabilidade), 12 (lacunas de conversa), 14.1 (segurança de produção) nem os detalhes de 15a/15b: elas existem só em [`IMPLEMENTATION_STATUS.md`](../IMPLEMENTATION_STATUS.md) e no código.
+> Continua sendo a **referência viva da tabela de chaos gates** (seção abaixo).
+
+Fases, DoD, GO/NO-GO e chaos gates originais. Detalhes arquiteturais ficam em [`DESIGN.md`](./DESIGN.md) e [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md); invariantes em [`INVARIANTS.md`](./INVARIANTS.md).
 
 Cada fase só avança quando seu DoD e os chaos gates atribuídos a ela estão verdes (tabela em "Chaos gates").
 
@@ -250,6 +254,8 @@ Do POC de agendamento de quadras (lista consolidada, abertos após a fase 13).
 
 > 15a (transcriber real) e 15b (mídia como argumento de tool) implementadas. A visão opcional (antes 15c)
 > ficou como ideia futura: [`FUTURE_VISION.md`](./FUTURE_VISION.md).
+
+> **Obsoleto (texto de planejamento):** o parágrafo abaixo descreve o estado antes da 15a/15b. Hoje o áudio é transcrito (opt-in, INV-067), arquivos chegam a tools HTTP por handle (INV-068); imagem e vídeo continuam apenas nomeados.
 
 Hoje só o áudio é lido (transcrição por step journalado); imagem, vídeo e documento são apenas nomeados, e nenhuma tool recebe a mídia.
 
