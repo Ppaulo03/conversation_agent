@@ -1001,6 +1001,16 @@ Débitos: um único arquivo por argumento (sem lista); só tools HTTP (MCP não 
 | Download de mídia sem a proteção do `GuardedTransport` | **Fechado (INV-070).** DNS fixado, rede privada recusada, TLS exigido, sem redirecionamento, `media_id` como um único segmento. |
 | Transcriber de cassette para evals | **Fechado.** Turnos de eval com `voice:` (transcrição roteirizada); prova o que o agente faz e que `transcription: off` ignora o áudio. O digest de suítes antigas não muda. |
 | `T0` fixo dos testes (2026-10-05) contra o relógio real do banco | **Fechado na prática.** O único teste que misturava os dois (`test_a_conversation_being_processed_cannot_be_erased`) foi corrigido e, como o tempo real só avança, um teste que passa com `T0` no passado continua passando; regra no `AGENTS.local.md`. |
-| Orçamento rígido de LLM pode perder mensagem | **Aberto: decisão de produto** (ver OPERATIONS.md, `llm-budget`). |
+| Orçamento rígido de LLM pode perder mensagem | **Fechado (INV-071).** Nova política `degrade`, que passa a ser o padrão de um orçamento novo: aceita e grava a mensagem, avisa uma vez por período e não chama o modelo; trabalho em andamento termina. `alert` e `refuse_new` continuam. |
 | Exporter OpenTelemetry, métricas agregadas, ensaio de restauração | **Abertos** (operacionais). |
+
+### Orçamento de LLM: `degrade` (INV-071)
+
+Decisão do usuário: opt-in por orçamento (só quem define um orçamento é afetado), com `degrade` como valor padrão de `on_exceed`; orçamentos já salvos mantêm o valor que gravaram.
+
+- `LLMBudget.on_exceed`: `alert | degrade | refuse_new`, padrão `degrade`. `BudgetStatus.degrades`.
+- `TurnCoordinator(budget=BudgetGate)` / `Runtime.build(budget=...)`: antes de chamar o motor, um turno de usuário sem trabalho em andamento (sem fluxo, sem confirmação pendente, não retomado) de um tenant excedido vira o aviso fixo (`AgentDefinition.budget_exceeded_reply`, texto padrão em inglês) ou, já avisado neste período (`ConversationState.budget_notice` = instante de reset), é consumido sem resposta (`_persist_reply` não grava mensagem vazia). Sem chamada de modelo, sem efeito fora da transação do turno.
+- Digest: `budget_exceeded_reply` só entra no documento do agente quando definido.
+
+Débitos: mensagens recebidas durante o período excedido ficam registradas mas não entram no histórico nem são respondidas depois do reset (o aviso diz ao contato); o aviso é uma mensagem fixa (sem modelo), mesmo para quem escreve em outro idioma que o do agente.
 

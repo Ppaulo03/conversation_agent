@@ -121,14 +121,24 @@ is a handoff, so look at *tool-failures* first.
 
 ### llm-budget
 A tenant is near or over its LLM budget (`LLMBudget`: tokens and/or USD, per day and per month; set with
-`PostgresBudgetStore.set`, audited). With `on_exceed: alert` (the default) nothing is refused: decide
-whether to raise the budget or find the cause (`app.usage --tenant T --by agent_version,purpose`: a loop,
-a release that got dearer, a flood from one contact). With `on_exceed: refuse_new` the edge already refuses
-NEW user messages with 503 and a `Retry-After` until the period resets; messages in flight finish. Mind that
-a gateway gives up redelivering after its own retry budget, so a long refusal can lose messages: it
-protects the bill, not the customer. USD figures are a lower bound while models are unpriced
-(*llm-unpriced*). The budget is evaluated from the usage ledger and cached for seconds: a tenant can
-overshoot by what it spends inside one cache window.
+`PostgresBudgetStore.set`, audited). What happens when it is exceeded is `on_exceed`:
+
+- **`degrade` (the default):** nothing is lost. Messages are accepted and stored; a turn that would START new
+  work does not call the model: the contact gets ONE fixed notice per exceeded period (the agent's
+  `budget_exceeded_reply`, in its language; a default English text otherwise) and later messages in that period are
+  kept but not answered. A flow in progress, a pending confirmation or a resumed turn finishes normally. Needs the
+  runtime to be given the gate: `Runtime.build(budget=BudgetEvaluator(...))`. When the period resets the agent
+  answers again; messages that arrived meanwhile were not answered, which the notice told the contact.
+- **`alert`:** nothing is refused or changed: the status and the metric say so. Decide whether to raise the budget
+  or find the cause (`app.usage --tenant T --by agent_version,purpose`: a loop, a release that got dearer, a flood
+  from one contact).
+- **`refuse_new`:** the edge refuses NEW user messages with 503 and a `Retry-After` until the period resets;
+  messages in flight finish. A gateway gives up redelivering after its own retry budget, so a long refusal can lose
+  messages: it protects the bill, not the customer.
+
+USD figures are a lower bound while models are unpriced (*llm-unpriced*). The budget is evaluated from the usage
+ledger and cached for seconds: a tenant can overshoot by what it spends inside one cache window. A budget saved
+before `degrade` existed keeps the `on_exceed` it was saved with.
 
 ## Releases
 

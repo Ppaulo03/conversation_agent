@@ -304,6 +304,12 @@ old key if you must prove an earlier erasure.
 **Auditing ownership.** An operator's `OwnershipService` writes its audit entry in the same transaction as the
 change. To also audit the bot's own handoffs, `Runtime.build(audit_ownership=True)` (needs `PSEUDONYM_KEY`).
 
+**LLM budget.** Give a tenant a budget (`PostgresBudgetStore.set`) and pass the gate to the runtime
+(`Runtime.build(budget=BudgetEvaluator(budgets, usage, prices))`). Over the limit, the default policy `degrade`
+tells the contact once per period (`budget_exceeded_reply` in the manifest, in the agent's language) instead of
+calling the model or dropping the message; `alert` and `refuse_new` are the alternatives. See *llm-budget* in
+`OPERATIONS.md`.
+
 ## 8. Operating it
 
 `app.migrate` (schema), `app.ops check|render` (SLOs, alerts, dashboard), `app.integrity`,
