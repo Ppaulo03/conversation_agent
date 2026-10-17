@@ -42,6 +42,7 @@ packages = ["src/conversation_agent"]
 dev-mode-dirs = [
     "src",
     "examples/vertical-slice",
+    "examples/relayplane-app",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
@@ -62,6 +63,7 @@ target-version = "py312"
 src = [
     "src",
     "examples/vertical-slice",
+    "examples/relayplane-app",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
@@ -82,6 +84,7 @@ plugins = ["pydantic.mypy"]
 mypy_path = [
     "src",
     "examples/vertical-slice",
+    "examples/relayplane-app",
     "examples/reference-scheduling-api",
     "examples/reference-relayplane",
     "examples/reference-mcp",
@@ -94,7 +97,7 @@ module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api"]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "relayplane_app"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -151,7 +154,7 @@ forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
 name = "framework never imports example/external-system code (INV-008)"
 type = "forbidden"
 source_modules = ["conversation_agent"]
-forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api"]
+forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "relayplane_app"]
 
 [[tool.importlinter.contracts]]
 name = "reference API is an external system: no framework imports"

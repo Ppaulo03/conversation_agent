@@ -57,6 +57,8 @@ then `receive(event)` for each inbound event and `run(stop)` (or `tick()`) to dr
 channel remembers an idempotency key and for how long it may be retried directly (`retry_horizon`; `timedelta(0)` disables every resend and `serve` uses it for the
 console; a reconciler-authorised resend of an unknown send may still follow after the horizon, but never past
 `idempotency_retention - safety_margin`), see [`docs/GUIDE.md`](docs/GUIDE.md) and [`docs/RUNTIME_PROTOCOL.md`](docs/RUNTIME_PROTOCOL.md) §8.
+A complete application on RelayPlane, ready to copy, is [`examples/relayplane-app`](examples/relayplane-app/README.md).
+Upgrading from an earlier copy: [`CHANGELOG.md`](CHANGELOG.md) lists what an embedding application must change.
 
 A confirmation ("yes") must be provably a reply to the prompt that was sent: the channel gives the
 sender's `provider_accepted_at` and each inbound event's `provider_occurred_at` and/or

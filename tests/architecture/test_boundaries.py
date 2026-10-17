@@ -90,7 +90,7 @@ def test_only_tool_runner_executes_tool_providers() -> None:
 @pytest.mark.parametrize("path", sorted(SRC.rglob("*.py")), ids=lambda p: str(p.relative_to(SRC)))
 def test_framework_never_imports_examples_or_external_systems(path: Path) -> None:  # INV-008
     for module in imported_modules(path.read_text(encoding="utf-8")):
-        assert module.split(".")[0] not in {"scheduling_api", "vertical_slice"}
+        assert module.split(".")[0] not in {"scheduling_api", "vertical_slice", "relayplane_app"}
 
 
 def test_runtime_does_not_own_business_state() -> None:  # INV-008
