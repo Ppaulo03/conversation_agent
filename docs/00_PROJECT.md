@@ -8,10 +8,21 @@
 
 ## O que estamos construindo
 
-`conversation_agent`: framework Python para **agentes conversacionais stateful**. Ele é dono do **estado conversacional**,
-nunca do estado de negócio (INV-008). Um agente é declarado como dado (manifest YAML + allowlist), compilado, publicado como
-versão imutável e executado por um runtime durável sobre PostgreSQL, com um canal de mensagens (hoje o gateway RelayPlane,
-mais um canal de terminal para desenvolvimento).
+`conversation_agent`: framework Python **embeddable** para **agentes conversacionais stateful**. Ele é dono do **estado
+conversacional**, nunca do estado de negócio (INV-008). Um agente é declarado como dado (manifest YAML + allowlist),
+compilado, publicado como versão imutável e executado pelo **runtime do framework**, durável sobre PostgreSQL, com um
+canal de mensagens (hoje o adapter do gateway RelayPlane, mais um canal de terminal para desenvolvimento).
+
+### Runtime do framework × deployment runtime (ADR-022)
+
+- **Runtime do framework**: as primitives executáveis que a biblioteca fornece — `Runtime.build`, workers, scheduler,
+  inbox/outbox, adapters e lifecycle. Pertence a este projeto.
+- **Deployment runtime**: a infraestrutura e o processo onde isso roda (servidor, ASGI host, container, topologia, banco
+  provisionado, backup, observabilidade, CI/CD). Pertence à **aplicação consumidora**, que é o composition root
+  operacional. O framework não define um deployment canônico e `app.serve` é só ferramenta de desenvolvimento/referência.
+
+O framework documenta o que fornece e o que o consumidor deve respeitar (contratos em [`OPERATIONS.md`](./OPERATIONS.md));
+não prescreve como operar.
 
 O caso guia é um agente de agendamento de serviços (quadras) contra uma API externa; um segundo domínio (suporte/ticket)
 prova que o framework não é de agendamento.
@@ -54,7 +65,7 @@ extração de slots e datas pt-BR, handoff para humano, AgentDefinition + compil
 (stable/canary/rollback), Packs de dados, providers de tools (HTTP guardado, MCP, replay), adapter RelayPlane (webhook HMAC,
 sender com idempotência, mídia por referência), transcrição de voz opt-in, mídia como argumento de tool, proativos/timers,
 backpressure, LGPD (retenção/erasure), auditoria administrativa, logs/spans/métricas Prometheus/ledger de custo de LLM
-com orçamento (`alert|degrade|refuse_new`), eval harness offline, e entrypoint terminal (`app.serve`) para execução local/desenvolvimento. Não existe entrypoint first-party de produção com RelayPlane (decisão em aberto, ver `04_ROADMAP`).
+com orçamento (`alert|degrade|refuse_new`), eval harness offline, e entrypoint terminal (`app.serve`) para execução local/desenvolvimento. Não existe, por decisão (ADR-022), entrypoint ou deployment de produção do framework: o consumidor compõe `Runtime.build(...)` com os adapters que usa.
 Como funciona: [`02_ARCHITECTURE`](./02_ARCHITECTURE.md).
 
 ## Estado atual
@@ -62,13 +73,15 @@ Como funciona: [`02_ARCHITECTURE`](./02_ARCHITECTURE.md).
 - Fases legadas 1–15b implementadas em `main` (histórico: `IMPLEMENTATION_STATUS.md`); visão e grupos **não** implementados.
 - Iteration **Baseline & Engineering Consolidation**: aceita (sem mudança de comportamento). Evidência do baseline e
   findings abertos: [`05_REVIEW_LOG`](./05_REVIEW_LOG.md).
-- Ainda **sem evidência executada** de: contrato do gateway RelayPlane de produção, ensaio de restore/DR, exporter de métricas
-  agregadas/OpenTelemetry, pipeline de CI no repositório. Ver findings F-002, F-003, F-005 e F-007.
+- Ainda **sem evidência executada** de: contrato do adapter RelayPlane contra um gateway real (F-002) e pipeline de CI do próprio
+  framework (F-007). Restore/DR, backend de métricas/OpenTelemetry e entrypoint de produção são responsabilidade do consumidor
+  (ADR-022; F-003, F-005 e F-006 reclassificados em [`05_REVIEW_LOG`](./05_REVIEW_LOG.md)).
 
 ## Principais restrições
 
 - Python ≥ 3.12 (testado em 3.13), PostgreSQL 16 (`asyncpg`; o psycopg async não roda no ProactorEventLoop do Windows).
 - Dependências de fronteira verificadas por import-linter (`core ← ports ← tools ← engine`; adapters nunca importam engine/app; `examples/` nunca é importado por `src/`).
 - Migrations só avançam (forward-only, checksum).
-- Segurança de entrega depende do contrato do gateway: `sender_retry_horizon <= idempotency_retention` ([`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md)).
+- PostgreSQL 16 é o persistence backend canônico do durable runtime; provisioná-lo e operá-lo é do consumidor. Desenvolvido e testado contra PostgreSQL 16 (`postgres:16-alpine`); outras versões não foram verificadas e não há matriz formal de suporte (ADR-026).
+- Segurança de entrega depende do contrato do gateway: `DeliveryPolicy` obrigatória por Runtime, com `retry_horizon <= idempotency_retention - safety_margin` (ADR-023; instanciação RelayPlane em [`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md)).
 - Testes live com LLM têm orçamento diário baixo (`tests/support/live_budget.py`).

@@ -16,7 +16,6 @@ from conversation_agent.adapters.connections.static import StaticConnectionResol
 from conversation_agent.adapters.secrets.providers import InMemorySecretProvider
 from conversation_agent.adapters.senders.relayplane import RelayPlaneSender, result_from_gateway
 from conversation_agent.core.models.connections import AuthSpec, ResolvedConnection
-from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
 
 TENANT = "tenant-1"
@@ -197,7 +196,7 @@ async def test_the_delivery_policy_is_checked_against_what_the_gateway_reports(
     sender = sender_for(relay)
     policy = await sender.delivery_policy(TENANT, retry_horizon=timedelta(hours=2))
     assert policy.idempotency_retention == RELAY_RETENTION
-    with pytest.raises(ValidationError, match="sender_retry_horizon"):
+    with pytest.raises(ValidationError, match="retry_horizon must be"):
         await sender.delivery_policy(TENANT, retry_horizon=RELAY_RETENTION + timedelta(hours=1))
     relay.state.fault = {"status": 500}
     with pytest.raises(RuntimeError):
@@ -245,38 +244,7 @@ async def test_an_unreadable_or_unexpected_answer_is_unknown() -> None:
     assert sender._interpret(garbage).status is OutboxStatus.UNKNOWN
 
 
-def test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention() -> None:
-    DeliveryPolicy(idempotency_retention=timedelta(hours=1), retry_horizon=timedelta(hours=1))
-    with pytest.raises(ValidationError, match="sender_retry_horizon"):
-        DeliveryPolicy(
-            idempotency_retention=timedelta(hours=1), retry_horizon=timedelta(hours=1, seconds=1)
-        )
-    with pytest.raises(ValidationError, match="positive"):
-        DeliveryPolicy(idempotency_retention=timedelta(0), retry_horizon=timedelta(0))
-    policy = DeliveryPolicy(
-        idempotency_retention=timedelta(hours=1),
-        retry_horizon=timedelta(minutes=30),
-        reconcile_margin=timedelta(minutes=5),
-    )
-    assert policy.safe_resend_until == timedelta(minutes=55)
+def test_the_relayplane_sender_satisfies_the_generic_lookup_contract() -> None:
+    from conversation_agent.ports.channel_lookup import MessageLookup
 
-
-def test_a_negative_reconcile_margin_cannot_extend_the_idempotency_window() -> None:
-    with pytest.raises(ValidationError, match="reconcile_margin"):
-        DeliveryPolicy(
-            idempotency_retention=timedelta(minutes=10),
-            retry_horizon=timedelta(minutes=10),
-            reconcile_margin=timedelta(minutes=-5),  # used to make 'safe to resend' last 15 min
-        )
-    with pytest.raises(ValidationError, match="reconcile_margin"):
-        DeliveryPolicy(  # a margin as long as the retention leaves no safe window at all
-            idempotency_retention=timedelta(minutes=10),
-            retry_horizon=timedelta(minutes=5),
-            reconcile_margin=timedelta(minutes=10),
-        )
-    ok = DeliveryPolicy(
-        idempotency_retention=timedelta(minutes=10),
-        retry_horizon=timedelta(minutes=5),
-        reconcile_margin=timedelta(0),
-    )
-    assert ok.safe_resend_until == timedelta(minutes=10)  # never beyond the retention
+    assert isinstance(RelayPlaneSender(StaticConnectionResolver({})), MessageLookup)

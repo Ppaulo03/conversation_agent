@@ -175,9 +175,13 @@ async def test_a_sender_that_lost_its_claim_cannot_overwrite_the_newer_outcome(
     world: World,
 ) -> None:
     await make_message(world)
-    (stale_claim,) = await world.outbox.claim_ready("slow", 5, TTL)
+    (stale_claim,) = await world.outbox.claim_ready(
+        "slow", 5, TTL, unknown_blocks_for=timedelta(hours=1)
+    )
     world.clock.set(world.clock.now() + TTL + timedelta(seconds=1))
-    (fresh_claim,) = await world.outbox.claim_ready("fast", 5, TTL)
+    (fresh_claim,) = await world.outbox.claim_ready(
+        "fast", 5, TTL, unknown_blocks_for=timedelta(hours=1)
+    )
     ok = SendResult(status=OutboxStatus.ACCEPTED, provider_message_id="p1")
     await world.outbox.record_result(fresh_claim, "fast", ok, timedelta(seconds=5))
 

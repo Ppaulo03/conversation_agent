@@ -49,19 +49,23 @@ def envelope(
     tenant_id: str = "tenant_relay",
     instance_id: str = "inst_1",
     timestamp: datetime | None = None,
-    schema_version: int = 1,
+    schema_version: int = 2,
 ) -> dict[str, Any]:
-    return {
+    event: dict[str, Any] = {
         "schema_version": schema_version,
         "event_id": event_id,
         "sequence": sequence,
         "event_type": event_type,
-        "provider": "evolution-v2",
         "tenant_id": tenant_id,
         "instance_id": instance_id,
         "timestamp": (timestamp or datetime.now(UTC)).isoformat().replace("+00:00", "Z"),
         "payload": payload,
     }
+    if schema_version == 1:  # what gateways before schema 2 (up to 0.3.0-rc3) sent
+        event["provider"] = "evolution-v2"
+    else:
+        event["channel"] = "whatsapp"
+    return event
 
 
 def message_received(

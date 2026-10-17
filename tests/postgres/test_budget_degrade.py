@@ -26,6 +26,7 @@ from conversation_agent.core.llm_budget import DEFAULT_DEGRADED_REPLY, LLMBudget
 from conversation_agent.core.llm_prices import PriceTable
 from conversation_agent.core.models.llm_usage import LLMCallRecord
 from postgres.test_runtime_paths import compiled, identity
+from support.builders import TEST_DELIVERY_POLICY
 from vertical_slice.definitions import CONNECTION
 from vertical_slice.wiring import MANIFEST_PATH
 
@@ -75,6 +76,7 @@ def runtime_with(
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=CLOCK,
         budget=evaluator,
     )

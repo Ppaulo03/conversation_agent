@@ -596,7 +596,7 @@ A evidência é avaliada nesta ordem:
 2. **ordenação/timestamp do mesmo domínio do canal**, quando o RelayPlane fornecer `provider_accepted_at` e `provider_occurred_at` comparáveis;
 3. sem reply-to nem relógio comparável, a confirmação é considerada temporalmente ambígua e o runtime re-pergunta; `received_at` local sozinho não prova que o usuário respondeu ao prompt correto.
 
-Para comparação temporal pelo provider, existe `confirmation_clock_skew_tolerance`, configurável por canal. Regra padrão da v1:
+Para comparação temporal pelo provider, existe `confirmation_clock_skew_tolerance`, configurável por canal. *(Estado atual: a tolerância é fixa em 2 s e não é configurável; ver RUNTIME_PROTOCOL §7 e ADR-025.)* Regra padrão da v1:
 
 ```text
 provider_occurred_at < provider_accepted_at - tolerance -> resposta inelegível

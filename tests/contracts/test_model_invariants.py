@@ -154,13 +154,14 @@ def test_a_sender_may_report_queued_accepted_failed_unknown() -> None:
 
     from conversation_agent.core.models.runtime import OutboxStatus, SendResult
 
-    for status in ("QUEUED", "ACCEPTED", "FAILED", "UNKNOWN"):
+    for status in ("ACCEPTED", "FAILED", "UNKNOWN"):
         assert SendResult(status=OutboxStatus(status)).provider_accepted_at is None
+    assert SendResult(status=OutboxStatus.QUEUED, channel_message_id="h1").channel_message_id
     at = datetime(2026, 10, 5, tzinfo=UTC)
     assert (
         SendResult(status=OutboxStatus.ACCEPTED, provider_accepted_at=at).provider_accepted_at == at
     )
     with pytest.raises(ValidationError):  # an acceptance time only means something when ACCEPTED
-        SendResult(status=OutboxStatus.QUEUED, provider_accepted_at=at)
+        SendResult(status=OutboxStatus.QUEUED, channel_message_id="h1", provider_accepted_at=at)
     with pytest.raises(ValidationError):  # and it must be timezone-aware
         SendResult(status=OutboxStatus.ACCEPTED, provider_accepted_at=datetime(2026, 10, 5))

@@ -32,11 +32,12 @@ class PostgresInboxStore:
         return int(value or 0)
 
     async def insert_if_absent(self, event: InboundEvent) -> bool:
-        """One transaction: the conversation row (first contact) + the event. Dedupe is the
-        UNIQUE(tenant, channel, event_id) constraint, so concurrent redeliveries race safely
-        (INV-020)."""
+        """One transaction: the event, then the conversation row (first contact). Dedupe is the
+        UNIQUE(tenant, channel, event_id) constraint and the event is claimed FIRST, so a duplicate
+        (first writer wins) returns before touching any conversation state, and concurrent
+        redeliveries race safely on the constraint (INV-020). A conversation identity conflict
+        raises and rolls the event back with it."""
         async with self._db.pool.acquire() as conn, conn.transaction():
-            await ensure_conversation(conn, event.identity, self._clock.now(), event.scope)
             row = await conn.fetchrow(
                 """
                 INSERT INTO inbox_events (tenant_id, channel_id, event_id, conversation_id,
@@ -64,14 +65,17 @@ class PostgresInboxStore:
                 event.provider_message_id,
                 event.trace_id,
             )
-            if row is not None and self._restart:
+            if row is None:
+                return False
+            await ensure_conversation(conn, event.identity, self._clock.now(), event.scope)
+            if self._restart:
                 await conn.execute(
                     "UPDATE conversation_states SET cancel_requested = true "
                     "WHERE tenant_id=$1 AND conversation_id=$2 AND lease_owner IS NOT NULL",
                     event.tenant_id,
                     event.conversation_id,
                 )
-        return row is not None
+        return True
 
     async def withdraw_unprocessed(
         self, tenant_id: str, channel_id: str, provider_message_id: str

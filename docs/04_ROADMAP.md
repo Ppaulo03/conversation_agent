@@ -8,11 +8,13 @@ Itens abaixo são **direção recomendada**, não compromissos de escopo, até d
 ## Direção atual
 
 ```text
-Baseline & Engineering Consolidation   (esta iteration — sem mudança de comportamento)
+Baseline & Engineering Consolidation   (aceita — sem mudança de comportamento)
     ↓
-Production Delivery
+Framework Integration Readiness
     ↓
-operational evidence
+adapter / integration evidence
+    ↓
+operational contract completeness
     ↓
 decisão explícita sobre a próxima capability
 ```
@@ -20,27 +22,26 @@ decisão explícita sobre a próxima capability
 ### 1. Baseline & Engineering Consolidation — aceita
 
 Entregue: baseline do repositório verificável (F-001 `RESOLVED`), memória canônica `00`–`06`, autoridade documental reconciliada
-(F-004 `RESOLVED`). Os findings de evidência operacional (F-002, F-003, F-005, F-007) continuam `OPEN` e alimentam a próxima iteration.
+(F-004 `RESOLVED`). Dos findings de evidência, F-002 e F-007 seguem `OPEN` e alimentam a próxima iteration; F-003, F-005 e F-006 foram reclassificados pela ADR-022 (o framework é embeddable e não possui deployment runtime canônico).
 
-### 2. Production Delivery — próxima iteration (candidata, aguardando decisão de escopo)
+### 2. Framework Integration Readiness — próxima iteration (candidata, aguardando decisão de escopo)
 
-Objetivo: levar o que já existe a uma entrega de produção **com evidência**, sem nova capability de conversa. Os itens
-vêm dos findings abertos, não de ideias novas:
+Objetivo: verificar que o framework pode ser integrado com segurança por uma aplicação consumidora (ADR-022), **sem criar
+deployment, entrypoint, imagem ou container padrão** e sem nova capability de conversa. Os itens vêm dos findings abertos:
 
 | Candidato | Origem | Resultado esperado |
 |---|---|---|
-| Executar o teste de contrato contra um RelayPlane implantado e registrar a evidência | F-002 | tabela de [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md) preenchida e versionada |
-| Ensaiar backup → restore → `migrate check` → `verify_integrity` e registrar tempos/resultado | F-003 | relatório de ensaio; RPO/RTO observados |
-| Pipeline de CI no repositório que rode os gates do baseline (incl. PostgreSQL e `app.ops check`) | F-007 (não existe arquivo de CI no repositório) | gates reproduzíveis fora da máquina local |
-| Definir o mínimo de evidência operacional de observabilidade (agregação de métricas entre processos / exportador OTel **se** o ambiente-alvo exigir) | F-005 | decisão explícita (ADR) antes de qualquer implementação |
-| Entrypoint de produção que componha `Runtime` + `RelayPlaneSender` + `webhook_app` (hoje só `app.serve`, de terminal; o README manda o operador compor) | F-006 (`SUPERSEDED`) | **DECISÃO EM ABERTO:** o framework fornece uma composição/entrypoint de produção oficial, ou a composição pelo operador continua sendo o contrato suportado? Nenhuma opção escolhida; nada a implementar antes da decisão |
-| Empacotamento/execução em ambiente-alvo (imagem, configuração, segredos) | **não há finding nem decisão**; só é candidato porque “entrega de produção” o implica | requer especificação antes de virar increment |
+| Executar o teste de contrato contra um RelayPlane implantado e registrar a evidência (o adapter é do framework) | F-002 | tabela de [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md) preenchida e versionada |
+| Pipeline de CI **do próprio framework** que rode os gates do baseline (incl. PostgreSQL e `app.ops check`); CI/CD do consumidor está fora de escopo | F-007 | gates reproduzíveis fora da máquina local |
+| Avaliar a Integration Readiness: o consumidor tem o que precisa (composition APIs, ports, contratos operacionais, exemplo de integração) sem reconstruir contratos implícitos | ADR-022 | lista de lacunas concretas, cada uma virando finding próprio |
 
-Cada item vira increment com o contrato de [`06_AGENT_HANDOFF`](./06_AGENT_HANDOFF.md) só depois de aprovado.
+Cada item vira increment com o contrato de [`06_AGENT_HANDOFF`](./06_AGENT_HANDOFF.md) só depois de aprovado. Decidido por ADR-022
+(portanto **fora** do roadmap): entrypoint/ASGI host/imagem/deployment oficial, backup/restore operacional, RPO/RTO e backend
+de métricas/tracing.
 
-### 3. Evidência operacional
+### 3. Adapter / integration evidence e completude do contrato operacional
 
-Executar o item 2 em ambiente real e observar SLOs/alertas existentes (`ops/slo.yaml`). Resultado: dados para decidir o item 4. Não há critério numérico definido; **definir é parte da decisão**.
+Executar o item 2 e fechar as lacunas do contrato operacional que o framework oferece ao consumidor (`OPERATIONS.md`, *Framework contract*). Resultado: dados para decidir o item 4. Não há critério numérico definido; **definir é parte da decisão**.
 
 ### 4. Decisão sobre a próxima capability
 

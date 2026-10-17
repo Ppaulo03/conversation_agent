@@ -24,7 +24,7 @@ from typing import NamedTuple
 
 from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.postgres.db import PostgresDatabase
-from conversation_agent.adapters.senders.console import ConsoleChannel
+from conversation_agent.adapters.senders.console import CONSOLE_DELIVERY_POLICY, ConsoleChannel
 from conversation_agent.app.llm_factory import LLMConfig, build_llm, close_llm
 from conversation_agent.app.runtime import Runtime
 from conversation_agent.app.wiring import (
@@ -142,6 +142,7 @@ async def run(
             llm=llm,
             providers={"http": http},
             sender=channel,
+            delivery_policy=CONSOLE_DELIVERY_POLICY,
             clock=clock,
         )
         await converse(runtime, channel, read_line=read_line, write=write)

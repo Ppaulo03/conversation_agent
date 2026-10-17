@@ -68,6 +68,7 @@ async def write(world: World, name: str, texts: list[str], *, turn: str = "t1") 
 
 
 async def claim(world: World, owner: str, **kw: object) -> list[str]:
+    kw.setdefault("unknown_blocks_for", timedelta(hours=24))
     claimed = await world.outbox.claim_ready(owner, 20, TTL, **kw)  # type: ignore[arg-type]
     return [m.text for m in claimed]
 

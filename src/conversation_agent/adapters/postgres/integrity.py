@@ -12,7 +12,6 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from conversation_agent.adapters.postgres.db import PostgresDatabase
-from conversation_agent.adapters.postgres.migrator import Migrator
 from conversation_agent.core.errors import ConversationAgentError
 
 SAMPLE = 5
@@ -103,7 +102,7 @@ class IntegrityReport:
 async def verify_integrity(db: PostgresDatabase) -> IntegrityReport:
     schema_problem: str | None = None
     try:
-        await Migrator(db.pool).ensure_current()
+        await db.ensure_schema_current()
     except ConversationAgentError as exc:
         schema_problem = f"{type(exc).__name__}: {exc}"
         return IntegrityReport(schema_problem=schema_problem)  # the queries assume this schema

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
-from datetime import datetime
+from datetime import datetime, timedelta
 from zoneinfo import ZoneInfo
 
 from conversation_agent.adapters.clock import FixedClock
@@ -16,6 +16,7 @@ from conversation_agent.core.compiler import (
 )
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.conversation import ConversationIdentity
+from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.llm import LLMRequest, LLMResponse, ToolResultPart
 from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
@@ -24,6 +25,11 @@ from conversation_agent.engine.tool_runner import ToolRunner
 SP = ZoneInfo("America/Sao_Paulo")
 # Monday 2026-10-05 08:00 in Sao Paulo: slots start at 09:00 the same day.
 NOW = datetime(2026, 10, 5, 8, 0, tzinfo=SP)
+
+# The delivery policy of tests that build a Runtime without making a point about delivery.
+TEST_DELIVERY_POLICY = DeliveryPolicy(
+    idempotency_retention=timedelta(hours=24), retry_horizon=timedelta(hours=1)
+)
 
 IDENTITY = ConversationIdentity(
     tenant_id="tenant-1",

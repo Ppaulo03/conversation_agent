@@ -8,8 +8,16 @@ from conversation_agent.core.models.runtime import ConversationKey, InboundEvent
 
 class InboxStore(Protocol):
     async def insert_if_absent(self, event: InboundEvent) -> bool:
-        """Persist before acknowledging. False if (tenant, channel, event_id) already existed
-        (INV-020): a duplicate never creates a second turn."""
+        """Persist before acknowledging. True: a new logical event was stored. False: its
+        `(tenant, channel, event_id)` already existed (INV-020): acknowledge it as a success; a
+        duplicate creates no turn and no new conversation state, the first writer stays
+        authoritative and a differing payload is not compared.
+
+        A new event that reuses a `conversation_id` of this tenant with another channel, contact
+        or scope raises `ConversationIdentityConflictError` and is not stored. Any other failure
+        leaves durable acceptance unconfirmed: do not acknowledge a redeliverable transport and
+        retry the SAME event (same `event_id`); if the first attempt committed, the retry is a
+        duplicate (False), otherwise it is stored."""
         ...
 
     async def withdraw_unprocessed(

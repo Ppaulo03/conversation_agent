@@ -60,7 +60,10 @@ from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.app.runtime import Runtime
 from conversation_agent.app.wiring import load_agent, local_http_provider
 
-db = await PostgresDatabase.connect(DATABASE_URL)  # migrate first (app.migrate)
+db = await PostgresDatabase.connect(DATABASE_URL)
+# Migrating is a separate, explicit step (`app.migrate apply`, or `await db.migrate()` in the process that migrates).
+# Verifying is read-only and yours to call, before any durable work (Runtime never does it for you):
+await db.ensure_schema_current()  # SchemaOutOfDateError / SchemaAheadError / MigrationDriftError
 runtime = Runtime.build(
     db=db,
     compiled=load_agent("agent.yaml"),
@@ -73,6 +76,12 @@ await runtime.receive(inbound_event)  # from your webhook; duplicates are ignore
 await runtime.run(stop_event)  # or: while True: await runtime.tick()
 ```
 
+Bootstrap or upgrade: run the migration as its own explicit step first (`python -m conversation_agent.app.migrate apply`),
+then the verification above. Only `apply` creates or changes the schema; `ensure_schema_current` leaves a database that was
+never migrated untouched and raises `SchemaOutOfDateError`. The sequence is yours (ADR-022); this is not a production
+entrypoint. Developed and tested against PostgreSQL 16 (`postgres:16-alpine`); other versions are unverified and there is no
+formal multi-version support matrix. Mixed-version rollouts are not a verified contract (OPERATIONS, "Schema migrations").
+
 **Several agents in one database.** Each runtime handles only the conversations of its *scope*
 (default: its agent's id; override with `Runtime.build(scope=...)`). The scope is fixed when a
 conversation is first seen: `Runtime.receive` stamps it, and a webhook takes it from the
@@ -83,10 +92,24 @@ other legacy conversation (no scope) is adopted by the first scoped event that a
 is invisible to scoped runtimes until then. Several workers *of the same scope* share the work as
 below.
 
-If your channel can tell you later what became of a send (a gateway that answers `queued` and then
-settles it), give `Runtime.build` a `delivery_policy` (how long the channel remembers an idempotency
-key, and how long a send may be retried) and make your sender implement `lookup(message)`: the
-Runtime then reconciles unsettled sends by asking the channel, never by sending again.
+`Runtime.build` requires a `delivery_policy` (there is no default and no "unbounded"): how long your
+channel remembers an idempotency key (`idempotency_retention`), the `safety_margin` kept inside it, and
+the `retry_horizon` for direct retries of the same delivery (a retryable failure, a recovered crash), with
+`0 <= retry_horizon <= idempotency_retention - safety_margin`. The horizon is not the last moment a delivery can be
+resent: an unknown send without a handle may still be resent by the reconciler after it, until
+`idempotency_retention - safety_margin` (the safe resend window) closes; `0` disables every resend. `retry_horizon=timedelta(0)`
+(`DeliveryPolicy.no_retry(...)`) means a delivery is never sent twice; use it for a channel whose
+deduplication does not survive a restart (the console channel does). One policy covers every delivery
+the Runtime handles: with channels of different guarantees use the conservative values or separate
+runtimes. Every resend reuses the row's idempotency key and payload, and the channel must honour that
+key for the period you configured.
+
+If your channel can answer `queued` or `unknown` and settle it later, it needs a way to do so: implement
+`lookup(message)` (`MessageLookup`; `Runtime.build` finds it on the sender, or pass `lookup=`) so the
+Runtime asks the channel instead of sending again, and/or push the final status with
+`OutboxStore.apply_channel_status`. Either is enough; a push-only channel is valid, and an unsettled
+`queued` send then simply waits for the push (it is never re-sent). `queued` must carry the channel's
+`channel_message_id`; a send that fails with proof is `FAILED`, an exception out of `send` is `unknown`.
 
 Messages of one conversation always leave in the order they were written, even with several workers
 or `split_replies`: each gets a sequence number from its conversation and a worker only claims a message
@@ -128,13 +151,54 @@ protected action only when it can **prove the "yes" answers the prompt it sent**
 - return `status=ACCEPTED`, a `provider_message_id`, and **`provider_accepted_at` in the channel's
   own clock** when the provider exposes it. The runtime never invents this timestamp.
 
-**Each inbound event** (`InboundEvent`) should carry as much as the channel knows:
+**Your inbound adapter** (a webhook handler, a poller, a bot SDK callback) is what builds
+`InboundEvent`s. The runtime does not authenticate anything: it trusts the event it is handed. The
+journey, and the contract for each field (ADR-025):
 
-| Field | Why |
+```text
+authenticate the provider delivery        (HMAC, token, mTLS, SDK session: whatever the channel has)
+  -> derive trusted identity              (tenant, channel, contact, conversation, scope)
+  -> build InboundEvent                   (a pydantic error here = a bug in the adapter)
+  -> await runtime.receive(event)
+       True   a new logical event was persisted        -> acknowledge
+       False  a duplicate delivery, nothing was added  -> acknowledge (it is a success)
+       ConversationIdentityConflictError               -> permanent: do not retry (HTTP 409)
+       any other exception                             -> durable acceptance NOT confirmed: do
+                                                          NOT acknowledge (HTTP 5xx); redeliver the
+                                                          SAME event_id: if the first attempt had
+                                                          committed you get False, else it is stored
+```
+
+`ConversationIdentityConflictError` lives in `conversation_agent.core.errors`.
+
+| Field | Contract |
 |---|---|
-| `event_id` | dedupe identity, unique per (tenant, channel) |
-| `reply_to_provider_message_id` | the strongest proof: "this answers message X" |
-| `provider_occurred_at` | the channel's time of the message; compared with `provider_accepted_at` |
+| `tenant_id`, `channel_id` | From your own configuration or from authenticated channel state, never from an unauthenticated payload field. With a signed payload, the signed value is authenticated; if you keep an allow-list, enforce it. |
+| `contact_id` | The authenticated sender. It is also where replies are delivered and what erasure looks up. |
+| `event_id` | The identity of ONE logical event. The provider's redelivery of the same event MUST reuse the same `event_id`; two different events MUST differ; it is never empty. Dedupe is `(tenant_id, channel_id, event_id)`: the first writer wins and the duplicate is ignored without comparing its content. A fresh random id per delivery duplicates turns; reusing one id for many events silently drops all but the first. Do not mint ids starting with `system:` (the runtime's own timers use them). |
+| `conversation_id` | Unique per **tenant** (not per channel), deterministic and stable for the same conversation, and bound for good to one channel, one contact and one scope. Namespace it by channel (RelayPlane uses `{instance}:{contact}`; that is its scheme, not a rule). Reusing an id with another channel, contact or scope is refused with `ConversationIdentityConflictError` and the event is not stored. A new id per message fragments the state silently. |
+| `scope` | Normally `None`: `receive` stamps the runtime's scope. Set it only from trusted configuration; it is read at first contact and can never change. |
+| `session_id` | Required text. It is stored with the event, but the conversation keeps its FIRST value; later values change neither identity, dedupe nor order. Keep it stable (using the `conversation_id` is fine). |
+| `text`, `media` | What the contact sent (`text` may be empty for media). |
+| `kind` | `"user"` for everything a channel delivers. `"system"` is the runtime's own (proactive timers); never set it from channel input. |
+| `occurred_at` | When the contact's event happened, best available (the provider's time if you have it, else your receipt time); timezone-aware. It orders events that have no sequence, decides "late", and feeds the last-activity time used by the channel service window. It is **not** confirmation evidence. There is no skew correction: a grossly wrong or future value skews those. |
+| `received_at` | YOUR local receipt time of this delivery; timezone-aware; `receive` does not stamp it. Tie-break and latency only. |
+| `source_sequence` | `None` unless the channel has a trustworthy sequence. Use it only when its values are meaningfully comparable (increasing, gaps are fine) among the events of one conversation that can be aggregated together. Never invent it from arrival order. Sequenced events sort ahead of unsequenced ones, so do not mix them in one pending stream unless that is intended. If the provider's sequence restarts or changes scope and events from both epochs can wait together, do not expose the values as comparable. When comparability cannot be guaranteed, send `None`. |
+| `provider_occurred_at` | The PROVIDER's clock for this message, comparable with the `provider_accepted_at` that the same channel's sender reports; otherwise `None`. **Never copy `received_at`, local or database time into it**: that fabricates the proof that a "yes" came after the prompt. Absence is safe, invented evidence is not. |
+| `reply_to_provider_message_id` | The provider's own statement that this event replies to that outbound message; `None` when the channel has no replies. Never invent it. |
+| `provider_message_id` | The provider's id of this message; used so a deleted message that no turn claimed yet can be withdrawn. Not part of dedupe. |
+| `trace_id` | Optional correlation id; observability only, never identity, dedupe or proof. If absent, the turn gets its own. |
+
+**Order inside a conversation.** Events waiting together are aggregated by `source_sequence`
+ascending (events without one come after all that have one), then `occurred_at`, then
+`received_at`, then `event_id`. A late event (older than what the conversation already handled)
+joins the next turn and never rewrites a finished one.
+
+**Confirmation evidence.** A "yes" is provable by either (a) `reply_to_provider_message_id`
+naming the accepted prompt, or (b) an accepted prompt with `provider_accepted_at` AND an inbound
+`provider_occurred_at`, both in the same provider clock, more than 2 s apart (the tolerance is
+fixed at 2 s today, it is not configurable). A channel that can offer neither still works for
+everything else, but a protected action can never be confirmed through it.
 
 How a "yes" is judged:
 
@@ -232,6 +296,42 @@ text), under purpose `transcription`; give the model an `audio_per_minute` price
 or its calls are reported as unpriced. The `Transcriber` port is also the place to plug something else
 entirely (a different provider, an in-house service): implement `transcribe(media, context)`.
 
+## Writing your own ToolProvider
+
+`HTTPToolProvider` and `MCPToolProvider` are the first-party providers; anything else implements
+`ToolProvider` (`ports/tool_provider.py`; normative text in ADR-024 and `RUNTIME_PROTOCOL.md` §9).
+Everything you need is below; you do not have to read the adapters, the runner or the ledger.
+
+1. **Identity.** `context.invocation_id` is the one identity of a logical tool call. The runtime
+   passes the same value on the first attempt, every technical retry, every reconciliation resend
+   and after a restart. Do not mint your own per attempt.
+2. **External idempotency.** For a non-read tool with `idempotency_supported`, bind that identity
+   to the external system's dedupe/replay mechanism (header, request token, native field: your
+   choice). If the target cannot take the literal value, derive a deterministic encoding of it;
+   never add per-attempt randomness. Declaring `idempotency_supported` asserts the target really
+   dedupes for every resend the tool's `retry` and `recovery` may perform, including a
+   reconciliation resend after its backoff; the framework cannot check that, so declare it only
+   when it is true.
+3. **Truthful result.** Return a `ToolResult`; do not raise. For a write: the effect provably did
+   not happen -> `technical_error` (`retryable=True` only then; it means "this attempt had no
+   effect", not "the network failed"); a known domain refusal -> `business_error` /
+   `validation_error` / `policy_denied`; the request may have arrived and you cannot prove the
+   effect -> `unknown`, always, even if the target supports idempotency. A timeout after sending,
+   a reset, or an unusable answer to a write is `unknown`, never `technical_error` or `timeout`.
+   The same rule binds a custom `error_map`.
+4. **Retry.** The runner retries a `technical_error` with `retryable=True`; for a write only when
+   the tool is `idempotency_supported` with `retry.mode: same_idempotency_key` (the compiler
+   refuses any other write retry).
+5. **Unknown.** The runner never retries `unknown`. The reconciliation worker handles it with the
+   `recovery` frozen when the call was prepared: `retry_same_key` (same identity),
+   `status_lookup`, or `human_handoff` (the default for a write).
+
+If `execute` raises anyway, the runtime treats a write as `unknown` and a read as a non-retryable
+`technical_error`; that is a safety net, not part of the API. A wrapper around a provider (breaker,
+metrics) must pass the inner classification through unchanged. A provider that classifies an
+ambiguous write as `technical_error`/`timeout`, claims `retryable` without proof, or mints a new
+identity per retry breaks INV-006 and INV-021.
+
 ## Passing a file to a tool
 
 A capability can take a file the contact sent (a picture of the problem, a receipt) with a field of
@@ -290,7 +390,7 @@ agent does with the words AND that an agent with `transcription: off` ignores th
 | the agent keeps asking to confirm | no reply-to / timestamps from the channel, or the contact answered within 2 s (§5); check the `confirmation not provable` log line |
 | the reply never arrives | the outbox row is pending: is a worker running (`run`/`tick`) and does your sender return `ACCEPTED`? |
 | `ImportError ... conversation-agent[postgres]` | install the extra |
-| `schema ... pending/drift` | `python -m conversation_agent.app.migrate status`, then `apply` |
+| `SchemaOutOfDateError` / `SchemaAheadError` / `MigrationHistoryError` / `MigrationDriftError` from `ensure_schema_current` | `python -m conversation_agent.app.migrate status` (read-only), then `apply` only for out of date; ahead, gap or drift: see OPERATIONS "Schema migrations" |
 | a tool call is refused | the capability is not in `allowed_capabilities`, or the connection id has no provider |
 | the agent says it cannot see an image | by design: media is only named, not read |
 | voice messages arrive as "this assistant does not process voice messages" | `transcription` is `off` (the default) for that agent: set `transcription: on` and give `Runtime.build` a transcriber |
@@ -314,5 +414,7 @@ calling the model or dropping the message; `alert` and `refuse_new` are the alte
 
 `app.migrate` (schema), `app.ops check|render` (SLOs, alerts, dashboard), `app.integrity`,
 `app.usage` (LLM cost and budgets) and the runbook in [`OPERATIONS.md`](./OPERATIONS.md). Release
-and rollback of agent versions are described there too. Before a production pilot, validate the
+and rollback of agent versions are described there too. The framework has no canonical deployment: hosting, backups and
+observability backends are the embedding application's choice (`OPERATIONS.md` separates framework contract from operator
+responsibility; ADR-022). Before a production pilot, validate the
 RelayPlane contract against the deployed gateway and keep the evidence: [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md).

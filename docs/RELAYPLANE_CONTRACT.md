@@ -33,13 +33,17 @@ chave dentro da retenção devolve a mesma mensagem (`Idempotent-Replayed: true`
 reenviar **cria uma mensagem nova**.
 
 ```text
-sender_retry_horizon <= idempotency_retention          (DeliveryPolicy valida; delivery_policy() lê /limits)
+retry_horizon <= idempotency_retention - safety_margin  (DeliveryPolicy genérica valida; RelayPlaneSender.delivery_policy() lê /limits)
 ```
 
-- Dentro de `retry_horizon`: o sender reenvia a mesma linha com a mesma chave.
-- Passado o horizon: o sender **não** envia; a linha vira `UNKNOWN` (sem chamada ao gateway).
+A política e a semântica de entrega são genéricas (`RUNTIME_PROTOCOL.md` §8, ADR-023); o que segue é como o RelayPlane as instancia. O padrão de 24 h é **do gateway**: só este adapter o conhece, o código genérico recebe a janela da política.
+
+- `RelayPlaneSender` satisfaz `MessageLookup` (`GET /messages/{id}`); `202 QUEUED` devolve o `message_id` como `channel_message_id` (o handle). Além do lookup, o gateway empurra status por webhook (`message.outbound_status`).
+- Dentro de `retry_horizon`: o runtime reenvia a mesma linha com a mesma chave.
+- Passado o horizon: um `FAILED` provado fica `FAILED`; um `SENDING` obsoleto vira `UNKNOWN` (sem chamada ao gateway).
 - Reconciliador: com `channel_message_id` → `GET` e aplica o status (linha `QUEUED` antiga é consultada);
-  sem id e dentro de `retenção − margem` → volta a `PENDING` (reenvio = replay seguro);
+  sem id, com `retry_horizon > 0` e dentro de `retenção − margem` → volta a `PENDING` (reenvio = replay seguro);
+  sem id e com `retry_horizon == 0` → `RESEND_NOT_PERMITTED`, continua `UNKNOWN`;
   sem id e fora da janela → `UNPROVEN_PAST_RETENTION`, continua `UNKNOWN` (alerta, nunca reenvio cego);
   erro no `GET` → `LOOKUP_FAILED`, nada é provado.
 - `UNKNOWN` **do gateway** exige decisão humana (`POST /messages/{id}/resolve`): `RelayPlaneSender.resolve`
@@ -54,8 +58,10 @@ Headers: `X-RelayPlane-Timestamp`, `X-RelayPlane-Signature: v1=<hex>[,v1=<hex>..
 (`HMAC-SHA256(secret, "<timestamp>.<corpo cru>")`; vários `v1` durante rotação), `X-RelayPlane-Event-Id`
 (deve coincidir com o `event_id` do corpo). Timestamp fora de ±5 min é rejeitado.
 
-Envelope: `schema_version` (só `1`; outro → 400), `event_id`, `sequence`, `event_type`, `tenant_id`,
-`instance_id`, `timestamp`, `payload`.
+Envelope: `schema_version` (`1` ou `2`; outro → 400), `event_id`, `sequence`, `event_type`, `tenant_id`,
+`instance_id`, `timestamp`, `payload`. A versão 2 (R29 do RelayPlane, a que o gateway emite hoje) tirou
+`provider` e `source_assignment` e acrescentou `channel` (`whatsapp`); nenhum deles é lido aqui, então as
+duas versões têm o mesmo efeito. A 1 continua aceita por causa dos gateways até `0.3.0-rc3`.
 
 | `event_type` | Efeito |
 |---|---|

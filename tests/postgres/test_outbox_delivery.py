@@ -24,7 +24,7 @@ from postgres.world import TTL, World, event
 POLICY = DeliveryPolicy(
     idempotency_retention=RELAY_RETENTION,
     retry_horizon=timedelta(minutes=10),
-    reconcile_margin=timedelta(minutes=5),
+    safety_margin=timedelta(minutes=5),
 )
 
 
@@ -204,18 +204,13 @@ async def test_the_sender_does_not_resend_blindly_past_the_retry_horizon(
     assert len(relay.sent) == 1
 
     tick(world, relay, TTL + timedelta(minutes=11))  # claim expired AND past the 10 min horizon
-    assert (
-        await world.outbox_worker(
-            "s2", sender=gateway(relay), retry_horizon=POLICY.retry_horizon
-        ).run_once()
-        == 1
-    )
+    assert await world.outbox_worker("s2", sender=gateway(relay), policy=POLICY).run_once() == 1
     stored = await row(world)
     assert stored["status"] == OutboxStatus.UNKNOWN and stored["attempts"] == 2
     assert len(relay.state.requests) == 1  # the second attempt NEVER reached the wire
 
     await reconciler(world, relay).run_once()  # still inside the gateway's 24 h window: replay
-    await send(world, relay, "s3", retry_horizon=POLICY.retry_horizon)
+    await send(world, relay, "s3", policy=POLICY)
     stored = await row(world)
     assert stored["status"] == OutboxStatus.QUEUED and stored["channel_message_id"] == "msg_1"
     assert len(relay.sent) == 1  # the same message, found again by key
@@ -230,7 +225,7 @@ async def test_inside_the_horizon_a_stale_row_is_still_retried_with_the_same_key
             "s1", ChaosFaults("C08_during_outbox_send"), sender=gateway(relay)
         ).run_once()
     tick(world, relay, TTL + timedelta(seconds=1))  # well inside the horizon
-    await send(world, relay, "s2", retry_horizon=POLICY.retry_horizon)
+    await send(world, relay, "s2", policy=POLICY)
     assert (await row(world))["status"] == OutboxStatus.QUEUED and len(relay.sent) == 1
 
 

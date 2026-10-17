@@ -21,7 +21,7 @@ from conversation_agent.adapters.senders.console import ConsoleChannel
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.app.runtime import Runtime
 from conversation_agent.core.models.media import MediaReference
-from support.builders import IDENTITY
+from support.builders import IDENTITY, TEST_DELIVERY_POLICY
 from support.media_agent import CONNECTION, compiled_media_agent
 
 CLOCK = SystemClock("America/Sao_Paulo")
@@ -75,6 +75,7 @@ def deployment(
         llm=llm,
         providers={"http": provider},
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=CLOCK,
     )
     return runtime, channel, out

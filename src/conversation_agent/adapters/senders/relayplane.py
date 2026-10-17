@@ -167,8 +167,9 @@ class RelayPlaneSender:
     # ------------------------------------------------------------------ startup check
 
     async def delivery_policy(self, tenant_id: str, retry_horizon: timedelta) -> DeliveryPolicy:
-        """`sender_retry_horizon <= idempotency retention`, checked against what the DEPLOYED
-        gateway reports (`GET /limits`), not against a number someone typed."""
+        """The RelayPlane way to build the generic DeliveryPolicy: the retention is what the
+        DEPLOYED gateway reports (`GET /limits`), not a number someone typed, and the generic
+        validation (`retry_horizon <= retention - safety_margin`) applies to it."""
         prepared = await self._prepare(tenant_id)
         if isinstance(prepared, SendResult):
             raise RuntimeError("cannot read the gateway limits: connection/credential unavailable")

@@ -21,7 +21,7 @@ from conversation_agent.app.runtime import Runtime
 from conversation_agent.app.serve import Args, converse, parse_args
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.ports.clock import Clock
-from support.builders import IDENTITY
+from support.builders import IDENTITY, TEST_DELIVERY_POLICY
 from vertical_slice.definitions import CONNECTION
 from vertical_slice.wiring import load_compiled_agent
 
@@ -57,6 +57,7 @@ def build(
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=clock,
     )
     return runtime, channel
@@ -239,3 +240,33 @@ async def test_an_agent_that_splits_replies_sends_each_paragraph_as_its_own_mess
     await runtime.receive(channel.inbound("oi"))
     await runtime.drain()
     assert out == ["bot> Primeiro assunto.", "bot> Segundo assunto."]
+
+
+async def test_the_console_runtime_is_built_with_an_explicit_zero_retry_policy(
+    pg_dsn: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from conversation_agent.app import serve
+    from vertical_slice.wiring import MANIFEST_PATH
+
+    seen: dict[str, object] = {}
+    real_build = Runtime.build
+
+    def spy(**kw: object) -> Runtime:
+        seen.update(kw)
+        return real_build(**kw)  # type: ignore[arg-type]
+
+    monkeypatch.setattr(serve.Runtime, "build", staticmethod(spy))
+
+    def eof() -> str:
+        raise EOFError
+
+    code = await serve.run(
+        Args(str(MANIFEST_PATH), {}),
+        dsn=pg_dsn,
+        llm=FakeLLM([]),
+        read_line=eof,
+        write=lambda _: None,
+    )
+    assert code == 0
+    policy = seen["delivery_policy"]
+    assert policy.retry_horizon == timedelta(0)  # type: ignore[attr-defined]

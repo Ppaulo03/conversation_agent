@@ -154,12 +154,30 @@ async def test_without_a_registered_gateway_tenant_ours_still_comes_from_the_reg
     assert row["tenant_id"] == TENANT
 
 
+async def test_the_channel_is_the_signed_instance_checked_against_the_allow_list(
+    world: World,
+) -> None:
+    """INV-035: with no allow-list the channel is the SIGNED `instance_id`; with one, it must be
+    listed; the unsigned parts of the request (URL, headers) never choose it."""
+    open_sub = SUB.model_copy(update={"instance_ids": ()})
+    async with make_client(world, sub=open_sub) as client:
+        await post(client, world, received(world, "ev-open", instance_id="inst_free"))
+    async with make_client(world) as client:
+        listed = await post(client, world, received(world, "ev-listed"))
+        unlisted = await post(client, world, received(world, "ev-unlisted", instance_id="other"))
+    rows = {r["event_id"]: r for r in await stored(world)}
+    assert rows["ev-open"]["channel_id"] == "inst_free" and rows["ev-open"]["tenant_id"] == TENANT
+    assert listed.json() == {"status": "accepted"} and rows["ev-listed"]["channel_id"] == "inst_1"
+    assert unlisted.json()["reason"] == "instance_not_subscribed" and "ev-unlisted" not in rows
+    assert all(r["trace_id"] for r in rows.values())  # minted at the edge, persisted
+
+
 async def test_malformed_unknown_or_oversized_requests_are_refused(world: World) -> None:
     async with make_client(world) as client:
         junk = await post(client, world, b"not json at all")
         no_id = await post(client, world, {**received(world), "event_id": ""})
         empty = await post(client, world, received(world, "ev-3", text=None))
-        future_schema = await post(client, world, received(world, "ev-4", schema_version=2))
+        future_schema = await post(client, world, received(world, "ev-4", schema_version=3))
         unknown = await post(client, world, received(world), sub="nope")
         huge = await post(client, world, b"x" * (300 * 1024))
         not_found = await client.get("/webhooks/relayplane/sub-1")
@@ -167,6 +185,15 @@ async def test_malformed_unknown_or_oversized_requests_are_refused(world: World)
     assert future_schema.status_code == 400  # a version we do not speak is never half-understood
     assert (unknown.status_code, huge.status_code, not_found.status_code) == (404, 413, 404)
     assert await stored(world) == []
+
+
+async def test_both_envelope_versions_the_gateway_has_published_are_accepted(world: World) -> None:
+    """Schema 2 dropped `provider`/`source_assignment` and added `channel`: nothing we read."""
+    async with make_client(world) as client:
+        v1 = await post(client, world, received(world, "ev-v1", schema_version=1))
+        v2 = await post(client, world, received(world, "ev-v2", schema_version=2))
+    assert v1.json() == v2.json() == {"status": "accepted"}
+    assert {r["event_id"] for r in await stored(world)} == {"ev-v1", "ev-v2"}
 
 
 async def test_the_event_id_header_must_agree_with_the_signed_body(world: World) -> None:

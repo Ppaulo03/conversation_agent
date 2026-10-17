@@ -9,7 +9,6 @@ from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.coordination import CoordinationClock
 
-DEFAULT_UNKNOWN_BLOCKS_FOR = timedelta(hours=24)  # RelayPlane's default idempotency window
 _O_COLUMNS = ", ".join(f"o.{c.strip()}" for c in OUTBOX_COLUMNS.split(","))
 
 
@@ -33,7 +32,8 @@ class PostgresOutboxStore:
         limit: int,
         claim_ttl: timedelta,
         scope: str | None = None,
-        unknown_blocks_for: timedelta = DEFAULT_UNKNOWN_BLOCKS_FOR,
+        *,
+        unknown_blocks_for: timedelta,
     ) -> list[OutboundMessage]:
         """PENDING-and-due or stale-SENDING rows -> SENDING. A stale SENDING row is a message
         whose sender died mid-flight: it is retried with the *same* payload and idempotency
@@ -48,7 +48,7 @@ class PostgresOutboxStore:
         rows = await self._db.pool.fetch(
             f"""
             WITH picked AS (
-                SELECT o.tenant_id, o.outbox_id FROM outbox_messages o
+                SELECT o.tenant_id, o.outbox_id, o.status AS claimed_from FROM outbox_messages o
                  WHERE ((o.status = 'PENDING' AND o.available_at <= $1)
                     OR (o.status = 'SENDING' AND o.claim_expires_at <= $1))
                    AND ($5::text IS NULL OR EXISTS (
@@ -73,7 +73,7 @@ class PostgresOutboxStore:
                    first_sent_at = COALESCE(o.first_sent_at, $1)
               FROM picked
              WHERE o.tenant_id = picked.tenant_id AND o.outbox_id = picked.outbox_id
-            RETURNING {_O_COLUMNS}
+            RETURNING {_O_COLUMNS}, picked.claimed_from
             """,
             now,
             limit,
@@ -82,7 +82,10 @@ class PostgresOutboxStore:
             scope,
             now - unknown_blocks_for,
         )
-        return [outbox_from_row(r) for r in rows]
+        return [
+            outbox_from_row(r).model_copy(update={"claimed_from": OutboxStatus(r["claimed_from"])})
+            for r in rows
+        ]
 
     async def record_result(
         self, message: OutboundMessage, owner: str, result: SendResult, retry_after: timedelta
@@ -107,7 +110,9 @@ class PostgresOutboxStore:
                SET status = $4, provider_message_id = COALESCE($5, provider_message_id),
                    provider_accepted_at = COALESCE($6, provider_accepted_at),
                    channel_message_id = COALESCE($9, channel_message_id),
-                   available_at = $7, claim_owner = NULL, claim_expires_at = NULL, updated_at = $8
+                   available_at = $7, claim_owner = NULL, claim_expires_at = NULL, updated_at = $8,
+                   resend_authorized_until = CASE WHEN $4 = 'PENDING'
+                       THEN NULL ELSE resend_authorized_until END
              WHERE tenant_id = $1 AND outbox_id = $2 AND status = 'SENDING' AND claim_owner = $3
             """,
             message.tenant_id,
@@ -128,6 +133,8 @@ class PostgresOutboxStore:
         claim_ttl: timedelta,
         poll_after: timedelta,
         scope: str | None = None,
+        *,
+        with_handle: bool = True,
     ) -> list[OutboundMessage]:
         now = await self._time.now()
         rows = await self._db.pool.fetch(
@@ -135,8 +142,10 @@ class PostgresOutboxStore:
             WITH picked AS (
                 SELECT o.tenant_id, o.outbox_id FROM outbox_messages o
                  WHERE ((o.status = 'UNKNOWN' AND o.available_at <= $1)
-                    OR (o.status = 'QUEUED' AND o.updated_at <= $5)
+                    OR (o.status = 'QUEUED' AND o.updated_at <= $5
+                        AND o.channel_message_id IS NOT NULL)
                     OR (o.status = 'RECONCILING' AND o.claim_expires_at <= $1))
+                   AND ($7 OR o.channel_message_id IS NULL)
                    AND ($6::text IS NULL OR EXISTS (
                           SELECT 1 FROM conversation_states c
                            WHERE c.tenant_id = o.tenant_id
@@ -158,6 +167,7 @@ class PostgresOutboxStore:
             now + claim_ttl,
             now - poll_after,
             scope,
+            with_handle,
         )
         return [outbox_from_row(r) for r in rows]
 

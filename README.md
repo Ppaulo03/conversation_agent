@@ -49,9 +49,13 @@ uv run --env-file .env python -m conversation_agent.app.serve     examples/verti
 ```
 
 `--http ID=URL` gives the base URL of the connection the manifest calls `ID` (local development
-only). In your own deployment, build the same thing with `conversation_agent.app.runtime.Runtime`
-and your channel's sender: `Runtime.build(db=..., compiled=..., llm=..., providers=..., sender=...)`,
-then `receive(event)` for each inbound event and `run(stop)` (or `tick()`) to drive it.
+only). `serve` is a development/reference tool, not a deployment: `conversation_agent` is an embeddable framework and your
+application is the composition root. Build the agent, configure the dependencies/adapters you use, and embed
+`conversation_agent.app.runtime.Runtime` with your channel's sender: `Runtime.build(db=..., compiled=..., llm=..., providers=..., sender=..., delivery_policy=...)`,
+then `receive(event)` for each inbound event and `run(stop)` (or `tick()`) to drive it. Before any of that, call `await db.ensure_schema_current()` on your `PostgresDatabase`: a read-only check that the schema matches the installed code (`Runtime` does not do it for you; migrating stays a separate explicit step, `app.migrate apply` or `db.migrate()`). The `delivery_policy` is mandatory: it states how long your
+channel remembers an idempotency key and for how long it may be retried directly (`retry_horizon`; `timedelta(0)` disables every resend and `serve` uses it for the
+console; a reconciler-authorised resend of an unknown send may still follow after the horizon, but never past
+`idempotency_retention - safety_margin`), see [`docs/GUIDE.md`](docs/GUIDE.md) and [`docs/RUNTIME_PROTOCOL.md`](docs/RUNTIME_PROTOCOL.md) §8.
 
 A confirmation ("yes") must be provably a reply to the prompt that was sent: the channel gives the
 sender's `provider_accepted_at` and each inbound event's `provider_occurred_at` and/or
@@ -62,6 +66,7 @@ executed (INV-022). The terminal channel supplies both.
 
 ```bash
 docker compose up -d      # PostgreSQL 16 on 127.0.0.1:5432 (used from Phase 2); see .env.example
+# Developed and tested against PostgreSQL 16 (postgres:16-alpine); other versions are unverified.
 docker compose down       # add -v to drop the data volume
 ```
 

@@ -1,8 +1,10 @@
 """`python -m conversation_agent.app.migrate status|check|apply [--dry-run]`.
 
 The database comes from `DATABASE_URL`. Exit codes: 0 ok, 1 the schema needs attention (pending,
-drift or ahead), 2 usage or connection error. Meant for deploy pipelines: `check` before starting a
-release, `apply` as an explicit step, never as a side effect of booting many instances.
+drift, ahead or a gap in the history), 2 usage or connection error. Meant for deploy pipelines:
+`check` before starting a release, `apply` as an explicit step, never as a side effect of booting
+many instances. `status` and `check` only read (a database never migrated reports everything
+pending and stays untouched); only `apply` creates the migration metadata.
 """
 
 from __future__ import annotations

@@ -38,8 +38,18 @@ Vocabulário de domínio (agendamento, suporte) nunca vive em `src/` (teste de a
 `app.runtime.Runtime.build(db, compiled, llm, providers, sender, …)` monta o grafo durável a partir de **um único
 `CompiledAgent`** (INV-030): `receive(event)` grava no inbox; `run(stop)`/`tick()` aciona os workers. Workers: `TurnCoordinator`
 (turnos), `OutboxWorker`, `OutboxReconciler`, `ReconciliationWorker` (ledger de tools), `SchedulerWorker` (timers/proativos).
-`app.serve` é o entrypoint de desenvolvimento (terminal como canal); em produção o operador compõe o `Runtime` com o sender do
-RelayPlane e o app ASGI do webhook.
+`app.serve` é o entrypoint de desenvolvimento (terminal como canal); fora dele, o consumidor compõe o `Runtime` (ver §2.1).
+
+### 2.1 Embedding and operational boundary
+
+- `Runtime.build(...)` é a API de composição do runtime; `receive`/`run`/`tick` são o lifecycle que o consumidor aciona.
+- `app.serve` é desenvolvimento/referência, não um deployment oficial.
+- Adapters (RelayPlane, LLM, tools, observabilidade, …) são componentes **opcionais**; a aplicação consumidora compõe somente
+  os que usa (o import-linter já impede o núcleo de depender deles).
+- Processo, ASGI server, topologia, banco provisionado, backup e backends de observabilidade são **externos** ao framework.
+- O consumidor é o composition root operacional. O que ele deve respeitar (migrations, integridade, janela de idempotência,
+  shutdown cooperativo dos workers) está em [`OPERATIONS.md`](./OPERATIONS.md), separado em *Framework contract* e
+  *Operator responsibility* (ADR-022).
 
 ## 3. Modelo de estado e de execução
 
@@ -56,17 +66,22 @@ RelayPlane e o app ASGI do webhook.
 ## 4. Persistência
 
 PostgreSQL é o único estado durável; toda "fila" é uma tabela. Schema por migrations forward-only (`0001_init` … `0025_llm_usage_audio`),
-checksum por arquivo, apply serializado por advisory lock; banco à frente do código ou migration editada impedem iniciar (INV-047).
+checksum por arquivo, apply serializado por advisory lock; banco à frente do código ou migration editada impedem aplicar migrations (INV-047).
+Migrar é explícito e muda o schema (`PostgresDatabase.migrate`, `app.migrate apply`); verificar é explícito e somente-leitura
+(`PostgresDatabase.ensure_schema_current`, ADR-026): o host que embute o framework a chama antes de qualquer trabalho durável, e
+`Runtime` não verifica sozinho. `app.migrate status|check` e `/readyz` apenas leem; `verify_integrity` é outra pergunta (dados) e inclui essa verificação.
 `ConversationUnitOfWork` agrupa a escrita local; linhas publicadas de agente são imutáveis no próprio banco (INV-028);
 `admin_audit` é append-only por trigger (INV-043).
 
 ## 5. Inbox / Outbox
 
 - **Inbox**: dedupe por `(tenant, channel, event_id)` (INV-020); webhook só responde 2xx depois de assinatura HMAC verificada e evento
-  persistido (INV-035); backpressure recusa *antes* de persistir (INV-046).
+  persistido (INV-035); contrato genérico do canal de entrada: identidade, confiança, ordem e relógios em ADR-025 (INV-074/075); backpressure recusa *antes* de persistir (INV-046).
 - **Outbox**: todo outbound sai da outbox durável (INV-007); estados `PENDING/SENDING/QUEUED/ACCEPTED/FAILED/UNKNOWN/RECONCILING/SUPERSEDED`;
-  mesma linha ⇒ mesma `Idempotency-Key`; ordem por conversa via `conversation_seq` (INV-065); reenvio cego só dentro do horizonte
-  da `DeliveryPolicy`, que não pode alargar a janela de idempotência do gateway (INV-034/061/066). `provider_accepted_at` é do
+  mesma linha ⇒ mesma `Idempotency-Key`; ordem por conversa via `conversation_seq` (INV-065); reenvio só dentro do horizonte
+  da `DeliveryPolicy` (obrigatória, uma por Runtime), que não pode alargar a janela de idempotência do canal nem sair da janela segura de reenvio
+  (INV-034/061/066/072); `QUEUED` tem handle e é liquidado por `MessageLookup` (opcional) ou por status empurrado (INV-073); `FAILED` provado
+  e `SENDING` obsoleto ambíguo são distintos (ADR-023). `provider_accepted_at` é do
   domínio do canal ou NULL (INV-026).
 
 ## 6. Ledger de tools (ToolInvocation)
@@ -122,7 +137,7 @@ definições (INV-040).
 Logs JSON com contexto fechado de campos, spans como linhas de log (`trace_id` nasce no webhook e é persistido), métricas Prometheus
 em memória por processo + gauges de backlog/idade das filas lidos do banco, `/healthz /readyz /metrics`, SLOs em `ops/slo.yaml`
 (de onde alertas e dashboard são gerados), ledger de custo de LLM append-only com preços como dado e orçamento por tenant.
-Não há exportador OpenTelemetry nem agregação entre processos (finding F-005).
+Superfícies de integração para o consumidor: protocolos de métricas (`ports/metrics`), `Tracer` (`core/tracing.configure_tracer`), logs JSON, `/healthz /readyz /metrics` (`ops_app`) e `trace_id` persistido. O framework não traz exportador OpenTelemetry nem agregação entre processos: o backend de observabilidade é escolha do consumidor (ADR-022, F-005).
 
 ## 13. Invariantes arquiteturais principais
 

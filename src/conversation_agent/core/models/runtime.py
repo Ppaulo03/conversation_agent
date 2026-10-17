@@ -68,25 +68,57 @@ class Ownership(StrEnum):
 
 
 class InboundEvent(_Frozen):
-    """A normalised inbound event. (tenant_id, channel_id, event_id) is its dedupe identity."""
+    """A normalised inbound event: what a channel adapter hands to `Runtime.receive`.
+
+    The runtime is NOT an authentication boundary. The adapter authenticates the delivery with
+    whatever its channel offers and derives the identity fields from authenticated context, never
+    from unauthenticated payload fields. The contract in full: docs/GUIDE.md §5 and ADR-025.
+
+    - Dedupe identity: `(tenant_id, channel_id, event_id)`. `event_id` names ONE logical event, so
+      a provider redelivery reuses it; first writer wins and a duplicate is a state no-op.
+    - `conversation_id` is unique per TENANT, deterministic for the conversation, and bound for
+      good to its channel, contact and scope (a conflict raises
+      `ConversationIdentityConflictError`).
+    - Aggregation order within a conversation: `source_sequence` (NULLS LAST), `occurred_at`,
+      `received_at`, `event_id`.
+    - Three different clocks: `occurred_at` (when it happened), `received_at` (the adapter's local
+      receipt time) and `provider_occurred_at` (the channel's own clock, or None).
+    """
 
     tenant_id: str
     channel_id: str
-    event_id: str
-    conversation_id: str
+    event_id: str = Field(min_length=1)  # one logical event; reused by every redelivery of it
+    conversation_id: str  # tenant-unique and stable for the conversation; namespace it per channel
     contact_id: str
+    # Kept with the event; the conversation retains its FIRST value. Neither dedupe nor order.
     session_id: str
     text: str
+    # Best available time the contact's event happened: fallback ordering, late-event watermark,
+    # `last_event_at` and the channel service window. NOT confirmation evidence.
     occurred_at: AwareDatetime
+    # The adapter's local receipt time (`Runtime.receive` does not stamp it): tie-break and latency
+    # only. Never provider evidence: do not copy it into `provider_occurred_at`.
     received_at: AwareDatetime
+    # Channel ordering evidence, or None. Use it only when its values are meaningfully comparable
+    # (monotone, gaps fine) among events of the same conversation that can be aggregated together;
+    # otherwise None. Never fabricate one from local arrival order; sequenced events sort ahead of
+    # unsequenced ones, so do not mix them in one pending stream unless that is intended.
     source_sequence: int | None = None
     media: tuple[MediaReference, ...] = ()  # claim-check references, never bytes
     provider_message_id: str | None = None  # the provider's id of the message this event carries
-    trace_id: str | None = None  # correlation id minted where the event entered the system
-    # "system": a runtime-originated event (e.g. a proactive timer), not something the contact wrote
+    # Observability/correlation only: never identity, dedupe or confirmation evidence.
+    trace_id: str | None = None
+    # "user": what a channel adapter emits. "system": reserved for runtime-originated events (e.g.
+    # a proactive timer, event ids `system:...`), never for ordinary channel input.
     kind: Literal["user", "system"] = "user"
     # Channel-domain evidence used to prove a reply belongs to a confirmation prompt (DESIGN §10):
-    provider_occurred_at: AwareDatetime | None = None  # comparable with `provider_accepted_at`
+    # the PROVIDER's clock for this message, comparable with the same channel's
+    # `provider_accepted_at`.
+    # None when the adapter has no such evidence; never fabricate it from `received_at`, local or
+    # database time or another clock domain (INV-026). Absence is safe, invented evidence is not.
+    provider_occurred_at: AwareDatetime | None = None
+    # Provider evidence that this event replies to that outbound provider message (None if the
+    # channel has no replies); a reply to the accepted confirmation prompt proves the answer.
     reply_to_provider_message_id: str | None = None
     # Which runtime handles the conversation this event opens (see `Runtime.scope`); only read
     # at first contact: a conversation never changes scope.
@@ -165,10 +197,20 @@ class OutboundMessage(_Frozen):
     # have forgotten the idempotency key, so sending again could duplicate. The sender checks it
     # at the moment of sending, not only when the authorisation was given.
     resend_authorized_until: AwareDatetime | None = None
+    # NOT stored: what the row was when the worker claimed it (set by `claim_ready` only). A stale
+    # SENDING is ambiguous (the send may have reached the channel); a PENDING row without a
+    # reconciler authorisation is a retry of a FAILED the channel proved. The worker treats the two
+    # differently when the retry window has closed (ADR-023).
+    claimed_from: OutboxStatus | None = None
 
 
 class SendResult(_Frozen):
-    """What a MessageSender reports. ACCEPTED means accepted for sending, not delivered/read."""
+    """What a MessageSender reports. ACCEPTED means accepted for sending, not delivered/read.
+
+    QUEUED: the channel acknowledged the request, settlement is pending; it carries the channel's
+      handle (`channel_message_id`) and is never resent. UNKNOWN: the outcome cannot be proven.
+      FAILED: the channel PROVES the delivery did not happen (`retryable` says whether the same
+      key may be tried again)."""
 
     status: OutboxStatus  # QUEUED | ACCEPTED | FAILED | UNKNOWN (enforced below)
     provider_message_id: str | None = None
@@ -190,6 +232,8 @@ class SendResult(_Frozen):
             raise ValueError(f"a sender cannot report {self.status.value}")
         if self.provider_accepted_at is not None and self.status is not OutboxStatus.ACCEPTED:
             raise ValueError("provider_accepted_at only applies to an ACCEPTED message")
+        if self.status is OutboxStatus.QUEUED and not self.channel_message_id:
+            raise ValueError("a QUEUED send must carry the channel_message_id it can be settled by")
         return self
 
 
