@@ -24,6 +24,8 @@ class HealthSnapshot:
     outbox_oldest_pending_age_seconds: float = 0.0
     outbox_unsettled: int = 0  # sent but not confirmed (queued / unknown / reconciling)
     outbox_oldest_unsettled_age_seconds: float = 0.0
+    outbox_unknown: int = 0  # sends whose fate the channel could not tell (a subset of unsettled)
+    outbox_oldest_unknown_age_seconds: float = 0.0
     invocations_unresolved: int = 0  # external effects whose outcome is not known yet
     invocations_oldest_unresolved_age_seconds: float = 0.0
     invocations_human_handoff: int = 0  # effects waiting for a person
@@ -58,6 +60,7 @@ async def collect_health(db: PostgresDatabase) -> HealthSnapshot:
         unsettled = await _pair(
             conn, "outbox_messages", "status IN ('QUEUED', 'UNKNOWN', 'RECONCILING')", "updated_at"
         )
+        unknown = await _pair(conn, "outbox_messages", "status = 'UNKNOWN'", "updated_at")
         unresolved = await _pair(
             conn, "tool_invocations", "status IN ('UNKNOWN', 'RECONCILING', 'EXECUTING')",
             "prepared_at",
@@ -84,6 +87,8 @@ async def collect_health(db: PostgresDatabase) -> HealthSnapshot:
         outbox_oldest_pending_age_seconds=pending[1],
         outbox_unsettled=unsettled[0],
         outbox_oldest_unsettled_age_seconds=unsettled[1],
+        outbox_unknown=unknown[0],
+        outbox_oldest_unknown_age_seconds=unknown[1],
         invocations_unresolved=unresolved[0],
         invocations_oldest_unresolved_age_seconds=unresolved[1],
         invocations_human_handoff=int(human),

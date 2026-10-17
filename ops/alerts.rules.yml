@@ -42,6 +42,15 @@ groups:
     annotations:
       summary: A reply has been unconfirmed for more than 1 h, approaching the gateway's idempotency window.
       runbook: docs/OPERATIONS.md#unsettled-delivery
+  - alert: ConversationAgentDeliveryUnknown
+    expr: conversation_agent_outbox_oldest_unknown_age_seconds > 300
+    for: 2m
+    labels:
+      severity: critical
+    annotations:
+      summary: A reply has been UNKNOWN for more than 5 min; the gateway may be holding every later send
+        of that instance.
+      runbook: docs/OPERATIONS.md#unknown-delivery
   - alert: ConversationAgentUnknownWriteStale
     expr: conversation_agent_invocations_oldest_unresolved_age_seconds > 900
     for: 10m

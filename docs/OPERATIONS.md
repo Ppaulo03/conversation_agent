@@ -65,6 +65,22 @@ message up at the gateway (`GET /api/v1/messages/{id}` with the row's `channel_m
 gateway itself reports `UNKNOWN`, resolve it (`RelayPlaneSender.resolve`, audited). Do this BEFORE the
 window closes.
 
+### unknown-delivery
+A reply is `UNKNOWN`: the channel could not say whether it went out. A transport `UNKNOWN` (timeout,
+5xx) is retried by the reconciler with the same idempotency key and usually clears on its own; one
+that stays past a few minutes is almost always an `UNKNOWN` the GATEWAY recorded (ambiguous dispatch
+to the provider), and that one needs a person.
+On RelayPlane this is urgent: an `UNKNOWN` message is an ORDER BARRIER for its instance. Every later
+send of that instance (every conversation on that number) waits behind it until someone calls
+`POST /api/v1/messages/{id}/resolve`, or until the gateway's `UNKNOWN_BARRIER_TIMEOUT` releases it if
+the operator configured one (`docs/FAILURE-MODES.md` in RelayPlane). Expect `OutboxDelay`/`DeliveryUnsettled`
+to follow for the other conversations.
+What to do: find the row (`outbox_messages WHERE status = 'UNKNOWN'`, its `channel_message_id`), ask the
+gateway (`GET /api/v1/messages/{id}`) and, if the provider shows whether it was delivered, resolve it
+with `RelayPlaneSender.resolve` (audited). When nobody can tell, resolving as `not_sent` releases the
+queue; the contact did not get that one reply, so follow up by hand if it mattered. The automation
+never resolves (`CHANNEL_UNKNOWN_NEEDS_DECISION`).
+
 ### unknown-write
 An external write's outcome is unknown and has not been resolved. The reconciliation worker retries
 (`retry_same_key`) or looks the operation up (`status_lookup`) according to the tool's recovery contract;

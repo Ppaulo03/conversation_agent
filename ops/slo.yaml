@@ -44,6 +44,14 @@ slos:
     runbook: unsettled-delivery
     unit: s
 
+  - name: DeliveryUnknown
+    description: A reply has been UNKNOWN for more than 5 min; the gateway may be holding every later send of that instance.
+    expr: conversation_agent_outbox_oldest_unknown_age_seconds > 300
+    for: 2m
+    severity: critical
+    runbook: unknown-delivery
+    unit: s
+
   - name: UnknownWriteStale
     description: An external write has had an unknown outcome for more than 15 min.
     expr: conversation_agent_invocations_oldest_unresolved_age_seconds > 900

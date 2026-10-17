@@ -134,13 +134,37 @@
     {
       "id": 6,
       "type": "timeseries",
-      "title": "UnknownWriteStale",
-      "description": "An external write has had an unknown outcome for more than 15 min.",
+      "title": "DeliveryUnknown",
+      "description": "A reply has been UNKNOWN for more than 5 min; the gateway may be holding every later send of that instance.",
       "gridPos": {
         "h": 7,
         "w": 12,
         "x": 12,
         "y": 14
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        }
+      },
+      "targets": [
+        {
+          "expr": "conversation_agent_outbox_oldest_unknown_age_seconds > 300",
+          "legendFormat": "DeliveryUnknown",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "UnknownWriteStale",
+      "description": "An external write has had an unknown outcome for more than 15 min.",
+      "gridPos": {
+        "h": 7,
+        "w": 12,
+        "x": 0,
+        "y": 21
       },
       "fieldConfig": {
         "defaults": {
@@ -156,14 +180,14 @@
       ]
     },
     {
-      "id": 7,
+      "id": 8,
       "type": "timeseries",
       "title": "HumanHandoffBacklog",
       "description": "A conversation has waited more than 10 min for a person to take it.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 21
       },
       "fieldConfig": {
@@ -180,15 +204,15 @@
       ]
     },
     {
-      "id": 8,
+      "id": 9,
       "type": "timeseries",
       "title": "TimersOverdue",
       "description": "Timers (proactive messages, reconciliation) are more than 2 min overdue.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 21
+        "x": 0,
+        "y": 28
       },
       "fieldConfig": {
         "defaults": {
@@ -204,14 +228,14 @@
       ]
     },
     {
-      "id": 9,
+      "id": 10,
       "type": "timeseries",
       "title": "CircuitOpened",
       "description": "A circuit breaker for an external system opened in the last 10 min.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 28
       },
       "fieldConfig": {
@@ -228,15 +252,15 @@
       ]
     },
     {
-      "id": 10,
+      "id": 11,
       "type": "timeseries",
       "title": "ToolFailureRateHigh",
       "description": "More than 20 % of outbound tool calls fail for a provider over 10 min.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 28
+        "x": 0,
+        "y": 35
       },
       "fieldConfig": {
         "defaults": {
@@ -252,14 +276,14 @@
       ]
     },
     {
-      "id": 11,
+      "id": 12,
       "type": "timeseries",
       "title": "LLMErrorRateHigh",
       "description": "More than 10 % of LLM calls fail for a provider over 10 min.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 35
       },
       "fieldConfig": {
@@ -276,15 +300,15 @@
       ]
     },
     {
-      "id": 12,
+      "id": 13,
       "type": "timeseries",
       "title": "LLMLatencyP95High",
       "description": "The p95 latency of LLM calls is above 20 s for a provider.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 35
+        "x": 0,
+        "y": 42
       },
       "fieldConfig": {
         "defaults": {
@@ -300,14 +324,14 @@
       ]
     },
     {
-      "id": 13,
+      "id": 14,
       "type": "timeseries",
       "title": "LLMCostBurnHigh",
       "description": "Estimated LLM spend is above the hourly ceiling (tune the number to your budget).",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 42
       },
       "fieldConfig": {
@@ -324,15 +348,15 @@
       ]
     },
     {
-      "id": 14,
+      "id": 15,
       "type": "timeseries",
       "title": "LLMUnpricedModel",
       "description": "LLM calls are being made to a model that has no price, so cost reports are incomplete.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 42
+        "x": 0,
+        "y": 49
       },
       "fieldConfig": {
         "defaults": {
@@ -348,14 +372,14 @@
       ]
     },
     {
-      "id": 15,
+      "id": 16,
       "type": "timeseries",
       "title": "LLMUsageNotRecorded",
       "description": "LLM usage records could not be written, so the books are missing calls.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 49
       },
       "fieldConfig": {
@@ -372,15 +396,15 @@
       ]
     },
     {
-      "id": 16,
+      "id": 17,
       "type": "timeseries",
       "title": "TurnLatencyP95High",
       "description": "The p95 time to process a turn is above 30 s for an agent version.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 49
+        "x": 0,
+        "y": 56
       },
       "fieldConfig": {
         "defaults": {
@@ -396,14 +420,14 @@
       ]
     },
     {
-      "id": 17,
+      "id": 18,
       "type": "timeseries",
       "title": "TurnQueueWaitHigh",
       "description": "The p95 wait before a message is picked up is above 60 s (workers cannot keep up).",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 56
       },
       "fieldConfig": {
@@ -420,15 +444,15 @@
       ]
     },
     {
-      "id": 18,
+      "id": 19,
       "type": "timeseries",
       "title": "TurnFailureRateHigh",
       "description": "More than 5 % of turns fail permanently for an agent version.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 56
+        "x": 0,
+        "y": 63
       },
       "fieldConfig": {
         "defaults": {
@@ -444,14 +468,14 @@
       ]
     },
     {
-      "id": 19,
+      "id": 20,
       "type": "timeseries",
       "title": "HandoffRateHigh",
       "description": "More than 30 % of turns of an agent version hand the conversation to a person.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 63
       },
       "fieldConfig": {
@@ -468,15 +492,15 @@
       ]
     },
     {
-      "id": 20,
+      "id": 21,
       "type": "timeseries",
       "title": "LLMBudgetNearLimit",
       "description": "A tenant has used more than 80 % of an LLM budget.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 12,
-        "y": 63
+        "x": 0,
+        "y": 70
       },
       "fieldConfig": {
         "defaults": {
@@ -492,14 +516,14 @@
       ]
     },
     {
-      "id": 21,
+      "id": 22,
       "type": "timeseries",
       "title": "LLMBudgetExceeded",
       "description": "A tenant has exhausted an LLM budget.",
       "gridPos": {
         "h": 7,
         "w": 12,
-        "x": 0,
+        "x": 12,
         "y": 70
       },
       "fieldConfig": {

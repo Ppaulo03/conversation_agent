@@ -121,6 +121,32 @@ async def test_an_external_effect_with_an_unknown_outcome_is_visible_with_its_ag
     )
 
 
+async def test_a_reply_the_channel_left_unknown_is_visible_with_its_age(
+    world: World, api: ApiHandle
+) -> None:
+    # On RelayPlane a gateway UNKNOWN holds every later send of the instance: it must be seen apart
+    # from the merely unconfirmed (QUEUED) replies, and quickly.
+    await world.inbox.insert_if_absent(
+        event("e-1", "Quero marcar um corte amanhã às 10h", clock=world.clock)
+    )
+    await coord(world, api, "w", FakeLLM([]), flows=True).process_conversation(KEY)
+    pool = world.db.pool
+    await pool.execute(
+        "UPDATE outbox_messages SET status = 'QUEUED', "
+        "updated_at = clock_timestamp() - interval '900 s'"
+    )
+    snap = await collect_health(world.db)
+    assert snap.outbox_unsettled == 1 and snap.outbox_unknown == 0
+    assert snap.outbox_oldest_unknown_age_seconds == 0
+    await pool.execute(
+        "UPDATE outbox_messages SET status = 'UNKNOWN', "
+        "updated_at = clock_timestamp() - interval '400 s'"
+    )
+    snap = await collect_health(world.db)
+    assert snap.outbox_unsettled == 1
+    assert snap.outbox_unknown == 1 and 395 < snap.outbox_oldest_unknown_age_seconds < 440
+
+
 # --- the exposition format ---
 
 
