@@ -1,0 +1,50 @@
+# Changelog
+
+What changed for an application that embeds the framework. Internal detail lives in
+`docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
+
+## Unreleased
+
+### Breaking: what an embedding application must change
+
+- **`Runtime.build` requires `delivery_policy`** (ADR-023, F-010). There is no default resend window
+  any more, because only the channel knows how long it remembers an idempotency key. A call without
+  it now fails with `TypeError: missing 1 required keyword-only argument: 'delivery_policy'`.
+  - RelayPlane: `policy = await sender.delivery_policy(tenant_id, retry_horizon=timedelta(hours=1))`
+    reads the retention the deployed gateway reports (`GET /api/v1/limits`) and refuses a horizon
+    that does not fit. See `examples/relayplane-app`.
+  - Any other channel: `DeliveryPolicy(idempotency_retention=..., retry_horizon=...)`, with the
+    retention your channel guarantees; `retry_horizon=timedelta(0)` means never resend.
+  - Tests: a fixed policy such as `DeliveryPolicy(idempotency_retention=timedelta(hours=24),
+    retry_horizon=timedelta(hours=1))`.
+- Renamed with no alias (ADR-023): `outbox_retry_horizon` is gone (use the policy);
+  `DeliveryPolicy.reconcile_margin` is `safety_margin`; `safe_resend_until` is `safe_resend_window`.
+  Only code that builds `OutboxWorker`/`OutboxStore` by hand also sees `policy`/`coordination` on the
+  worker, keyword `unknown_blocks_for` on `claim_ready` and `with_handle` on `claim_unsettled`.
+- A custom `MessageSender` may no longer return `SendResult(status=QUEUED)` without a
+  `channel_message_id` (the handle the reconciler looks the message up by).
+- **The schema is no longer migrated or stamped by a check** (ADR-026, F-014). Run
+  `python -m conversation_agent.app.migrate apply` as a release step, and call
+  `await db.ensure_schema_current()` before starting the runtime (the example does). A never-migrated
+  database now fails with `SchemaOutOfDateError` instead of being touched.
+- `InboundEvent` with an empty `event_id` fails at construction (ADR-025, F-012).
+- `MigrationStatus.state` can be `gap`, and `apply`/`ensure_current` fail closed with
+  `MigrationHistoryError` on a non-contiguous history (ADR-027, F-015).
+
+### Added
+
+- `examples/relayplane-app`: a complete ASGI application on RelayPlane (webhook, runtime, operational
+  endpoints), tested end to end against PostgreSQL and the gateway simulator.
+- Webhook schema version 2 from RelayPlane is accepted alongside version 1.
+- Metrics `conversation_agent_outbox_unknown` and `..._outbox_oldest_unknown_age_seconds`, alert
+  `DeliveryUnknown` and runbook *unknown-delivery*: on RelayPlane one `UNKNOWN` message holds every
+  later send of its instance until someone resolves it.
+- CI (`.github/workflows/ci.yml`) running the official gates, the PostgreSQL suite and
+  `ops/validate_artifacts.py` (alerts and dashboard checked by `promtool` and a real Grafana).
+
+### Fixed
+
+- A duplicate inbound redelivery no longer creates conversation state (F-013).
+- `RelayPlaneSender.delivery_policy` says why it cannot reach the gateway (for example, a plain
+  `http://` URL on a connection that requires TLS) instead of a generic "connection/credential
+  unavailable".

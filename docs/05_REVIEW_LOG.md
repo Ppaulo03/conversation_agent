@@ -35,14 +35,14 @@ Os seis primeiros gates `PASS` constituem o **baseline do repositório** (F-001)
 | ID | Severidade | Status | Título |
 |---|---|---|---|
 | F-001 | MEDIUM | RESOLVED | Baseline verificável do repositório |
-| F-002 | HIGH | OPEN | Evidência do contrato RelayPlane real |
+| F-002 | HIGH | PARTIALLY_RESOLVED | Evidência do contrato RelayPlane real (sandbox registrado; falta o gateway implantado com número real) |
 | F-003 | HIGH | SUPERSEDED | Ensaio de disaster recovery (ownership do consumidor, ADR-022) |
 | F-004 | MEDIUM | RESOLVED | Deriva de autoridade da documentação |
 | F-005 | MEDIUM | SUPERSEDED | Lacunas de observabilidade operacional (backend é do consumidor, ADR-022; resíduo → F-009) |
 | F-006 | MEDIUM | RESOLVED | Entrypoint de produção com RelayPlane (resolvido por ADR-022: não existir é intencional) |
-| F-007 | MEDIUM | OPEN | Sem pipeline de CI no repositório |
+| F-007 | MEDIUM | PARTIALLY_RESOLVED | Sem pipeline de CI no repositório (pipeline escrito; falta a primeira execução verde no GitHub) |
 | F-008 | LOW | RESOLVED | `mypy .` fora do escopo configurado |
-| F-009 | LOW | OPEN | Shipped observability artifacts lack target-format compatibility evidence |
+| F-009 | LOW | RESOLVED | Shipped observability artifacts lack target-format compatibility evidence |
 | F-010 | HIGH | RESOLVED | Generic delivery safety contract is incomplete (origin: IR-004) |
 | F-011 | HIGH | RESOLVED | Generic ToolProvider side-effect safety contract is incomplete (origin: IR-008) |
 | F-012 | HIGH | RESOLVED | Generic inbound trust and confirmation-evidence contract is incomplete (origin: IR-005) |
@@ -50,8 +50,8 @@ Os seis primeiros gates `PASS` constituem o **baseline do repositório** (F-001)
 | F-014 | MEDIUM | RESOLVED | PostgreSQL schema startup verification is hidden and mutating (origin: IR-006) |
 | F-015 | MEDIUM | RESOLVED | Non-prefix migration history can execute migrations out of order (origin: migration-metadata integrity review after F-014) |
 
-Contagem: RESOLVED 10 (F-001, F-004, F-006, F-008, F-010, F-011, F-012, F-013, F-014, F-015) · OPEN 3 (F-002, F-007, F-009) · SUPERSEDED 2 (F-003, F-005) · PARTIALLY_RESOLVED 0 · ACCEPTED_RISK 0.
-Não há `BLOCKER`. O único `HIGH` aberto (após F-010 e F-011 `RESOLVED`) é F-002 (contrato do adapter RelayPlane, do framework); fica `OPEN` para a próxima iteration (Framework Integration Readiness).
+Contagem: RESOLVED 11 (F-001, F-004, F-006, F-008, F-009, F-010, F-011, F-012, F-013, F-014, F-015) · OPEN 0 · SUPERSEDED 2 (F-003, F-005) · PARTIALLY_RESOLVED 2 (F-002, F-007) · ACCEPTED_RISK 0.
+Não há `BLOCKER`. O único `HIGH` não resolvido é F-002 (`PARTIALLY_RESOLVED` em 2026-10-17: evidência de sandbox registrada; falta rodar contra o gateway implantado com número real antes do piloto).
 
 ---
 
@@ -65,10 +65,11 @@ Não há `BLOCKER`. O único `HIGH` aberto (após F-010 e F-011 `RESOLVED`) é F
 
 ### F-002 — RelayPlane live contract evidence
 - **Severity:** HIGH
-- **Status:** OPEN
+- **Status:** PARTIALLY_RESOLVED (2026-10-17)
 - **Evidence:** `docs/RELEASE_EVIDENCE.md` tem a tabela de registro em branco; `tests/contracts/test_relayplane_live.py` (3 testes) foi `skipped` nesta execução por falta de `RELAYPLANE_*`; `IMPLEMENTATION_STATUS.md` marca o achado 5 da auditoria externa e o 6 da Fase 14.1 como “pendente (você)”; `RELAYPLANE_CONTRACT.md` foi lido no commit `880820a` do repositório do gateway, sem registro de reconferência. Pista não verificada: há um container local `relayplane/evolution:patched-test`; não está registrado que o teste tenha rodado contra ele.
 - **Consequence:** INV-021/034/061/066 e ADR-005/008 dependem de duas premissas do gateway (mesma `Idempotency-Key` dentro da retenção devolve a mesma mensagem; `/limits` reporta a retenção real). Sem evidência, um gateway que não deduplicasse geraria mensagens duplicadas, e o desenho assume o contrário.
 - **Expected resolution:** executar o roteiro de `RELEASE_EVIDENCE.md` contra o gateway de produção (seções 1 e 2), preencher e versionar a tabela com commit e versão do gateway; repetir a cada mudança de versão/retenção do gateway.
+- **Progress (2026-10-17):** the live contract test ran against a local RelayPlane sandbox (gateway 0.2.0 with the provider simulator): 2 passed, 1 skipped (retention measurement opt-in); `/limits` reported 86400 s; signed `message.received`/`message.outbound_status` deliveries were applied end to end by the POC. Recorded in `RELEASE_EVIDENCE.md` ("Recorded runs"). Found and fixed on the way: the live test could not reach a plain-HTTP sandbox (now opt-in `RELAYPLANE_ALLOW_INSECURE=1`) and `RelayPlaneSender.delivery_policy` hid the reason (now says TLS/connection/credential); `RELEASE_EVIDENCE.md` §2 named `message.status`/`provider_accepted_at` instead of `message.outbound_status`/`accepted_at`. Remaining for `RESOLVED`: the same run against the deployed gateway with a real number.
 
 ### F-003 — Disaster recovery rehearsal
 - **Severity:** HIGH (original)
@@ -106,11 +107,12 @@ Não há `BLOCKER`. O único `HIGH` aberto (após F-010 e F-011 `RESOLVED`) é F
 
 ### F-007 — No CI pipeline in the repository
 - **Severity:** MEDIUM
-- **Status:** OPEN
+- **Status:** PARTIALLY_RESOLVED (2026-10-17)
 - **Evidence:** `git ls-files` não contém `.github/`, `.gitlab-ci.yml` nem equivalente; a documentação cita “`app.ops check` roda no CI” (status Fase 10) e `ops check` foi desenhado para rodar sem asyncpg “no CI”.
 - **Consequence:** os gates só existem como comandos manuais; nada prova que um push passa neles fora da máquina local, e a regra global de monitorar o CI do push não tem o que monitorar.
 - **Scope:** CI **do próprio framework**. CI/CD da aplicação consumidora não é responsabilidade do projeto (ADR-022).
 - **Expected resolution:** definir o provedor/pipeline e codificar os gates oficiais (incl. serviço PostgreSQL); confirmar a primeira execução verde.
+- **Progress (2026-10-17):** `.github/workflows/ci.yml` codifies the official gates: job `gates` (Python 3.12 and 3.13: `uv sync --locked`, ruff check, ruff format --check, `mypy src examples`, `lint-imports`, `app.ops check`, pytest without PostgreSQL, `uv build`), job `postgres` (PostgreSQL 16 service: `pytest tests/postgres`, then `migrate apply` + `migrate check` on an empty database) and job `ops-artifacts` (F-009). Workflow checked with actionlint 1.7.7; every step reproduced locally against PostgreSQL 16: 1722 passed, 8 deselected. Remaining: the first green run on GitHub, which needs the current history pushed (GitHub `main` was at `aaed1d9` on 2026-10-17).
 
 ### F-008 — `mypy .` fora do escopo configurado
 - **Severity:** LOW
@@ -120,11 +122,12 @@ Não há `BLOCKER`. O único `HIGH` aberto (após F-010 e F-011 `RESOLVED`) é F
 
 ### F-009 — Shipped observability artifacts lack target-format compatibility evidence
 - **Severity:** LOW
-- **Status:** OPEN
+- **Status:** RESOLVED (2026-10-17)
 - **Owner:** framework (first-party artifacts).
 - **Evidence:** `ops/alerts.rules.yml` (Prometheus alert rules) and `ops/grafana-dashboard.json` (Grafana dashboard) are generated by `python -m conversation_agent.app.ops render` from `ops/slo.yaml` and are documented as such (`GUIDE.md` §8, `app/ops.py`); they are not labeled unsupported examples. The only checks are that the committed files equal what `render` produces (`app.ops check`, `tests/postgres/test_ops.py`); nothing reproducible shows they are valid for the formats/tools they claim (Prometheus rule-file schema and PromQL, Grafana dashboard JSON). Residual (f) of F-005.
 - **Consequence:** the framework ships artifacts that claim a format and semantics it has not demonstrated. Does not block integration; a consumer can ignore them.
 - **Expected resolution:** validate the artifacts in an automated or reproducible way against the relevant official format/tool, and record the evidence. Out of scope: creating or operating an observability backend, requiring a production Prometheus/Grafana, OpenTelemetry.
+- **Resolution:** `ops/validate_artifacts.py` (standard library only) runs Prometheus's `promtool check rules` on `ops/alerts.rules.yml` and on every dashboard query (each turned into a recording rule, since promtool parses PromQL only in rule files), then imports `ops/grafana-dashboard.json` into a running Grafana through `POST /api/dashboards/db` and reads it back by uid, comparing the panels. CI job `ops-artifacts` runs it with promtool 2.55.1 (pinned sha256) and a `grafana/grafana-oss:11.3.0` service. Evidence 2026-10-17: alerts `SUCCESS: 21 rules found`; dashboard queries `SUCCESS: 21 rules found`; Grafana 11.3.0 `imported 'conversation-agent-health', 21 panels, schemaVersion 39`. A deliberately broken query makes the script fail. Still out of scope: an observability backend, OpenTelemetry.
 
 ### F-010 — Generic delivery safety contract is incomplete
 - **Severity:** HIGH
@@ -208,5 +211,7 @@ Não há `BLOCKER`. O único `HIGH` aberto (após F-010 e F-011 `RESOLVED`) é F
 - 2026-10-08 (base `4d61d68`, ADR-026): F-014 aberto (MEDIUM, origem IR-006) e `RESOLVED` no mesmo increment, sem migration. Gates: diff-check, ruff, format (370 arquivos), mypy (218), lint-imports (9 kept), `app.ops check` PASS; `pytest`: 1712 passed, 8 deselected, 0 skips. Resíduos (histórico não-prefixo; checksum NULL) registrados e inalterados. F-002, F-007 e F-009 inalterados.
 
 - 2026-10-08 (base `1c5156b`, ADR-027): F-015 aberto (MEDIUM, origem revisão de integridade dos metadados de migration) e `RESOLVED` no mesmo increment, sem migration. Gates: diff-check, ruff, format (370 arquivos), mypy (218), lint-imports (9 kept), `app.ops check` PASS; `pytest`: 1721 passed, 8 deselected, 0 skips. NULL checksum e F-016 inalterados. F-002, F-007 e F-009 inalterados.
+
+- 2026-10-17: F-009 `RESOLVED` (`ops/validate_artifacts.py` + CI job `ops-artifacts`); F-007 `PARTIALLY_RESOLVED` (`.github/workflows/ci.yml`, first GitHub run pending); F-002 `PARTIALLY_RESOLVED` (sandbox evidence from the POC integration run). Also: `examples/relayplane-app` (integration example, ADR-022 readiness item), `DeliveryUnknown` alert, `CHANGELOG.md` with the consumer migration notes.
 
 Ao resolver um finding, registre: ID, data, commit e a evidência (comando + resultado).
