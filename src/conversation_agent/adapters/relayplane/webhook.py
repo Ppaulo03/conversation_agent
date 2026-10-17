@@ -4,7 +4,7 @@
       -> size -> subscription (OUR tenant comes from the registration, not from the payload)
       -> signature: HMAC-SHA256 over "<X-RelayPlane-Timestamp>.<raw body>", `v1=` entries (several
          while a secret rotates), replay window, constant-time compare
-      -> envelope (`schema_version` 1, `event_id`, `sequence`, ...) -> by `event_type`:
+      -> envelope (`schema_version` 1 or 2, `event_id`, `sequence`, ...) -> by `event_type`:
 
            message.received         InboundEvent -> InboxStore.insert_if_absent (dedupe by event_id)
            message.outbound_status  what became of a send we made -> OutboxStore (forward only)
@@ -44,7 +44,9 @@ from conversation_agent.ports.subscriptions import Subscription, SubscriptionRes
 
 log = logging.getLogger(__name__)
 
-SUPPORTED_SCHEMA_VERSION = 1
+# 2 dropped `provider`/`source_assignment` and added `channel`; none of them is read here, so both
+# versions mean the same to us. A version we do not know is refused, never half-understood.
+SUPPORTED_SCHEMA_VERSIONS = frozenset({1, 2})
 MAX_BODY_BYTES = 256 * 1024
 MAX_TEXT_CHARS = 8000
 H_TIMESTAMP = "x-relayplane-timestamp"
@@ -138,7 +140,7 @@ class RelayPlaneWebhook:
             envelope = _Envelope.model_validate(json.loads(body))
         except (ValueError, ValidationError):
             return WebhookResponse(400, {"error": "invalid_envelope"})
-        if envelope.schema_version != SUPPORTED_SCHEMA_VERSION:
+        if envelope.schema_version not in SUPPORTED_SCHEMA_VERSIONS:
             return WebhookResponse(400, {"error": "unsupported_schema_version"})
         header_id = lowered.get(H_EVENT_ID)
         if header_id is not None and header_id != envelope.event_id:

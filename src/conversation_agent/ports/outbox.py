@@ -13,10 +13,14 @@ class OutboxStore(Protocol):
         limit: int,
         claim_ttl: timedelta,
         scope: str | None = None,
-        unknown_blocks_for: timedelta = timedelta(hours=24),
+        *,
+        unknown_blocks_for: timedelta,
     ) -> list[OutboundMessage]:
         """PENDING (available) or stale-SENDING rows -> SENDING, never ahead of an earlier message
-        of the same conversation that is still waiting to go out (see the adapter)."""
+        of the same conversation that is still waiting to go out (see the adapter). An unresolved
+        UNKNOWN holds later messages back for `unknown_blocks_for` (the delivery policy's safe
+        resend window: the caller passes it, the store has no default). The returned rows say
+        what they were (`claimed_from`)."""
         ...
 
     async def record_result(
@@ -30,10 +34,14 @@ class OutboxStore(Protocol):
         claim_ttl: timedelta,
         poll_after: timedelta,
         scope: str | None = None,
+        *,
+        with_handle: bool = True,
     ) -> list[OutboundMessage]:
         """Rows whose outcome the channel has not told us yet -> RECONCILING (claimed): UNKNOWN
         ones that are due, and QUEUED ones that nobody has heard about for `poll_after` (the
-        status event may have been lost)."""
+        status event may have been lost). QUEUED rows always have a handle. `with_handle=False`
+        (no lookup is configured) claims only UNKNOWN rows WITHOUT a handle: the ones the
+        reconciler can still act on; those with a handle wait for the channel to push."""
         ...
 
     async def apply_channel_status(

@@ -46,6 +46,7 @@ from conversation_agent.engine.side_effects import LedgerToolExecutor
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.channel_lookup import MessageLookup
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
@@ -69,8 +70,8 @@ class Runtime:
         reconciler: ReconciliationWorker,
         inbox: PostgresInboxStore,
         owner: str,
+        outbox_reconciler: OutboxReconciler,
         scope: str | None = None,
-        outbox_reconciler: OutboxReconciler | None = None,
     ) -> None:
         self.scope = scope
         self.outbox_reconciler = outbox_reconciler
@@ -95,8 +96,8 @@ class Runtime:
         scope: str | None = None,
         policy: PolicyGate | None = None,
         transcriber: Transcriber | None = None,
-        outbox_retry_horizon: timedelta | None = None,
-        delivery_policy: DeliveryPolicy | None = None,
+        delivery_policy: DeliveryPolicy,
+        lookup: MessageLookup | None = None,
         outbox_poll_after: timedelta = timedelta(seconds=30),
         lease_ttl: timedelta = DEFAULT_LEASE_TTL,
         debounce: timedelta = timedelta(0),
@@ -108,10 +109,14 @@ class Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
         `scope` says which conversations this runtime handles (default: the agent's id): several
         runtimes can share one database, each claiming only the turns and the outbox messages of
-        its own conversations. With a `delivery_policy` (how long the channel remembers an
-        idempotency key) and a sender that can `lookup(message)`, sends whose outcome the channel
-        did not settle (queued, unknown) are reconciled instead of left hanging, and the policy's
-        retry horizon bounds re-sending. `lease_ttl` is how long a conversation lease and every
+        its own conversations. The `delivery_policy` is mandatory (ADR-023): it states how long the
+        channel remembers an idempotency key and bounds every resend, and it must hold for every
+        delivery this runtime handles (several channels with different guarantees: use a
+        conservative policy or separate runtimes). `retry_horizon == 0` means: never send the same
+        delivery again. Sends whose outcome the channel did not settle (queued, unknown) are
+        settled by `lookup` (default: the sender, when it satisfies `MessageLookup`) or by status
+        the channel pushes through `OutboxStore.apply_channel_status`; the channel must offer at
+        least one of the two. `lease_ttl` is how long a conversation lease and every
         worker claim lasts without renewal: a worker that dies is recovered after that long (a turn
         renews its lease every `heartbeat_interval_seconds`, default a third of the TTL up to 10 s,
         and the TTL must be more than twice the heartbeat). `coordinator_options` go to the
@@ -133,16 +138,8 @@ class Runtime:
                 "lease_ttl must be more than twice heartbeat_interval_seconds, or a lease could "
                 "expire in the middle of a turn that is still running"
             )
-        if delivery_policy is not None and not hasattr(sender, "lookup"):
-            raise ValueError("a delivery_policy needs a sender that can look a message up")
-        if delivery_policy is not None:
-            # ONE source of truth: the worker's blind-retry horizon is the policy's, never its own
-            if outbox_retry_horizon not in (None, delivery_policy.retry_horizon):
-                raise ValueError(
-                    "outbox_retry_horizon differs from delivery_policy.retry_horizon: with a "
-                    "delivery_policy the retry horizon comes from it (give only the policy)"
-                )
-            outbox_retry_horizon = delivery_policy.retry_horizon
+        if lookup is None and isinstance(sender, MessageLookup):
+            lookup = sender
         agent = compiled.agent
         clock = clock or SystemClock(agent.timezone)
         owner = owner or f"worker-{uuid.uuid4().hex[:8]}"
@@ -223,14 +220,9 @@ class Runtime:
                 faults,
                 owner=owner,
                 claim_ttl=lease_ttl,
-                retry_horizon=outbox_retry_horizon,
+                policy=delivery_policy,
                 coordination=coordination,
                 scope=scope,
-                **(
-                    {"unknown_blocks_for": delivery_policy.safe_resend_until}
-                    if delivery_policy is not None
-                    else {}
-                ),
             ),
             scheduler_worker=SchedulerWorker(
                 scheduler,
@@ -249,26 +241,31 @@ class Runtime:
             inbox=inbox,
             owner=owner,
             scope=scope,
-            outbox_reconciler=(
-                OutboxReconciler(
-                    outbox,
-                    sender,  # type: ignore[arg-type]  # checked above: it has `lookup`
-                    coordination,
-                    delivery_policy,
-                    owner=owner,
-                    claim_ttl=lease_ttl,
-                    poll_after=outbox_poll_after,
-                    scope=scope,
-                )
-                if delivery_policy is not None
-                else None
+            outbox_reconciler=OutboxReconciler(
+                outbox,
+                lookup,
+                coordination,
+                delivery_policy,
+                owner=owner,
+                claim_ttl=lease_ttl,
+                poll_after=outbox_poll_after,
+                scope=scope,
             ),
         )
 
     async def receive(self, event: InboundEvent) -> bool:
         """Persist an inbound event (the conversation is created on first contact, in this
-        runtime's scope unless the event names one). False when it was already there (a duplicate
-        delivery)."""
+        runtime's scope unless the event names one). The caller has already authenticated the
+        delivery and derived the event's identity: this is not an authentication boundary.
+
+        True: a new logical event was persisted. False: it already existed (a duplicate delivery,
+        no new state): acknowledge it as a success. `ConversationIdentityConflictError`
+        (`conversation_agent.core.errors`): a new event reuses a conversation identity with another
+        channel, contact or scope; permanent, nothing was stored. Pydantic `ValidationError` is
+        raised earlier, when the event is built. Any other persistence/infrastructure
+        exception: durable acceptance was not confirmed, so do not acknowledge a transport that
+        can redeliver; redeliver the SAME event with the SAME `event_id` (if the earlier attempt
+        committed, the duplicate returns False; if not, it is persisted normally)."""
         if event.scope is None and self.scope is not None:
             event = event.model_copy(update={"scope": self.scope})
         return await self.inbox.insert_if_absent(event)
@@ -283,8 +280,7 @@ class Runtime:
             self.scheduler_worker.run_once,
             self.reconciler.run_once,
         ]
-        if self.outbox_reconciler is not None:
-            stages.append(self.outbox_reconciler.run_once)
+        stages.append(self.outbox_reconciler.run_once)
         for stage in stages:
             try:
                 result = await stage()

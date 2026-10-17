@@ -114,6 +114,7 @@ def test_runtime_does_not_own_business_state() -> None:  # INV-008
         "flows",
         "media",
         "media_seq",
+        "budget_notice",
     }  # conversational data only: files are REFERENCES (handles), never bytes
 
 

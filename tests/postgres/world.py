@@ -52,6 +52,10 @@ from vertical_slice.wiring import build_engine, build_pipeline
 KEY = ConversationKey(tenant_id=IDENTITY.tenant_id, conversation_id=IDENTITY.conversation_id)
 SLOTS = ToolResult(status="success", data={"items": [], "pagination": {"next_cursor": None}})
 TTL = timedelta(seconds=30)
+# The delivery policy of every test runtime that does not make a point of its own.
+WORLD_POLICY = DeliveryPolicy(
+    idempotency_retention=timedelta(hours=24), retry_horizon=timedelta(hours=1)
+)
 
 
 class AllowWrites(PolicyGate):
@@ -350,7 +354,7 @@ class World:
         faults: FaultInjector | None = None,
         *,
         sender: Any = None,
-        retry_horizon: timedelta | None = None,
+        policy: DeliveryPolicy | None = None,
     ) -> OutboxWorker:
         return OutboxWorker(
             self.outbox,
@@ -358,7 +362,7 @@ class World:
             faults or NoFaults(),
             owner=owner,
             claim_ttl=TTL,
-            retry_horizon=retry_horizon,
+            policy=policy or WORLD_POLICY,
             coordination=self.coord,
         )
 

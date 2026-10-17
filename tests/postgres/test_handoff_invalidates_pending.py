@@ -23,6 +23,7 @@ from conversation_agent.core.compiler import compile_manifest
 from conversation_agent.core.models.runtime import ConversationKey
 from conversation_agent.engine.ownership import OwnershipService
 from postgres.test_runtime_paths import identity, runtime_for
+from support.builders import TEST_DELIVERY_POLICY
 from vertical_slice.wiring import MANIFEST_PATH
 
 CLOCK = SystemClock("America/Sao_Paulo")
@@ -195,6 +196,7 @@ async def handoff_with(db: PostgresDatabase, api: ApiHandle, **options: object) 
         llm=FakeLLM([text_response("x")]),
         providers={},
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=CLOCK,
         **options,  # type: ignore[arg-type]
     )

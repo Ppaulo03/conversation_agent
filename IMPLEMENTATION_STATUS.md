@@ -1,5 +1,9 @@
 # IMPLEMENTATION_STATUS
 
+> **Status: LOG HISTÓRICO de implementação** (ADR-020). Não é fonte de verdade do estado atual (use [`docs/02_ARCHITECTURE.md`](docs/02_ARCHITECTURE.md)),
+> nem do que vem a seguir ([`docs/04_ROADMAP.md`](docs/04_ROADMAP.md)), nem dos pendentes técnicos ([`docs/05_REVIEW_LOG.md`](docs/05_REVIEW_LOG.md)).
+> A ordem de precedência abaixo foi substituída pela de ADR-020 (`docs/03_DECISIONS.md`); permanece como registro do que valia até a iteration Baseline & Engineering Consolidation.
+
 Autoridade por escopo (os arquivos em `docs/` não têm o sufixo `_v4`):
 
 - `INVARIANTS.md` — invariantes normativas e mapa INV → teste;
@@ -568,7 +572,7 @@ Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.p
 1. **A janela da idempotency key é premissa de segurança**: reenviar a MESMA linha só enquanto o gateway lembra a chave (`retry_horizon <= retenção`, retenção lida de `/limits`); depois disso nada é reenviado às cegas (INV-034).
 2. **Aceite ≠ entrega**: `QUEUED` guarda o `channel_message_id`; ACCEPTED (com `provider_message_id` e `accepted_at` do canal) chega por evento ou por consulta; o estado só avança.
 3. **`UNKNOWN` do gateway nunca é decidido pela automação** (`CHANNEL_UNKNOWN_NEEDS_DECISION`; `RelayPlaneSender.resolve` é ação de operador).
-4. **Tenant/instância do webhook vêm do cadastro da subscription**; o payload não escolhe; `schema_version` ≠ 1 é recusado.
+4. **Tenant/instância do webhook vêm do cadastro da subscription**; o payload não escolhe; `schema_version` fora de {1, 2} é recusado (a 2 é a que o gateway emite desde o R29).
 5. **Transcrição é um step do journal** (replay reaproveita); falha/vazio/grande demais/`REJECTED`/`FAILED` viram uma linha de texto nomeada, nunca falha do turno; o runtime só nomeia mídia que não lê.
 6. **Proativo reentra pelo runtime** como evento `kind=system` deduplicado pela chave do timer; `ChannelPolicy` decide e a decisão é journalada; sem política nada sai; não renova `last_event_at`.
 7. **Regras de canal (janela de atendimento, silêncio) vivem no adapter**; o RelayPlane não tem templates nem janela de 24h.
@@ -708,7 +712,7 @@ O que é código está testado; o que é prática operacional está em `docs/OPE
 |---|---|---|
 | Eval harness completo | `EvalSuite` como dado (passos de modelo scriptados, tools por cassette, asserts sobre o que foi dito/proposto/**executado**: `executes`, `forbidden_capabilities`, `flow`, `handoff`, `max_llm_calls`), `EvalHarness` (engine novo por cenário sobre o pipeline real), `python -m conversation_agent.app.evals` com exit code como gate, relatório com digest do agente e da suíte (`evidence()`) | `tests/evals/test_harness.py`; suíte do agente de suporte em `examples/support-agent/evals.yaml` |
 | Rollout/rollback | `ReleaseManager`: stable/canary (hash estável: alargar só adiciona)/withdrawn, evidência de eval do digest exato para promover, rollback sem evidência, histórico append-only + auditoria na mesma transação; o coordinator resolve a versão pelo release (`latest` quando não há release) | `tests/postgres/test_releases.py` |
-| Migration tooling | `Migrator`: forward-only, checksum por migration (drift para tudo), banco à frente do código recusado, apply serializado por advisory lock, cada migration atômica, `ensure_current` (guarda de startup e `/readyz`), `app.migrate status/check/apply [--dry-run]` | `tests/postgres/test_migrator.py` |
+| Migration tooling | `Migrator`: forward-only, checksum por migration (drift para tudo), banco à frente do código recusado, apply serializado por advisory lock, cada migration atômica, `ensure_current` (guarda somente-leitura que o host chama antes de trabalho durável; `/readyz` a reutiliza — ADR-026, nada a chama automaticamente), `app.migrate status/check/apply [--dry-run]` | `tests/postgres/test_migrator.py` |
 | Retenção/LGPD operacional | `RetentionService`: política por tenant, `apply_retention` (com dry-run de contagens reais), `locate_contact`, `erase_contact` (some/pseudonimiza tudo que nomeia o contato, tombstones sem conteúdo onde dedupe/idempotência/ledger precisam da linha, recusa enquanto algo está em movimento) | `tests/postgres/test_retention.py` |
 | Dashboards/SLOs | `HealthSnapshot` (backlogs e idades das filas duráveis, relógio do banco), exporter Prometheus sem dependência, `/healthz` `/readyz` `/metrics`, `ops/slo.yaml` → regras de alerta + dashboard Grafana gerados, `app.ops check` falha se o gerado está velho, métrica inexistente ou runbook sem seção | `tests/postgres/test_ops.py` |
 | Capacity/backpressure | `RateLimiter` (memória e PostgreSQL compartilhado, relógio do banco), admissão no webhook: limite por contato (429) e backlog do inbox (503) com `Retry-After` ANTES de persistir/reconhecer; `RateLimitedToolProvider` por (tenant, conexão) | `tests/postgres/test_backpressure.py` |
@@ -722,7 +726,7 @@ O que é código está testado; o que é prática operacional está em `docs/OPE
 3. **Rollback não é "apagar a versão"**: a versão sai de circulação (withdrawn) para sempre, conversas ociosas nela saem no próximo turno, as com fluxo/confirmação pendente terminam onde começaram (INV-028 vence).
 4. **Erasure é conservadora e explícita**: bloqueadores são nomeados (`turn_in_progress`, `conversation_leased`, `external_effect_unfinished`, `message_awaiting_delivery`, `confirmation_pending`); `force` só cancela o que é cancelável (mensagens não entregues, confirmações pendentes), nunca um efeito externo inacabado.
 5. **Redigir, não apagar, quando outra garantia precisa da linha**: inbox (dedupe de redelivery), outbox (chave de idempotência), ledger (efeito externo) ficam como tombstones sem conteúdo nem identificador.
-6. **Migração forward-only**: sem scripts "down"; voltar = restore ou migration nova (expand/contract). O código recusa rodar em schema à frente ou com drift.
+6. **Migração forward-only**: sem scripts "down"; voltar = restore ou migration nova (expand/contract). `apply` recusa schema à frente ou com drift; a verificação somente-leitura (`ensure_schema_current`) os rejeita, mas é o host quem a chama antes de iniciar (ADR-026; o `Runtime` não verifica sozinho).
 7. **O artefato operacional é gerado de uma fonte**: `ops/slo.yaml` → alertas e dashboard; um teste prova que não há deriva nem alerta sem métrica/runbook.
 
 ### Débitos conhecidos (Fase 10)
@@ -732,7 +736,7 @@ O que é código está testado; o que é prática operacional está em `docs/OPE
 - **Release é por agente/tenant, sem associação automática canal→agente** e sem janela de observação automática do canary (a decisão de alargar/recuar é do operador, guiada pelos SLOs).
 - **Retention não cobre `trace_retention`/`memory_retention`** (não há traces nem memória de longo prazo persistidos) e a retenção de estado da conversa só zera o histórico (a linha de ownership/pin permanece).
 - **Métricas de tool e circuito continuam em memória por processo** (o exporter expõe as de um `InMemoryToolMetrics`); agregação entre processos é do Prometheus (scrape de cada instância).
-- **Backup/DR:** o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. O CI ensaia `pg_dump`/`pg_restore` em outro banco e roda schema + integridade; WAL/PITR e o RTO do ambiente continuam responsabilidade operacional.
+- **Backup/DR:** o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. Backup, restore e seu ensaio são do consumidor (ADR-022).
 - Achados da Fase 9 ainda abertos: slot de texto livre engole perguntas; não existe pedido direto de atendente humano pelo contato.
 
 
@@ -805,7 +809,7 @@ O agente de suporte passa a usar os dois; sua suíte de evals ganhou os cenário
 - `question_check` só existe para slots `text`; não há equivalente para `choose` (opções) nem para pedidos de humano durante uma confirmação.
 
 
-## Phase 13 — Uso real (em andamento)
+## Phase 13 — Uso real (concluída; o título original dizia “em andamento”)
 
 Status: **PASS** (itens 1–4, 8–11 da lista do POC; 5, 6 e 7 ficam para a fase seguinte). Pronto: o runtime durável montado em um lugar só (`serve`). Pronto também: wiring genérico no pacote e extras de dependências. Falta (ver ROADMAP): guia de uso completo, e o motivo da ambiguidade de confirmação visível ao contato.
 
@@ -821,9 +825,8 @@ Achados corrigidos no caminho:
 
 Decisões: o teste de arquitetura de INV-007 passou a aceitar `app/runtime.py` (só nomeia o tipo para entregar o sender ao OutboxWorker; nunca chama `send`). Os testes de confiabilidade seguem usando `tests/postgres/world.py` (relógios fixos); migrá-los para o `Runtime` fica como débito.
 
-Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem). O host de produção é
-`app.asgi.runtime_app`: ele gerencia o ciclo de vida do runtime e recebe o app de ingresso escolhido
-pelo operador, sem definir um webhook ou depender de RelayPlane.
+Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem). Não há host de produção no pacote (ADR-022); a
+composição de referência com RelayPlane é `examples/relayplane-app`.
 
 ### Pacote instalável e extras (Fase 13, passo 2)
 
@@ -1005,24 +1008,17 @@ Débitos: um único arquivo por argumento (sem lista); só tools HTTP (MCP não 
 | Download de mídia sem a proteção do `GuardedTransport` | **Fechado (INV-070).** DNS fixado, rede privada recusada, TLS exigido, sem redirecionamento, `media_id` como um único segmento. |
 | Transcriber de cassette para evals | **Fechado.** Turnos de eval com `voice:` (transcrição roteirizada); prova o que o agente faz e que `transcription: off` ignora o áudio. O digest de suítes antigas não muda. |
 | `T0` fixo dos testes (2026-10-05) contra o relógio real do banco | **Fechado na prática.** O único teste que misturava os dois (`test_a_conversation_being_processed_cannot_be_erased`) foi corrigido e, como o tempo real só avança, um teste que passa com `T0` no passado continua passando; regra no `AGENTS.local.md`. |
-| Orçamento rígido de LLM pode perder mensagem | **Aberto: decisão de produto** (ver OPERATIONS.md, `llm-budget`). |
+| Orçamento rígido de LLM pode perder mensagem | **Fechado (INV-071).** Nova política `degrade`, que passa a ser o padrão de um orçamento novo: aceita e grava a mensagem, avisa uma vez por período e não chama o modelo; trabalho em andamento termina. `alert` e `refuse_new` continuam, e `defer_llm` (PR #1) responde depois do reset: o turno pausa antes da chamada ao modelo e volta quando o período vira. |
 | Exporter OpenTelemetry | **Fechado:** extra `[otel]`, OTLP/HTTP oficial com batch, `TRACE=otlp` e flush no shutdown. |
-| Métricas agregadas | **Deployment:** cada processo expõe `/metrics`; o Prometheus coleta e agrega. Não há estado compartilhado dentro do runtime. |
+| Métricas agregadas, ensaio de restauração | Do consumidor (ADR-022): cada processo expõe `/metrics`. |
 
-## Backlog ativo canônico
+### Orçamento de LLM: `degrade` (INV-071)
 
-As listas nas fases acima registram o estado no momento de cada fase e podem conter itens fechados
-depois. Esta seção é a fonte de verdade para priorização atual.
+Decisão do usuário: opt-in por orçamento (só quem define um orçamento é afetado), com `degrade` como valor padrão de `on_exceed`; orçamentos já salvos mantêm o valor que gravaram.
 
-- **Framework:** nenhum bloqueador de corretude conhecido; CI valida o núcleo sem infraestrutura e a
-  suíte PostgreSQL 16 em jobs separados. O host ASGI de produção é independente do protocolo de canal.
-- **Orçamento rígido:** **fechado** com `defer_llm`: mensagem aceita permanece durável, o turno só é
-  reaberto após o reset e uma confirmação que exigiria classificação recebe um novo prompt.
-- **Operação:** configurar o Collector/Prometheus do deployment. O runtime exporta traces por OTLP/HTTP
-  opcional e métricas por processo; o CI cobre restauração lógica. WAL/PITR e RTO seguem específicos de
-  cada ambiente.
-- **Adaptador opcional RelayPlane:** executar e registrar o contrato live somente antes de colocar em
-  produção um deployment que tenha escolhido esse adaptador.
-- **Expansões não bloqueantes:** áudio de saída, listas/multipart/MCP para argumentos de mídia, visão e
-  grupos.
+- `LLMBudget.on_exceed`: `alert | degrade | refuse_new`, padrão `degrade`. `BudgetStatus.degrades`.
+- `TurnCoordinator(budget=BudgetGate)` / `Runtime.build(budget=...)`: antes de chamar o motor, um turno de usuário sem trabalho em andamento (sem fluxo, sem confirmação pendente, não retomado) de um tenant excedido vira o aviso fixo (`AgentDefinition.budget_exceeded_reply`, texto padrão em inglês) ou, já avisado neste período (`ConversationState.budget_notice` = instante de reset), é consumido sem resposta (`_persist_reply` não grava mensagem vazia). Sem chamada de modelo, sem efeito fora da transação do turno.
+- Digest: `budget_exceeded_reply` só entra no documento do agente quando definido.
+
+Débitos: mensagens recebidas durante o período excedido ficam registradas mas não entram no histórico nem são respondidas depois do reset (o aviso diz ao contato); o aviso é uma mensagem fixa (sem modelo), mesmo para quem escreve em outro idioma que o do agente.
 

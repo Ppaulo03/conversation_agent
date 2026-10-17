@@ -88,6 +88,7 @@ async def answer(
     after_s: float = 60,
     skew_s: float | None = None,
     reply_to: str | None = None,
+    provider_evidence: bool = True,
     owner: str = "answerer",
     **kw: Any,
 ):  # type: ignore[no-untyped-def]
@@ -99,7 +100,7 @@ async def answer(
             f"a-{world.clock.now().isoformat()}-{text[:8]}",
             text,
             clock=world.clock,
-            provider_occurred_at=occurred,
+            provider_occurred_at=occurred if provider_evidence else None,
             reply_to=reply_to,
         )
     )

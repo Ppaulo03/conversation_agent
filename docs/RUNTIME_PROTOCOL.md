@@ -1,5 +1,7 @@
 # Runtime Protocol — conversation_agent v4
 
+> **Status: NORMATIVO e vigente** (3º na ordem de autoridade, ADR-020). Visão geral do estado atual: [`02_ARCHITECTURE.md`](./02_ARCHITECTURE.md).
+
 Este documento concentra o protocolo normativo de execução. A visão completa continua em `DESIGN.md`.
 
 ## 1. Regra central de ownership
@@ -28,6 +30,16 @@ ordenar + formar burst
 Se o lease falhar, nenhum evento é claimado pelo worker perdedor.
 
 Eventos duplicados são deduplicados por `(tenant_id, channel_id, event_id)` e nunca criam turno duplicado.
+
+### Contrato do canal de entrada (ADR-025, INV-020/074/075)
+
+`Runtime.receive(InboundEvent)` não é uma fronteira de autenticação: o adapter autentica a entrega do canal e deriva tenant, canal, contato, conversa e scope de contexto autêntico/autoritativo, nunca de campo não autenticado do payload. Resultado: `True` evento lógico novo persistido; `False` duplicata (reconhecer como sucesso, sem estado novo); `ConversationIdentityConflictError` (`conversation_agent.core.errors`) conflito permanente, nada é gravado; `ValidationError` na construção do evento; qualquer outra exceção de persistência/infraestrutura = aceitação durável NÃO confirmada: não reconhecer um transporte que reentrega e reenviar o MESMO evento com o MESMO `event_id` (se a tentativa anterior tiver sido commitada, o dedupe devolve `False`; senão o evento é gravado normalmente, INV-020).
+
+- **`event_id`** identifica UM evento lógico, não vazio; a redelivery reutiliza o mesmo. A identidade de dedupe é `(tenant_id, channel_id, event_id)`; o primeiro a gravar vence, o conteúdo da duplicata não é comparado. O prefixo `system:` é reservado aos eventos do próprio runtime (`kind="system"`); adapters de canal não o usam.
+- **`conversation_id`** é único por tenant, determinístico e estável; liga-se a um canal, um contato e um scope e não muda (conflito = `ConversationIdentityConflictError`, evento não gravado). Cada canal escolhe seu esquema, desde que sem colisão entre canais.
+- **Ordem** dentro de uma conversa: `source_sequence ASC NULLS LAST, occurred_at ASC, received_at ASC, event_id ASC`. `source_sequence` só é usada quando é confiável e significativamente comparável (crescente; lacunas são aceitas) entre eventos da mesma conversa que podem ser agregados juntos; nunca derivada da ordem local de chegada; eventos com sequência vêm antes dos sem sequência, então não misture os dois num mesmo fluxo pendente salvo intencionalmente; se a sequência do provider reinicia ou muda de escopo e eventos das duas épocas podem coexistir, o adapter não a expõe como comparável. Sem garantia de comparabilidade: `None`.
+- **Relógios**: `occurred_at` = quando o evento ocorreu (ordenação de fallback, evento tardio, `last_event_at`, janela de serviço; não é prova de confirmação); `received_at` = recebimento local pelo adapter (desempate e latência; `receive` não o preenche); `provider_occurred_at` = relógio do próprio provider, comparável ao `provider_accepted_at` do mesmo canal, ou `None`.
+- **`session_id`** é gravado com o evento, mas a conversa mantém o PRIMEIRO valor; não afeta dedupe nem ordem. **`kind`**: canais emitem `user`; `system` é do runtime. **`trace_id`**: só observabilidade. **`scope`**: se `None`, `receive` usa o do Runtime; depois do primeiro contato, um scope diferente é conflito.
 
 ## 3. Lease e heartbeat
 
@@ -220,7 +232,7 @@ abs(occurred - accepted) <= tolerance -> ambígua
 occurred > accepted + tolerance -> elegível
 ```
 
-`confirmation_clock_skew_tolerance` é configurável por canal.
+A tolerância é fixa em 2 segundos hoje (`Runtime.build` passa `skew_tolerance` ao `ConfirmationStage`); não é configurável por canal. `provider_occurred_at` precisa ser relógio do provider no mesmo domínio de `provider_accepted_at`, ou `NULL`: nunca `received_at`, relógio local ou do banco (INV-026). Sem prova comparável (nem reply-to), a confirmação fica ambígua, nada executa e o runtime re-pergunta.
 
 `SENDING`, `QUEUED` e `UNKNOWN` nunca autorizam protected action.
 
@@ -267,15 +279,37 @@ Para prompt em `UNKNOWN`, reconciliar. Sem prova de `ACCEPTED`, criar novo promp
 
 A mesma linha de Outbox reutiliza a mesma idempotency key em retry técnico. Re-prompt semântico é nova linha/identidade.
 
-### Retenção da idempotency key no RelayPlane
+### Política de entrega e semântica genérica (ADR-023, INV-034/072/073)
 
-A arquitetura anterior do RelayPlane não define uma janela temporal outbound formal. Produção deve configurar/documentar `relayplane_idempotency_retention` e garantir:
+Normativo e independente de canal. Todo `Runtime` tem **uma** `DeliveryPolicy` explícita (`Runtime.build(delivery_policy=...)` é obrigatório; não existe "sem política", retry ilimitado nem reconciliação desligada). Ela precisa ser segura para todo outbound que o Runtime trata: canais ou tenants com garantias diferentes usam uma política conservadora válida para todos, ou runtimes separados.
 
 ```text
-sender_retry_horizon <= relayplane_idempotency_retention
+safe_resend_window = idempotency_retention - safety_margin
+idempotency_retention > 0
+0 <= safety_margin < idempotency_retention
+0 <= retry_horizon <= safe_resend_window
 ```
 
-Depois dessa janela, não é permitido reenviar cegamente contando com dedupe do RelayPlane; deve haver reconciliação/status lookup ou escalonamento.
+- `idempotency_retention`: quanto tempo o **canal** lembra uma idempotency key. O sender/canal deve honrar essa garantia pelo período em que o Runtime conta com ela.
+- `retry_horizon`: limita o retry comum/direto (um `FAILED` retryable provado; a recuperação direta de um `SENDING` obsoleto), medido desde o primeiro envio da linha. **Não** é o último instante em que a entrega pode ser reenviada: `0` desliga todo reenvio; um valor positivo também habilita a recuperação de ambiguidade, e um `UNKNOWN` sem handle pode receber, depois de `retry_horizon`, um reenvio com a mesma chave autorizado pelo reconciliador, até a janela segura fechar.
+- `safe_resend_window`: o envelope externo absoluto. Nenhum reenvio sai dele, nem o autorizado pelo reconciliador (a autorização expira em `primeiro_envio + safe_resend_window` e o worker a confere no instante do envio). Consultas de status não são reenvios.
+- `retry_horizon == 0` é a representação canônica de "não enviar esta entrega de novo depois da primeira tentativa" (`DeliveryPolicy.no_retry`); não se emula com um `timedelta` minúsculo. O canal de console usa-a (seu dedupe é em memória e não sobrevive a restart).
+- Todo reenvio da mesma linha usa a **mesma** `idempotency_key` e o mesmo payload. Chave nova = entrega lógica nova.
+
+| Resultado do sender | Significado | Efeito |
+|---|---|---|
+| `ACCEPTED` | o canal aceitou | sucesso terminal (não é delivered/read) |
+| `QUEUED` | o canal reconheceu o pedido; a liquidação está pendente | não terminal; **carrega** `channel_message_id` (`SendResult` recusa `QUEUED` sem handle); nunca é reenviado às cegas; liquidado por `MessageLookup` **ou** por status empurrado (`apply_channel_status`) |
+| `UNKNOWN` | o framework não consegue provar se o efeito externo ocorreu | não terminal. Com handle: liquidar por lookup (se configurado) ou push, sem reenvio cego só porque não há lookup. Sem handle: reenvio com a mesma chave só se `retry_horizon > 0`, o reconciliador autorizar e a janela segura não tiver passado; fora disso continua `UNKNOWN`, observável |
+| `FAILED` | o sender/canal **prova** que a entrega não ocorreu | `retryable=false`: terminal. `retryable=true`: reenvio só com a mesma chave, dentro de `retry_horizon`, da janela segura **e** do teto de tentativas da outbox (hoje 5); esgotado qualquer um, a linha fica `FAILED` terminal, nunca `UNKNOWN` |
+| exceção de `send(...)` | o framework não sabe se o canal viu o pedido | `UNKNOWN`. Falhas conhecidas antes do envio ou definitivas devem ser devolvidas pelo sender como `FAILED` |
+| processo morto/cancelado com a linha em `SENDING` | ambíguo (não é o `FAILED` provado) | reenvio só dentro de `retry_horizon`; fora dele a linha vira/permanece `UNKNOWN`, nunca `FAILED` |
+
+A distinção entre um `FAILED` provado e um `SENDING` obsoleto é preservada sem coluna nova: o claim informa o que a linha era (`OutboundMessage.claimed_from`, não persistido) e `record_result` consome a autorização de reenvio do reconciliador quando um `FAILED` provado volta para `PENDING`.
+
+**Liquidação.** `MessageLookup` é opcional (o `Runtime.build` detecta se o sender o satisfaz, ou recebe `lookup=`). Um canal que pode produzir status não terminal precisa de um caminho viável de liquidação: lookup, push, ou ambos; o framework não consegue prová-lo no build (isso exigiria metadados de capacidade, fora de escopo). Sem lookup, `QUEUED`/`UNKNOWN` com handle ficam não liquidados à espera do push; o sinal é a observabilidade existente de não liquidados. O estado só avança (`apply_channel_status`).
+
+A retenção do RelayPlane e a construção da política a partir de `GET /api/v1/limits` são específicas do adapter: ver [`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md).
 
 ## 9. Retry de tools
 
@@ -289,6 +323,17 @@ AND retry.mode == same_idempotency_key
 ```
 
 Timeout/5xx depois de possível envio de write deve virar `UNKNOWN`, salvo garantia explícita do provider de que a operação não ocorreu.
+
+### Contrato genérico do ToolProvider (ADR-024, INV-006/021)
+
+- **Identidade.** `ToolContext.invocation_id` é a identidade lógica da invocação (a coluna `idempotency_key` do ledger é o mesmo valor). A primeira tentativa, todo retry técnico, todo reenvio da reconciliation e toda recuperação após restart/replay recebem o **mesmo** valor. O provider nunca cria uma identidade de dedupe nova por tentativa.
+- **Propagação externa.** Em tool não-`read` com `idempotency_supported`, o provider liga `context.invocation_id` ao mecanismo de deduplicação/replay do sistema externo. O mecanismo (header, token, campo nativo, metadado) é do provider; o `Idempotency-Key` HTTP é a escolha dos adapters HTTP/MCP, não um requisito genérico. Se o protocolo não aceita o valor literal, vale uma codificação determinística (mesma identidade externa em toda tentativa, sem aleatoriedade por tentativa).
+- **`idempotency_supported`.** Afirmação do operador/provider de que a operação externa realmente deduplica/reproduz a resposta, durante todo reenvio automático que o `RetryPolicy` e o `RecoverySpec` da tool possam fazer (inclusive reenvios da reconciliation, que ocorrem depois de backoff). O framework não consegue provar isso; não há campo de retenção de idempotência de tool.
+- **Classificação de write** (risco efetivo diferente de `read`), pelo que se sabe do efeito: efeito provadamente **não** ocorreu → `technical_error` (`retryable=true` só nesse caso: "esta tentativa não produziu o efeito"); recusa de domínio conhecida → `business_error`/`validation_error`/`policy_denied`; requisição pode ter chegado e o efeito não é provável → `UNKNOWN`, sempre (timeout, reset, resposta inutilizável), mesmo com idempotência: idempotência permite à recuperação repetir com segurança, não transforma ambiguidade em prova. Nunca `technical_error`/`timeout`.
+- **Retry.** `ToolRunner` só repete `technical_error` com `retryable=true`; em write exige ainda `idempotency_supported` e `same_idempotency_key`. `UNKNOWN` nunca é repetido pelo runner: segue o `RecoverySpec` congelado no PREPARE (`retry_same_key`, `status_lookup`, `human_handoff`).
+- **Exceção do provider** é violação de contrato (providers não lançam por falha normal de execução); o runner a classifica de forma defensiva: write → `UNKNOWN`, read → `technical_error` não retryable.
+- **Wrappers** (circuit breaker, métricas) preservam a classificação do provider interno (INV-038); só produzem falha própria quando conseguem classificá-la (ex.: circuito aberto, nada enviado).
+- **`error_map` do operador** é uma afirmação sujeita ao mesmo contrato: `technical_error` retryable em write exige prova de que o efeito não ocorreu; se o desfecho é ambíguo, o correto é `unknown`. Uma regra arbitrária não é segura por existir.
 
 ## 10. Cancelamento
 

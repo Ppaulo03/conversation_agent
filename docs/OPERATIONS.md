@@ -5,6 +5,13 @@ What to do when something fires, how to change things safely, and how to recover
 ALL its work in PostgreSQL: every "queue" below is a table, so the first move is almost always to look
 at the rows, not at the processes.
 
+`conversation_agent` is an embeddable framework with no canonical deployment runtime (ADR-022). Where this
+runbook touches infrastructure it separates the **Framework contract** (what the library guarantees and what
+the consuming application must respect for those guarantees to hold) from the **Operator responsibility**
+(what the consuming application chooses and runs: process model, ASGI server, PostgreSQL provisioning,
+backups, observability backends, CI/CD). The alert sections below describe framework behaviour; the
+action they ask for is the operator's.
+
 ## Where to look
 
 | Question | Where |
@@ -129,20 +136,30 @@ is a handoff, so look at *tool-failures* first.
 
 ### llm-budget
 A tenant is near or over its LLM budget (`LLMBudget`: tokens and/or USD, per day and per month; set with
-`PostgresBudgetStore.set`, audited). With `on_exceed: alert` (the default) nothing is refused: decide
-whether to raise the budget or find the cause (`app.usage --tenant T --by agent_version,purpose`: a loop,
-a release that got dearer, a flood from one contact). With `on_exceed: refuse_new` the edge already refuses
-NEW user messages with 503 and a `Retry-After` until the period resets; messages in flight finish. Mind that
-a gateway gives up redelivering after its own retry budget, so a long refusal can lose messages: it
-protects the bill, not the customer.
+`PostgresBudgetStore.set`, audited). What happens when it is exceeded is `on_exceed`:
 
-With `on_exceed: defer_llm`, wire the `BudgetEvaluator` into `Runtime.build(..., llm_gate=evaluator)`.
-The edge still persists the message. The runtime pauses the open turn immediately before an LLM request,
-stores its reset time in the turn, and resumes it after the period rolls over; deterministic paths continue.
-A pending protected action whose answer needed LLM interpretation is re-prompted immediately, so a former
-"yes" can never execute after the reset. USD figures are a lower bound while models are unpriced
-(*llm-unpriced*). The budget is evaluated from the usage ledger and cached for seconds: a tenant can
-overshoot by what it spends inside one cache window.
+- **`degrade` (the default):** nothing is lost. Messages are accepted and stored; a turn that would START new
+  work does not call the model: the contact gets ONE fixed notice per exceeded period (the agent's
+  `budget_exceeded_reply`, in its language; a default English text otherwise) and later messages in that period are
+  kept but not answered. A flow in progress, a pending confirmation or a resumed turn finishes normally. Needs the
+  runtime to be given the gate: `Runtime.build(budget=BudgetEvaluator(...))`. When the period resets the agent
+  answers again; messages that arrived meanwhile were not answered, which the notice told the contact.
+- **`alert`:** nothing is refused or changed: the status and the metric say so. Decide whether to raise the budget
+  or find the cause (`app.usage --tenant T --by agent_version,purpose`: a loop, a release that got dearer, a flood
+  from one contact).
+- **`refuse_new`:** the edge refuses NEW user messages with 503 and a `Retry-After` until the period resets;
+  messages in flight finish. A gateway gives up redelivering after its own retry budget, so a long refusal can lose
+  messages: it protects the bill, not the customer.
+- **`defer_llm`:** nothing is lost and nothing is answered late with a stale context: messages are accepted and
+  stored; the runtime pauses an open turn immediately before an LLM request, stores the reset time in the turn and
+  resumes it after the period rolls over; deterministic paths (Flows) continue. A pending protected action whose
+  answer needed LLM interpretation is re-prompted at once, so a former "yes" can never execute after the reset.
+  Wire the evaluator with `Runtime.build(..., llm_gate=evaluator)`. Choose it over `degrade` when the contact
+  should get a real answer once the budget is back.
+
+USD figures are a lower bound while models are unpriced (*llm-unpriced*). The budget is evaluated from the usage
+ledger and cached for seconds: a tenant can overshoot by what it spends inside one cache window. A budget saved
+before `degrade` existed keeps the `on_exceed` it was saved with.
 
 ## Releases
 
@@ -161,11 +178,48 @@ Publishing a version makes it available; a **release** decides who gets it (`Rel
 ## Schema migrations
 
 `python -m conversation_agent.app.migrate status|check|apply [--dry-run]` with `DATABASE_URL`.
-Forward-only and checksummed: an applied migration file that changed stops everything
-(`MigrationDriftError`); a database that is ahead of the code refuses to run old code
-(`SchemaAheadError`). Deploy order for a schema change: expand (add the new shape, compatible with the
-running code) -> apply -> deploy the code that uses it -> only in a later release, contract (drop the
-old shape). `check` is the pre-deploy gate and `/readyz` reports the same.
+Forward-only and checksummed: an applied migration file that changed makes `apply` stop
+(`MigrationDriftError`); a database that is ahead of the code is refused by `apply` and by the
+verification (`SchemaAheadError`); recorded migrations must be a contiguous prefix of the known ones, so a
+missing migration with a later one recorded is refused by `apply` (also `--dry-run`) and by the verification
+(`MigrationHistoryError`, ADR-027). Deploy order for a schema change: expand (add the new shape) -> apply ->
+deploy the code that uses it -> only in a later release, contract (drop the old shape). `check` is the
+pre-deploy gate and `/readyz` reports the same.
+
+**Migrating and verifying are different operations (ADR-026).** `apply` (`PostgresDatabase.migrate()`) changes the
+schema and is always an explicit step. Verification only reads: `status`, `check`, `/readyz` and
+`await db.ensure_schema_current()` create nothing (not even `schema_migrations` on a fresh database), stamp
+nothing and take no lock, so they are safe on every start and need no DDL rights. The framework does NOT verify
+by itself: `Runtime.build/receive/run/tick` and the workers never check the schema. Your application calls the
+preflight before any durable work:
+
+```python
+db = await PostgresDatabase.connect(DATABASE_URL)
+await db.migrate()                # only when this process is the one that migrates (explicit)
+await db.ensure_schema_current()  # every start: SchemaOutOfDateError / SchemaAheadError / MigrationHistoryError / MigrationDriftError
+runtime = Runtime.build(db=db, ...)
+```
+
+Errors: `SchemaOutOfDateError` (behind, or never migrated), `SchemaAheadError` (the database holds migrations this
+build lacks; downgrading the code is not supported, restore or run the newer code), `MigrationDriftError` (an
+applied migration file changed; there is no override), `MigrationHistoryError` (a known migration is missing
+while a later one is recorded: `apply` is NOT the remedy and never runs the missing one; investigate how the metadata
+was lost, restore or reconcile it by hand; `status` shows the migration as `gap`). Precedence: drift, ahead, gap,
+out of date. All four are in `conversation_agent.adapters.postgres.migrator`;
+connection failures propagate as the driver raised them. `verify_integrity` includes this check and then looks at the
+data; it is not a startup requirement.
+
+**Mixed versions:** the check is exact. After newer migrations are applied, older code sees the database as ahead and
+an old instance that re-verifies (`/readyz`) becomes unready. There is no verified mixed-version rollout contract:
+complete the migration before any process of the newer version starts durable work.
+
+**PostgreSQL version:** developed and tested against PostgreSQL 16 (`postgres:16-alpine`). Other versions have not been
+verified; there is no formal multi-version support matrix.
+
+**Framework contract:** migrations are forward-only and checksummed; `apply` refuses a database that is ahead of the code or
+whose applied files changed, and is serialized by an advisory lock; verification is read-only.
+**Operator responsibility:** when and how to run `apply` in your release process, calling the schema preflight before durable
+work starts, and the rollout order around it.
 
 ## Personal data (LGPD)
 
@@ -178,29 +232,48 @@ counts, never the person or the content.
 
 ## Backup and disaster recovery
 
-PostgreSQL is the only durable state. Targets: **RPO** = what the backup strategy gives (point-in-time
-recovery with WAL archiving gives seconds; nightly dumps give up to a day); **RTO** = time to restore plus
-the reconciliation described below. Decide them per environment; the runtime tolerates any of them
-because every side effect is idempotent or reconciled.
+PostgreSQL is the only durable state of the framework's runtime. The framework does not own backups, storage,
+snapshot policy, RPO/RTO or restore rehearsals (ADR-022); it owns the conditions that must hold after a restore
+for its guarantees to remain valid.
 
-Restore procedure:
+### Framework contract
 
-1. Restore the database (base backup + WAL to the chosen point, or a dump).
-2. `python -m conversation_agent.app.migrate check` (the schema must match the code you start).
-3. Run the integrity check (`verify_integrity`): it must report no violation; any violation names the rows.
-4. Start the workers. They resume from the durable state by themselves: open turns replay from their
-   journal, undelivered replies are sent, unknown writes are reconciled.
-5. Know what a restore cannot know: anything that happened AFTER the restore point (messages received,
-   replies sent, writes executed) is invisible to the database. Inbound messages come back through the
-   gateway's redelivery; replies sent after the point may be sent again (same key, inside the gateway's
-   window they are replays; past it they duplicate: compare the restore point with
-   `idempotency_retention_seconds`); external writes that happened after the point are NOT in the ledger,
-   so the system will not know they exist: reconcile those against the external systems by hand. Treat
-   a restore older than the gateway's idempotency window as an incident, not a procedure.
-6. Rehearse this. A backup that was never restored is a hypothesis. CI performs a real logical
-   `pg_dump`/`pg_restore` into another PostgreSQL 16 database, then runs both the schema check and
-   `app.integrity`. Environments that rely on WAL/PITR must additionally rehearse that infrastructure:
-   the logical CI rehearsal does not prove archive availability or the environment's RTO.
+After any restore, before the workers start:
+
+1. **Schema compatible with the code you start:** `python -m conversation_agent.app.migrate check` (or
+   `await db.ensure_schema_current()`) must pass (`SchemaOutOfDateError` / `SchemaAheadError` / `MigrationHistoryError` / `MigrationDriftError` otherwise).
+2. **Integrity:** `python -m conversation_agent.app.integrity` (`verify_integrity`) must report no violation; any
+   violation names the rows.
+3. **Workers resume from the durable state by themselves:** open turns replay from their journal, undelivered
+   replies are sent, unknown writes are reconciled. Start them only after 1 and 2.
+4. **What a restore cannot know:** anything that happened AFTER the restore point (messages received, replies
+   sent, writes executed) is invisible to the database. Inbound messages come back through the gateway's
+   redelivery; replies sent after the point may be sent again (same key: inside the gateway's window they are
+   replays, past it they duplicate); external writes that happened after the point are NOT in the ledger, so the
+   system will not know they exist and they must be reconciled against the external systems by hand.
+5. **Idempotency window:** a restore point older than the channel's idempotency window
+   (`idempotency_retention_seconds`) breaks the delivery guarantee (INV-034/061/066). Treat it as an incident, not
+   a procedure. The runtime's `DeliveryPolicy` (`retry_horizon <= idempotency_retention - safety_margin`) must stay within that window.
+6. **Shutdown:** the consuming application's lifecycle must let the workers stop cooperatively (`run(stop)`; a
+   turn stops at a safe boundary, INV-012) so a stop or redeploy does not need a restore.
+
+### Operator responsibility
+
+Backup tool and frequency, backup retention, storage, encryption, restore rehearsal ("a backup that was never
+restored is a hypothesis"), and the RPO and RTO you commit to. Deployment topology, process management and
+provisioning are also yours. The framework prescribes no tool, platform or backup mechanism.
+
+What those choices mean for the framework's guarantees:
+
+- **RPO** is yours to choose, and it can affect the guarantees: everything after the restore point is missing from
+  the restored ledger and outbox (see items 4 and 5 above). A restore point older than the channel's relevant
+  idempotency window can invalidate delivery guarantees.
+- **RTO** is yours to choose; by itself it does not change the framework's consistency model (it only decides how
+  long the system is down; the durable state resumes as in item 3).
+- **External effects after the restore point** may not exist in the restored ledger. Treat them as an incident:
+  reconcile them against the external systems by hand.
+- Choose a backup strategy compatible with the guarantees your application requires. The framework does not make
+  an arbitrary RPO safe.
 
 ## Audit
 

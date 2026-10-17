@@ -19,6 +19,7 @@ from conversation_agent.app.runtime import Runtime
 from conversation_agent.core.errors import ConversationIdentityConflictError
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.ports.clock import Clock
+from support.builders import TEST_DELIVERY_POLICY
 from vertical_slice.definitions import CONNECTION
 from vertical_slice.wiring import load_compiled_agent
 
@@ -51,6 +52,7 @@ def deployment(
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=clock,
         scope=name,
     )
@@ -102,6 +104,7 @@ async def test_the_scope_defaults_to_the_agent_and_is_stamped_on_first_contact(
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=clock,
     )
     assert runtime.scope == load_compiled_agent().agent_id
@@ -119,6 +122,7 @@ async def test_a_conversation_never_changes_scope(
     stolen = qa.inbound("outra").model_copy(update={"scope": "clinica"})
     with pytest.raises(ConversationIdentityConflictError):
         await clinica.receive(stolen)  # same conversation, another scope
+    assert await db.pool.fetchval("SELECT count(*) FROM inbox_events") == 1  # refused: not stored
 
 
 async def test_a_conversation_from_before_scopes_is_adopted_by_the_first_scoped_event(

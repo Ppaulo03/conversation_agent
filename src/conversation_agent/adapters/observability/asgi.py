@@ -2,6 +2,7 @@
 
   GET /healthz   liveness: the process is up (always 200)
   GET /readyz    readiness: the database answers AND the schema is exactly what this build expects
+                 (the read-only schema preflight, `PostgresDatabase.ensure_schema_current`)
   GET /metrics   Prometheus text: backlogs and ages of the durable queues, tool and circuit counters
 
 Mount it on a port that is not public. It reveals counts and names, never content.
@@ -18,7 +19,6 @@ from conversation_agent.adapters.observability.prometheus import render
 from conversation_agent.adapters.observability.runtime_metrics import InMemoryRuntimeMetrics
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.health import collect_health
-from conversation_agent.adapters.postgres.migrator import Migrator
 from conversation_agent.adapters.tools.metrics import InMemoryToolMetrics
 from conversation_agent.core.errors import ConversationAgentError
 from conversation_agent.core.llm_budget import BudgetStatus
@@ -58,7 +58,7 @@ def ops_app(
             await json_response(send, 200, {"status": "alive"})
         elif path == "/readyz":
             try:
-                await Migrator(db.pool).ensure_current()
+                await db.ensure_schema_current()
             except ConversationAgentError as exc:
                 await json_response(
                     send, 503, {"status": "not_ready", "reason": type(exc).__name__}

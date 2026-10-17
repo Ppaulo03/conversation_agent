@@ -86,6 +86,7 @@ class AgentManifest(_Strict):
     media: MediaTexts = Field(default_factory=MediaTexts)
     max_media_bytes: int = 25 * 1024 * 1024
     split_replies: bool = False
+    budget_exceeded_reply: str | None = None
     transcription: Literal["off", "on"] = "off"
     cancelled_after_effect_reply: str | None = None  # None: the framework default
     # Packs to install (input) and what was installed (provenance, set by the compiler). The
@@ -141,6 +142,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         extra["human_request"] = manifest.human_request
     if manifest.split_replies:
         extra["split_replies"] = True
+    if manifest.budget_exceeded_reply is not None:
+        extra["budget_exceeded_reply"] = manifest.budget_exceeded_reply
     if manifest.transcription != "off":
         extra["transcription"] = manifest.transcription
     if manifest.cancelled_after_effect_reply is not None:

@@ -12,8 +12,10 @@ from __future__ import annotations
 import itertools
 import uuid
 from collections.abc import Callable
+from datetime import timedelta
 
 from conversation_agent.core.models.conversation import ConversationIdentity
+from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import (
     InboundEvent,
     OutboundMessage,
@@ -21,6 +23,11 @@ from conversation_agent.core.models.runtime import (
     SendResult,
 )
 from conversation_agent.ports.clock import Clock
+
+# The channel's dedupe lives in the process, so nothing about a send survives a restart: the console
+# never sends the same delivery twice (explicit zero-retry, ADR-023). The retention only sizes how
+# long an unresolved send holds back the next message of the conversation.
+CONSOLE_DELIVERY_POLICY = DeliveryPolicy.no_retry(idempotency_retention=timedelta(hours=1))
 
 
 class ConsoleChannel:

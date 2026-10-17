@@ -6,7 +6,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 
 - Python >=3.12 (testado 3.13), `uv`, Pydantic v2, httpx, FastAPI/uvicorn (só a API de referência), pytest-asyncio.
 - Setup: `uv sync` · Testes: `uv run pytest` · Lint: `uv run ruff check . && uv run ruff format --check .`
-- Tipos: `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
+- Tipos (gate oficial; `mypy .` NÃO é gate): `uv run mypy src examples` · Fronteiras: `uv run lint-imports`
 - API de referência: `uv run uvicorn scheduling_api.main:app --port 8001` · CLI: `uv run python -m vertical_slice`
 - Teste live com orçamento diário (`tests/support/live_budget.py`, `LIVE_LLM_DAILY_CALLS`=20, estado em `.live_llm_usage.json`
   git-ignored; 429 zera o dia). Não rodar em loop: o Groq tem limite diário baixo. Modelo Groq vigente: `openai/gpt-oss-120b`
@@ -15,7 +15,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - LLM provider-agnóstico via env: `LLM_PROVIDER` (groq|openai|openai_compat|anthropic), `LLM_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`;
   `GROQ_API_KEY`/`ANTHROPIC_API_KEY` valem como fallback. Resolução em `app/llm_factory.py`. `.env` é git-ignored e nunca deve ser lido/impresso.
 - Postgres local: `docker compose up -d` (`docker-compose.yml`, credenciais dev em `.env.example`).
-- Docs normativos em `docs/` (sem sufixo `_v4`). Progresso e DoD em `IMPLEMENTATION_STATUS.md`.
+- Memória canônica em `docs/00_PROJECT.md`…`06_AGENT_HANDOFF.md` (metodologia adotada: `docs/01_METHODOLOGY.md`; autoridade: ADR-020). Normativos: `docs/INVARIANTS.md`, `docs/RUNTIME_PROTOCOL.md`. `IMPLEMENTATION_STATUS.md` e `docs/ROADMAP.md` são HISTÓRICOS.
 - Repo git inicializado (`main` = baseline da Fase 1). Trabalho em `feature/*`; nada direto em `main`.
 
 ## Aprendizados acumulados
@@ -57,6 +57,7 @@ Deltas do repositório sobre o `AGENTS.md` global.
 - (Fase 5) JSONB não preserva a ordem das chaves: tudo que é comparado/hasheado depois de um round-trip pelo banco deve ser independente de ordem (ex.: `required` do JSON Schema é ordenado em `schema_fingerprint`). Persistir manifest com `model_dump(exclude_unset=True)` (defaults "honrados só se escritos", como `Ref.default`).
 - (Fase 5) YAML 1.1 lê `on:` como booleano: o loader converte chaves `True/False` de volta para `on/off`. Texto com apóstrofo em here-string de PowerShell com aspas simples quebra o script inteiro (nada é gravado): use a ferramenta Write para arquivos com código.
 - (Fase 5) `model_copy` não revalida: em testes de definição use `rebuild(...)` (reconstrói `AgentDefinition`). `ReconciliationWorker` agora tem modo single-version (`pipeline=`) e versionado (`registry=`+`agent_id=`+`pipeline_factory=`).
+- (F-010) `DeliveryPolicy` é obrigatória em `Runtime.build` (sem `outbox_retry_horizon`, sem padrão de 24 h no código genérico; testes usam `support.builders.TEST_DELIVERY_POLICY` / `postgres.world.WORLD_POLICY`). `claim_ready` devolve `claimed_from` (não persistido) para separar `FAILED` provado (claim de PENDING sem autorização) de `SENDING` obsoleto (ambíguo) sem migration. Testes de Postgres compartilham o banco `conversation_agent_test`: NUNCA rode dois `pytest` ao mesmo tempo (falhas aleatórias de TRUNCATE).
 - (Fase 5.1) O runtime recebe `CompiledAgent` (selado). Testes que montam `TurnEngine` direto usam `compile_agent(agent)`. Tipos de mapping: ao criar um transform novo, registre-o em `TRANSFORM_SPECS` (entrada→saída) e em `tools.mapping.TRANSFORMS` (um teste mantém os nomes sincronizados).
 - (Fase 5.2) `CapabilityPipeline` recebe `CompiledAgent`; em testes use `support.builders.make_pipeline(agent, gate, runner)` (compila antes). `build_engine(pipeline=...)` ignora `flows=`: o pipeline fixa o agente (`world.pipeline(..., flows=True)` para testes com Flow). O registry é tenant-scoped (`TENANT = IDENTITY.tenant_id` nos testes). Pydantic não valida/coage defaults: coagir com `TypeAdapter` ao construir o modelo.
 - (Fase 5.3) Compiler e runtime executam a MESMA linguagem de mapping: qualquer regra nova em `tools/mapping.py` (cardinalidade de `[*]`, tipo de `default`, enum só em string) precisa do espelho em `core/compiler_types.py`/`compiler.py` e de um teste que prove os dois lados. O output mapping lê a resposta VALIDADA da Tool (`model_dump(mode="json")`), nunca o JSON cru.

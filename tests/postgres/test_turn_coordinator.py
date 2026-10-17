@@ -80,6 +80,48 @@ async def test_duplicate_event_never_creates_duplicate_turn(world: World) -> Non
     assert llm.calls == 1
 
 
+async def test_a_duplicate_with_another_conversation_id_creates_no_conversation(
+    world: World,
+) -> None:  # INV-020, F-013
+    assert await world.inbox.insert_if_absent(event("dup", "oi", clock=world.clock))
+    before = await world.db.pool.fetch("SELECT * FROM conversation_states")
+    redelivery = event("dup", "outra", clock=world.clock).model_copy(
+        update={"conversation_id": "ghost"}
+    )
+    assert await world.inbox.insert_if_absent(redelivery) is False
+    assert await world.count("conversation_states", "conversation_id = 'ghost'") == 0
+    assert await world.count("conversation_states") == 1
+    assert await world.count("inbox_events") == 1
+    assert await world.db.pool.fetch("SELECT * FROM conversation_states") == before
+    stored = await world.db.pool.fetchrow("SELECT conversation_id, text FROM inbox_events")
+    assert stored is not None and (stored["conversation_id"], stored["text"]) == (
+        IDENTITY.conversation_id,
+        "oi",
+    )  # first writer stays authoritative
+
+
+async def test_concurrent_duplicates_for_two_conversations_leave_no_ghost(
+    world: World,
+) -> None:  # INV-020, F-013
+    for round_ in range(10):
+        contestants = [
+            event(f"race-{round_}", "oi", clock=world.clock).model_copy(
+                update={"conversation_id": f"conv-{round_}-{name}"}
+            )
+            for name in "ab" * 4
+        ]
+        results = await asyncio.gather(*(world.inbox.insert_if_absent(e) for e in contestants))
+        assert results.count(True) == 1
+        winner = await world.db.pool.fetchval(
+            "SELECT conversation_id FROM inbox_events WHERE event_id = $1", f"race-{round_}"
+        )
+        created = await world.db.pool.fetch(
+            "SELECT conversation_id FROM conversation_states WHERE conversation_id LIKE $1",
+            f"conv-{round_}-%",
+        )
+        assert [r["conversation_id"] for r in created] == [winner]  # the loser left no ghost
+
+
 async def test_a_burst_is_ordered_and_aggregated_into_one_turn(world: World) -> None:
     c = world.clock
     # arrival order differs from occurrence order; source_sequence is authoritative when present
@@ -96,6 +138,16 @@ async def test_a_burst_is_ordered_and_aggregated_into_one_turn(world: World) -> 
     await world.inbox.insert_if_absent(event("s1", "A", clock=c, sequence=1))
     await world.coordinator("w1", FakeLLM([text_response("ok")])).run_once()
     assert (await stored_state(world)).history[2].text == "A\nB"
+
+
+async def test_sequenced_events_sort_ahead_of_unsequenced_ones(world: World) -> None:
+    """INV-075: NULLS LAST. A sequenced event precedes an unsequenced one even when the
+    unsequenced one happened first, which is why a channel sequences all of its events or none."""
+    c = world.clock
+    await world.inbox.insert_if_absent(event("u1", "sem", clock=c, occurred_offset_s=1))
+    await world.inbox.insert_if_absent(event("q9", "com", clock=c, occurred_offset_s=9, sequence=9))
+    await world.coordinator("w1", FakeLLM([text_response("ok")])).run_once()
+    assert (await stored_state(world)).history[0].text == "com\nsem"
 
 
 async def test_late_event_enters_the_next_turn_and_never_rewrites_the_past(world: World) -> None:

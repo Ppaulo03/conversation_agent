@@ -79,3 +79,17 @@ async def test_a_legitimate_reply_is_eligible_when_the_channel_clock_runs_behind
         world, api, "sim", FakeLLM([text_response("Agendado!")]), after_s=0, skew_s=-3
     )  # channel time of the reply = local - 3 s = accepted + 5 s
     assert len(posts(api)) == 1 and (await pending(world))["status"] == "CONFIRMED"
+
+
+async def test_a_local_receipt_time_after_the_prompt_is_not_confirmation_evidence(
+    world: World, api: ApiHandle
+) -> None:
+    """The channel gave `provider_accepted_at`; the reply carries only a local `received_at`
+    (a minute later) and no `provider_occurred_at`: unproven, nothing executes (INV-026)."""
+    await propose(world, api)
+    await deliver_prompt(world)
+    assert await accepted_at(world) is not None
+    await answer(world, api, "sim", FakeLLM([]), after_s=60, provider_evidence=False)
+    assert posts(api) == []
+    row = await pending(world)
+    assert row["status"] != "CONFIRMED" and row["confirmation_attempts"] == 1

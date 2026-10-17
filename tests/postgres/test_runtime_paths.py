@@ -27,6 +27,7 @@ from conversation_agent.core.compiler import CompiledAgent, compile_manifest
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.core.models.runtime import OutboundMessage, SendResult
 from conversation_agent.ports.clock import Clock
+from support.builders import TEST_DELIVERY_POLICY
 from vertical_slice.definitions import CONNECTION
 from vertical_slice.wiring import MANIFEST_PATH
 
@@ -69,6 +70,7 @@ def runtime_for(
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=clock,
         owner=owner,
     )
@@ -162,6 +164,7 @@ async def test_several_runtimes_of_one_scope_answer_every_conversation_exactly_o
                 "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
             },
             sender=shared,  # type: ignore[arg-type]
+            delivery_policy=TEST_DELIVERY_POLICY,
             clock=clock,
             owner=f"w{i}",
         )
@@ -229,22 +232,34 @@ async def test_a_send_the_channel_left_unsettled_is_reconciled_by_lookup_not_re_
     assert gateway.sends == 1 and gateway.lookups >= 1  # asked the channel, never sent twice
 
 
-def test_a_delivery_policy_needs_a_sender_that_can_look_a_message_up() -> None:
-    from datetime import timedelta
-
-    from conversation_agent.core.models.delivery import DeliveryPolicy
-
-    with pytest.raises(ValueError, match="look a message up"):
-        Runtime.build(
+def test_a_runtime_cannot_be_built_without_a_delivery_policy() -> None:
+    with pytest.raises(TypeError, match="delivery_policy"):
+        Runtime.build(  # type: ignore[call-arg]
             db=None,  # type: ignore[arg-type]
             compiled=compiled(),
             llm=FakeLLM([]),
             providers={},
             sender=SharedChannel(),  # type: ignore[arg-type]
-            delivery_policy=DeliveryPolicy(
-                idempotency_retention=timedelta(hours=1), retry_horizon=timedelta(minutes=10)
-            ),
         )
+
+
+def test_lookup_is_optional_and_found_on_the_sender_when_it_has_one() -> None:
+    def build(sender: object, **kw: object) -> Runtime:
+        return Runtime.build(
+            db=None,  # type: ignore[arg-type]
+            compiled=compiled(),
+            llm=FakeLLM([]),
+            providers={},
+            sender=sender,  # type: ignore[arg-type]
+            delivery_policy=TEST_DELIVERY_POLICY,
+            **kw,  # type: ignore[arg-type]
+        )
+
+    with_lookup, push_only = SlowGateway(), SharedChannel()
+    assert build(with_lookup).outbox_reconciler._lookup is with_lookup  # found by structure
+    assert build(push_only).outbox_reconciler._lookup is None  # push-only is a valid composition
+    explicit = SlowGateway()
+    assert build(push_only, lookup=explicit).outbox_reconciler._lookup is explicit
 
 
 # --- the recovery window of a dead worker is the deployment's to choose ---
@@ -270,6 +285,7 @@ async def test_a_dead_workers_conversation_is_recovered_after_the_configured_lea
             "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
         },
         sender=channel,
+        delivery_policy=TEST_DELIVERY_POLICY,
         clock=clock,
         lease_ttl=timedelta(seconds=3),
     )
@@ -297,6 +313,7 @@ def test_the_lease_ttl_must_leave_room_for_the_heartbeat() -> None:
             llm=FakeLLM([]),
             providers={},
             sender=SharedChannel(),  # type: ignore[arg-type]
+            delivery_policy=TEST_DELIVERY_POLICY,
             **kw,  # type: ignore[arg-type]
         )
 
@@ -323,6 +340,7 @@ def with_window(db, api, llm, out, **kw):  # type: ignore[no-untyped-def]
                 "http": HTTPToolProvider.static({CONNECTION: local_dev_connection(api.base_url)})
             },
             sender=channel,
+            delivery_policy=TEST_DELIVERY_POLICY,
             clock=clock,
             **kw,
         ),
@@ -406,6 +424,7 @@ def test_the_debounce_cannot_be_longer_than_its_maximum() -> None:
             llm=FakeLLM([]),
             providers={},
             sender=SharedChannel(),  # type: ignore[arg-type]
+            delivery_policy=TEST_DELIVERY_POLICY,
             debounce=timedelta(seconds=20),
             debounce_max_wait=timedelta(seconds=5),
         )
@@ -438,29 +457,3 @@ async def test_restart_on_new_message_is_off_by_default_and_can_be_turned_on(
     assert (
         await flagged(restart_on_new_message=True) is True
     )  # asked to stop at the next safe point
-
-
-def test_with_a_delivery_policy_the_retry_horizon_has_one_source() -> None:
-    from datetime import timedelta
-
-    from conversation_agent.core.models.delivery import DeliveryPolicy
-
-    policy = DeliveryPolicy(
-        idempotency_retention=timedelta(hours=24), retry_horizon=timedelta(minutes=10)
-    )
-
-    def build(**kw: object) -> Runtime:
-        return Runtime.build(
-            db=None,  # type: ignore[arg-type]
-            compiled=compiled(),
-            llm=FakeLLM([]),
-            providers={},
-            sender=SlowGateway(),  # type: ignore[arg-type]
-            delivery_policy=policy,
-            **kw,  # type: ignore[arg-type]
-        )
-
-    with pytest.raises(ValueError, match="retry horizon comes from it"):
-        build(outbox_retry_horizon=timedelta(hours=48))  # would let the worker retry blind for 48 h
-    build(outbox_retry_horizon=timedelta(minutes=10))  # the same value is harmless
-    build()

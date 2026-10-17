@@ -38,3 +38,14 @@ class PostgresDatabase:
     async def migrate(self) -> list[str]:
         """Applies pending migrations (checksummed, serialized); returns the versions applied."""
         return await Migrator(self.pool).apply()
+
+    async def ensure_schema_current(self) -> None:
+        """The startup preflight (ADR-026): read-only proof that the schema is exactly what this
+        build expects. Call it after `connect` (and after `migrate`, when you migrate) and before
+        any durable work: `Runtime.build/receive/run` and the workers do not check it for you.
+        Creates and changes nothing, so it is safe on every start and for several processes at
+        once. Raises `SchemaOutOfDateError` (behind, or never migrated), `SchemaAheadError`,
+        `MigrationHistoryError` (a gap in the applied history) or `MigrationDriftError` (all in
+        `adapters.postgres.migrator`); connection failures propagate
+        as the driver raised them."""
+        await Migrator(self.pool).ensure_current()
