@@ -1,0 +1,98 @@
+# Official gates of the framework (docs/06_AGENT_HANDOFF.md, F-007). The consumer's CI/CD is out of scope (ADR-022).
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gates:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: ${{ matrix.python }}
+      - run: uv sync --locked
+      - run: uv run ruff check .
+      - run: uv run ruff format --check .
+      - run: uv run mypy src examples
+      - run: uv run lint-imports
+      - run: uv run python -m conversation_agent.app.ops check
+      - run: uv run pytest --ignore=tests/postgres
+      - run: uv build
+
+  postgres:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: conversation_agent
+          POSTGRES_PASSWORD: conversation_agent_dev
+          POSTGRES_DB: conversation_agent
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U conversation_agent -d conversation_agent"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    env:
+      DATABASE_URL: postgresql://conversation_agent:conversation_agent_dev@127.0.0.1:5432/conversation_agent
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          enable-cache: true
+          python-version: "3.13"
+      - run: uv sync --locked
+      - run: uv run pytest tests/postgres
+      - name: Migrations apply cleanly on an empty database and verify read-only
+        run: |
+          uv run python -m conversation_agent.app.migrate apply
+          uv run python -m conversation_agent.app.migrate check
+
+  ops-artifacts:
+    # F-009: the generated alert rules and dashboard are valid for Prometheus and Grafana themselves.
+    runs-on: ubuntu-latest
+    services:
+      grafana:
+        image: grafana/grafana-oss:11.3.0
+        env:
+          GF_AUTH_ANONYMOUS_ENABLED: "true"
+          GF_AUTH_ANONYMOUS_ORG_ROLE: Admin
+        ports:
+          - 3000:3000
+        options: >-
+          --health-cmd "wget -qO- http://127.0.0.1:3000/api/health"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      PROMETHEUS_VERSION: "2.55.1"
+      PROMETHEUS_SHA256: 19700bdd42ec31ee162e4079ebda4cd0a44432df4daa637141bdbea4b1cd8927
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install promtool
+        run: |
+          set -euo pipefail
+          archive="prometheus-${PROMETHEUS_VERSION}.linux-amd64.tar.gz"
+          curl -sSLo "$archive" "https://github.com/prometheus/prometheus/releases/download/v${PROMETHEUS_VERSION}/${archive}"
+          echo "${PROMETHEUS_SHA256}  ${archive}" | sha256sum -c -
+          tar xzf "$archive"
+          echo "$PWD/prometheus-${PROMETHEUS_VERSION}.linux-amd64" >> "$GITHUB_PATH"
+      - run: python3 ops/validate_artifacts.py --promtool promtool --grafana-url http://127.0.0.1:3000
