@@ -40,7 +40,7 @@ Os seis primeiros gates `PASS` constituem o **baseline do repositório** (F-001)
 | F-004 | MEDIUM | RESOLVED | Deriva de autoridade da documentação |
 | F-005 | MEDIUM | SUPERSEDED | Lacunas de observabilidade operacional (backend é do consumidor, ADR-022; resíduo → F-009) |
 | F-006 | MEDIUM | RESOLVED | Entrypoint de produção com RelayPlane (resolvido por ADR-022: não existir é intencional) |
-| F-007 | MEDIUM | PARTIALLY_RESOLVED | Sem pipeline de CI no repositório (pipeline escrito; falta a primeira execução verde no GitHub) |
+| F-007 | MEDIUM | RESOLVED | Sem pipeline de CI no repositório |
 | F-008 | LOW | RESOLVED | `mypy .` fora do escopo configurado |
 | F-009 | LOW | RESOLVED | Shipped observability artifacts lack target-format compatibility evidence |
 | F-010 | HIGH | RESOLVED | Generic delivery safety contract is incomplete (origin: IR-004) |
@@ -50,7 +50,7 @@ Os seis primeiros gates `PASS` constituem o **baseline do repositório** (F-001)
 | F-014 | MEDIUM | RESOLVED | PostgreSQL schema startup verification is hidden and mutating (origin: IR-006) |
 | F-015 | MEDIUM | RESOLVED | Non-prefix migration history can execute migrations out of order (origin: migration-metadata integrity review after F-014) |
 
-Contagem: RESOLVED 11 (F-001, F-004, F-006, F-008, F-009, F-010, F-011, F-012, F-013, F-014, F-015) · OPEN 0 · SUPERSEDED 2 (F-003, F-005) · PARTIALLY_RESOLVED 2 (F-002, F-007) · ACCEPTED_RISK 0.
+Contagem: RESOLVED 12 (F-001, F-004, F-006, F-007, F-008, F-009, F-010, F-011, F-012, F-013, F-014, F-015) · OPEN 0 · SUPERSEDED 2 (F-003, F-005) · PARTIALLY_RESOLVED 1 (F-002) · ACCEPTED_RISK 0.
 Não há `BLOCKER`. O único `HIGH` não resolvido é F-002 (`PARTIALLY_RESOLVED` em 2026-10-17: evidência de sandbox registrada; falta rodar contra o gateway implantado com número real antes do piloto).
 
 ---
@@ -107,12 +107,12 @@ Não há `BLOCKER`. O único `HIGH` não resolvido é F-002 (`PARTIALLY_RESOLVED
 
 ### F-007 — No CI pipeline in the repository
 - **Severity:** MEDIUM
-- **Status:** PARTIALLY_RESOLVED (2026-10-17)
+- **Status:** RESOLVED (2026-10-17)
 - **Evidence:** `git ls-files` não contém `.github/`, `.gitlab-ci.yml` nem equivalente; a documentação cita “`app.ops check` roda no CI” (status Fase 10) e `ops check` foi desenhado para rodar sem asyncpg “no CI”.
 - **Consequence:** os gates só existem como comandos manuais; nada prova que um push passa neles fora da máquina local, e a regra global de monitorar o CI do push não tem o que monitorar.
 - **Scope:** CI **do próprio framework**. CI/CD da aplicação consumidora não é responsabilidade do projeto (ADR-022).
 - **Expected resolution:** definir o provedor/pipeline e codificar os gates oficiais (incl. serviço PostgreSQL); confirmar a primeira execução verde.
-- **Progress (2026-10-17):** `.github/workflows/ci.yml` codifies the official gates: job `gates` (Python 3.12 and 3.13: `uv sync --locked`, ruff check, ruff format --check, `mypy src examples`, `lint-imports`, `app.ops check`, pytest without PostgreSQL, `uv build`), job `postgres` (PostgreSQL 16 service: `pytest tests/postgres`, then `migrate apply` + `migrate check` on an empty database) and job `ops-artifacts` (F-009). Workflow checked with actionlint 1.7.7; every step reproduced locally against PostgreSQL 16: 1722 passed, 8 deselected. Remaining: the first green run on GitHub, which needs the current history pushed (GitHub `main` was at `aaed1d9` on 2026-10-17).
+- **Progress (2026-10-17):** `.github/workflows/ci.yml` codifies the official gates: job `gates` (Python 3.12 and 3.13: `uv sync --locked`, ruff check, ruff format --check, `mypy src examples`, `lint-imports`, `app.ops check`, pytest without PostgreSQL, `uv build`), job `postgres` (PostgreSQL 16 service: `pytest tests/postgres`, then `migrate apply` + `migrate check` on an empty database) and job `ops-artifacts` (F-009). Workflow checked with actionlint 1.7.7; every step reproduced locally against PostgreSQL 16: 1722 passed, 8 deselected. First run on GitHub green on 2026-10-17 (all five jobs: gates 3.12, gates 3.13, postgres, ops-artifacts, plus GitGuardian): https://github.com/Ppaulo03/conversation_agent/actions/runs/39035565697.
 
 ### F-008 — `mypy .` fora do escopo configurado
 - **Severity:** LOW
