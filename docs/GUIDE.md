@@ -412,7 +412,8 @@ calling the model or dropping the message; `alert` and `refuse_new` are the alte
 
 ## 8. Operating it
 
-`app.migrate` (schema), `app.ops check|render` (SLOs, alerts, dashboard), `app.integrity`,
+`app.migrate` (schema), `app.ops check|render` (SLOs, alerts, dashboard; `ops/validate_artifacts.py` checks the
+generated alerts and dashboard with `promtool` and a real Grafana), `app.integrity`,
 `app.usage` (LLM cost and budgets) and the runbook in [`OPERATIONS.md`](./OPERATIONS.md). Release
 and rollback of agent versions are described there too. The framework has no canonical deployment: hosting, backups and
 observability backends are the embedding application's choice (`OPERATIONS.md` separates framework contract from operator

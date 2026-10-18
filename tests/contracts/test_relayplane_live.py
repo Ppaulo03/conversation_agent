@@ -35,10 +35,15 @@ needs_gateway = pytest.mark.skipif(bool(_MISSING), reason=f"set {', '.join(_MISS
 
 
 def sender() -> RelayPlaneSender:
+    # A local sandbox gateway (plain HTTP, private address) needs RELAYPLANE_ALLOW_INSECURE=1; a
+    # deployed one must not: the evidence should be gathered with the production connection policy.
+    insecure = os.environ.get("RELAYPLANE_ALLOW_INSECURE") == "1"
     connection = ResolvedConnection(
         connection_id="relayplane",
         base_url=os.environ["RELAYPLANE_BASE_URL"],
         auth=AuthSpec(secret_ref="relay"),
+        allow_private_networks=insecure,
+        tls_required=not insecure,
     )
     return RelayPlaneSender(
         StaticConnectionResolver({"relayplane": connection}),

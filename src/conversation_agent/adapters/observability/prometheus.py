@@ -43,6 +43,14 @@ GAUGES: dict[str, tuple[str, str]] = {
         "outbox_oldest_unsettled_age_seconds",
         "Age of the oldest unconfirmed reply (compare with the gateway idempotency window).",
     ),
+    "outbox_unknown": (
+        "outbox_unknown",
+        "Replies whose delivery the channel could not tell (sent or not); may need a decision.",
+    ),
+    "outbox_oldest_unknown_age_seconds": (
+        "outbox_oldest_unknown_age_seconds",
+        "Age of the oldest reply in UNKNOWN (a gateway may hold its later sends behind it).",
+    ),
     "invocations_unresolved": (
         "invocations_unresolved",
         "External effects whose outcome is not known yet.",

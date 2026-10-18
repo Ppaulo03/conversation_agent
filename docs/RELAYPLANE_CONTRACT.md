@@ -48,6 +48,11 @@ A política e a semântica de entrega são genéricas (`RUNTIME_PROTOCOL.md` §8
   erro no `GET` → `LOOKUP_FAILED`, nada é provado.
 - `UNKNOWN` **do gateway** exige decisão humana (`POST /messages/{id}/resolve`): `RelayPlaneSender.resolve`
   existe para o operador, a automação nunca o chama (`CHANNEL_UNKNOWN_NEEDS_DECISION`).
+- Esse `UNKNOWN` é uma **barreira de ordem da instância** no gateway (`docs/FAILURE-MODES.md` do RelayPlane):
+  todos os envios seguintes da mesma instância, de todas as conversas daquele número, esperam até o
+  `resolve` (ou até o `UNKNOWN_BARRIER_TIMEOUT`, se o operador configurou um). A POC reproduziu isso com um
+  único 500 do provedor. Por isso o alerta `DeliveryUnknown` (runbook *unknown-delivery* em
+  `OPERATIONS.md`) dispara em minutos, e não na janela de uma hora do `DeliveryUnsettled`.
 
 ## Inbound (webhook)
 

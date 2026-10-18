@@ -203,6 +203,19 @@ async def test_the_delivery_policy_is_checked_against_what_the_gateway_reports(
         await sender.delivery_policy(TENANT, retry_horizon=timedelta(hours=1))
 
 
+async def test_a_gateway_url_the_connection_policy_refuses_says_so_at_startup(
+    relay: RelayHandle,
+) -> None:
+    plain_http = ResolvedConnection(connection_id="relayplane", base_url=relay.base_url)
+    sender = RelayPlaneSender(StaticConnectionResolver({"relayplane": plain_http}))
+    with pytest.raises(RuntimeError, match=r"requires TLS but its base_url is not https://"):
+        await sender.delivery_policy(TENANT, retry_horizon=timedelta(hours=1))
+    assert relay.state.requests == []  # refused before any request
+    missing = RelayPlaneSender(StaticConnectionResolver({}))
+    with pytest.raises(RuntimeError, match="is not configured for tenant"):
+        await missing.delivery_policy(TENANT, retry_horizon=timedelta(hours=1))
+
+
 async def test_credentials_travel_as_auth_and_never_replace_the_idempotency_key(
     relay: RelayHandle,
 ) -> None:

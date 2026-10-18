@@ -172,7 +172,8 @@ class RelayPlaneSender:
         validation (`retry_horizon <= retention - safety_margin`) applies to it."""
         prepared = await self._prepare(tenant_id)
         if isinstance(prepared, SendResult):
-            raise RuntimeError("cannot read the gateway limits: connection/credential unavailable")
+            reason = await self._unavailable_reason(tenant_id)
+            raise RuntimeError(f"cannot read the gateway limits: {reason}")
         base, headers, timeout = prepared
         response = await self._client.get(f"{base}/api/v1/limits", headers=headers, timeout=timeout)
         data = self._json(response) if response.status_code == 200 else None
@@ -202,6 +203,20 @@ class RelayPlaneSender:
                 return SendResult(status=OutboxStatus.FAILED, retryable=True)
             headers[connection.auth.header] = credential
         return base, headers, httpx.Timeout(connection.max_timeout_seconds)
+
+    async def _unavailable_reason(self, tenant_id: str) -> str:
+        """Why `_prepare` refused, in words an operator can act on (startup errors only)."""
+        try:
+            connection = await self._connections.resolve(tenant_id, self._connection_id)
+        except ConnectionNotFoundError:
+            return f"connection {self._connection_id!r} is not configured for tenant {tenant_id!r}"
+        if connection.tls_required and not connection.base_url.startswith("https://"):
+            return (
+                f"connection {self._connection_id!r} requires TLS but its base_url is not https:// "
+                "(tls_required=False is for a local sandbox only)"
+            )
+        ref = connection.auth.secret_ref if connection.auth else None
+        return f"the credential {ref!r} is unavailable (no secret, or no SecretProvider)"
 
     async def _credential(self, connection: ResolvedConnection, tenant_id: str) -> str | None:
         auth = connection.auth
