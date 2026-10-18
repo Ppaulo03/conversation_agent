@@ -1,7 +1,11 @@
-# Release evidence: validating the RelayPlane contract
+# Optional adapter evidence: validating the RelayPlane contract
 
-The framework's delivery guarantees (INV-021, INV-007) rest on what the deployed gateway really does.
-Before a production pilot, run the live contract test against it and keep the result with the release.
+RelayPlane is an optional adapter behind the framework's channel ports. The framework does not require
+RelayPlane, and publishing or deploying it with another channel does not depend on this evidence.
+
+When a deployment selects the RelayPlane adapter, its delivery guarantees (INV-021, INV-007) also rest
+on what that deployed gateway really does. Before a production pilot with RelayPlane, run the live
+contract test against it and keep the result with that deployment's release evidence.
 
 ## 1. Run
 
@@ -37,5 +41,5 @@ message, and that the retention the gateway reports (`GET /limits`) is at least 
 | Signature and event shape checked by hand | yes / no |
 | Notes (anything that differed from `docs/RELAYPLANE_CONTRACT.md`) | |
 
-Keep this table with the release notes. A change of gateway version or of its retention means doing
-it again.
+Keep this table with the release notes of deployments that use RelayPlane. A change of gateway version
+or of its retention means doing it again.

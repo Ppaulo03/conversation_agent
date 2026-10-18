@@ -558,7 +558,8 @@ DoD (`ROADMAP.md` Fase 6):
 - [✓] `sender_retry_horizon <= idempotency_retention` — `DeliveryPolicy` + `test_the_retry_horizon_must_fit_inside_the_gateways_idempotency_retention`, `test_the_delivery_policy_is_checked_against_what_the_gateway_reports` (lê `/limits`); comportamento: `test_the_sender_does_not_resend_blindly_past_the_retry_horizon`, `test_past_the_gateways_retention_no_resend_is_safe_and_nothing_is_resent`, `test_after_its_retention_the_gateway_forgets_the_key_and_a_resend_duplicates` (por que o horizonte existe)
 - [✓] claim-check/mídia + Transcriber — `tests/engine/test_media.py`, `tests/contracts/test_relayplane_media.py`, `test_media_arrives_as_a_reference_with_what_the_gateway_made_of_it`
 - [✓] channel policy, handoff de ownership — `tests/postgres/test_proactive.py`, `tests/postgres/test_handoff.py`
-- [ ] contract test contra o RelayPlane **real** — escrito (`test_relayplane_live.py`), não executado
+- [✓] contrato live opt-in do adaptador escrito (`test_relayplane_live.py`); executá-lo é gate do
+  deployment que escolher RelayPlane, não gate do framework
 
 Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.py`, migrations 0011 (outbox `first_sent_at`/`reconcile_attempts`), 0012 (inbox `media`/`kind`) e 0013
 (`outbox.channel_message_id`, `inbox.provider_message_id`), `adapters/senders/relayplane.py` (`send`/`lookup`/`resolve`/`delivery_policy`), `engine/outbox_reconciler.py`
@@ -580,7 +581,8 @@ Implementado: `core/models/delivery.py` (`DeliveryPolicy`), `core/models/media.p
 
 ### Débitos conhecidos (Fase 6)
 
-- Contrato real **não executado** contra um gateway implantado (só contra o simulador fiel ao repositório).
+- Evidência contra um gateway implantado ainda não foi registrada. Isso limita a readiness do adaptador
+  RelayPlane naquele deployment, não a readiness do framework ou de outros canais.
 - Sem detecção de lacuna em `sequence` (o gateway garante ordem sem lacunas; guardamos `source_sequence`, mas não alertamos), sem bootstrap/rotação automática de subscription e de `secret` (hoje `StaticSubscriptionResolver`).
 - Respostas citando (`reply_to`) o `provider_message_id` de um prompt nosso ainda não são usadas pelo runtime (a evidência já é gravada na outbox).
 - Mensagens **template** não existem (nem no RelayPlane): fora da janela a política nega. `defer` do `ChannelPolicy` não existe.
@@ -734,7 +736,7 @@ O que é código está testado; o que é prática operacional está em `docs/OPE
 - **Release é por agente/tenant, sem associação automática canal→agente** e sem janela de observação automática do canary (a decisão de alargar/recuar é do operador, guiada pelos SLOs).
 - **Retention não cobre `trace_retention`/`memory_retention`** (não há traces nem memória de longo prazo persistidos) e a retenção de estado da conversa só zera o histórico (a linha de ownership/pin permanece).
 - **Métricas de tool e circuito continuam em memória por processo** (o exporter expõe as de um `InMemoryToolMetrics`); agregação entre processos é do Prometheus (scrape de cada instância).
-- **Backup/DR é procedimento, não automação**: o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. Não há rehearsal automatizado de restore no CI.
+- **Backup/DR:** o runtime não faz backup; o runbook define o que restaurar, verificar e o que um restore não sabe. Backup, restore e seu ensaio são do consumidor (ADR-022).
 - Achados da Fase 9 ainda abertos: slot de texto livre engole perguntas; não existe pedido direto de atendente humano pelo contato.
 
 
@@ -750,7 +752,7 @@ Fora do ROADMAP original (a Fase 10 entregou saúde das filas, SLOs e auditoria)
 | "Quão rápido/saudável está o fluxo normal?" | Turnos por desfecho, tempo de processamento (histograma), espera na fila até a coleta, chamadas de LLM por turno, propostas e handoffs, por agente e versão | `RuntimeMetrics`, coordinator |
 | "Quanto o LLM custa e onde?" | Uma linha por chamada (tenant, agente, versão, conversa por referência, turno, **finalidade**, provider, modelo, tokens input/cache/escrita/saída/raciocínio, latência, resultado) num ledger append-only; preços como DADO (`ops/llm_prices.yaml`) aplicados na leitura, ao preço do DIA de cada chamada; relatório por dia/agente/versão/modelo/finalidade; CLI `app.usage` | `MeteredLLMProvider`, migration 0018, `core/llm_prices.py` |
 | "Esta versão ficou mais cara/falante?" | `compare_versions`: custo, chamadas e erros POR TURNO entre versões; `cost_regressions` (recusa veredito com poucos turnos); `app.usage --compare STABLE,CANDIDATE` sai 1 se o candidato está pior; o relatório do eval diz quantas chamadas cada cenário fez e para quê | `core/llm_compare.py` |
-| "Um tenant está estourando?" | `LLMBudget` por tenant (tokens e/ou USD, dia/mês), status do ledger, gauge `llm_budget_used_ratio`, alertas; política `alert` (padrão) ou `refuse_new` (o edge recusa mensagens NOVAS, 503 + Retry-After, antes de persistir) | migration 0019, `BudgetEvaluator` |
+| "Um tenant está estourando?" | `LLMBudget` por tenant (tokens e/ou USD, dia/mês), status do ledger, gauge `llm_budget_used_ratio`, alertas; política `alert` (padrão), `refuse_new` (o edge recusa mensagens NOVAS) ou `defer_llm` (a mensagem persiste e só a próxima chamada ao modelo espera o reset) | migrations 0019, 0026–0027, `BudgetEvaluator` |
 | "Como ligo isso?" | `setup_observability()` (logs, tracer, preços) + `wrap_llm`/`wrap_tools`/`ops_app` | `app/observability.py` |
 
 SLOs/alertas e runbook novos: erro e latência de LLM, custo/hora, modelo sem preço, uso não gravado, latência de turno, espera na fila, falha de turno, taxa de handoff, orçamento.
@@ -763,13 +765,13 @@ SLOs/alertas e runbook novos: erro e latência de LLM, custo/hora, modelo sem pr
 4. **Preço é dado; modelo sem preço é "não precificado", nunca grátis.** O repositório entrega `ops/llm_prices.yaml` VAZIO de propósito (não conhece preços atuais): todo modelo aparece como `unpriced` (métrica, alerta e flag "limite inferior" no relatório) até o operador preencher.
 5. **Uso normalizado entre providers:** `input_tokens` = não-cacheado, cache read/write à parte, raciocínio dentro de `output_tokens`; o adapter faz a conta (OpenAI conta o cache dentro do prompt, a Anthropic não).
 6. **Custo por TURNO, não gasto total**, para comparar versões que atenderam volumes diferentes; poucos turnos = sem veredito.
-7. **Orçamento recusa só no edge, só se pedido (INV-051)** e com o aviso explícito de que um gateway desiste após suas tentativas.
-8. **Tracing sem backend:** spans viram linhas de log estruturadas (qualquer backend de logs reconstrói o trace por `trace_id`); exportador OpenTelemetry fica como adaptador futuro sobre a mesma interface `Tracer`.
+7. **Orçamento só bloqueia quando a política do tenant pedir:** `refuse_new` recusa no edge (INV-051), com o aviso explícito de que um gateway desiste após suas tentativas; `defer_llm` preserva o inbound e pausa somente antes de uma chamada ao modelo. Uma confirmação que precisaria do modelo é re-promptada, nunca executada depois com o "sim" antigo.
+8. **Tracing com backend opcional:** spans viram linhas de log estruturadas por padrão; o extra `[otel]` os exporta por OTLP/HTTP em batch sem levar o SDK para o pacote-base.
 
 ### Débitos conhecidos (Fase 11)
 
-- **Sem exportador OpenTelemetry** (a interface existe; falta o adaptador e o `traceparent` de entrada/saída: o RelayPlane não define propagação de trace, então o id é nosso, do webhook em diante).
-- **Métricas em memória por processo**, expostas por `/metrics` de cada instância; sem endpoint de agregação nem push.
+- **Propagação W3C externa:** o exporter OpenTelemetry existe; extração/injeção de `traceparent` continua no adaptador do canal/HTTP porque cada protocolo precisa defini-la. O id durável do framework segue disponível como atributo de correlação.
+- **Métricas em memória por processo**, expostas por `/metrics` de cada instância; a agregação é feita pelo Prometheus que coleta as réplicas, não por estado compartilhado no runtime.
 - **Orçamento avaliado do ledger com cache** (um tenant pode ultrapassar o que gasta numa janela de cache) e sem tabela de rollup diária: com milhões de linhas por tenant a consulta mensal vira custo; sem auditoria de "cruzou 80%/100%" (só métrica/alerta).
 - **`compare_versions` só no PostgreSQL** (não há versão em memória) e é ferramenta do operador, não gate automático do `ReleaseManager`.
 - **Transcrição de áudio (STT) ainda não é medida** (a porta existe, o provider real não): quando houver, entra como outra finalidade com custo por segundo.
@@ -823,7 +825,8 @@ Achados corrigidos no caminho:
 
 Decisões: o teste de arquitetura de INV-007 passou a aceitar `app/runtime.py` (só nomeia o tipo para entregar o sender ao OutboxWorker; nunca chama `send`). Os testes de confiabilidade seguem usando `tests/postgres/world.py` (relógios fixos); migrá-los para o `Runtime` fica como débito.
 
-Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem); não há entrypoint de produção com webhook.
+Débitos: o `serve` só tem o canal de terminal e provedores HTTP (sem MCP/RelayPlane); a dedupe do console vive no processo (reiniciar pode repetir uma mensagem). Não há host de produção no pacote (ADR-022); a
+composição de referência com RelayPlane é `examples/relayplane-app`.
 
 ### Pacote instalável e extras (Fase 13, passo 2)
 
@@ -1005,8 +1008,9 @@ Débitos: um único arquivo por argumento (sem lista); só tools HTTP (MCP não 
 | Download de mídia sem a proteção do `GuardedTransport` | **Fechado (INV-070).** DNS fixado, rede privada recusada, TLS exigido, sem redirecionamento, `media_id` como um único segmento. |
 | Transcriber de cassette para evals | **Fechado.** Turnos de eval com `voice:` (transcrição roteirizada); prova o que o agente faz e que `transcription: off` ignora o áudio. O digest de suítes antigas não muda. |
 | `T0` fixo dos testes (2026-10-05) contra o relógio real do banco | **Fechado na prática.** O único teste que misturava os dois (`test_a_conversation_being_processed_cannot_be_erased`) foi corrigido e, como o tempo real só avança, um teste que passa com `T0` no passado continua passando; regra no `AGENTS.local.md`. |
-| Orçamento rígido de LLM pode perder mensagem | **Fechado (INV-071).** Nova política `degrade`, que passa a ser o padrão de um orçamento novo: aceita e grava a mensagem, avisa uma vez por período e não chama o modelo; trabalho em andamento termina. `alert` e `refuse_new` continuam. |
-| Exporter OpenTelemetry, métricas agregadas, ensaio de restauração | **Abertos** (operacionais). |
+| Orçamento rígido de LLM pode perder mensagem | **Fechado (INV-071).** Nova política `degrade`, que passa a ser o padrão de um orçamento novo: aceita e grava a mensagem, avisa uma vez por período e não chama o modelo; trabalho em andamento termina. `alert` e `refuse_new` continuam, e `defer_llm` (PR #1) responde depois do reset: o turno pausa antes da chamada ao modelo e volta quando o período vira. |
+| Exporter OpenTelemetry | **Fechado:** extra `[otel]`, OTLP/HTTP oficial com batch, `TRACE=otlp` e flush no shutdown. |
+| Métricas agregadas, ensaio de restauração | Do consumidor (ADR-022): cada processo expõe `/metrics`. |
 
 ### Orçamento de LLM: `degrade` (INV-071)
 

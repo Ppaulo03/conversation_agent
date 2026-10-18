@@ -192,7 +192,8 @@ class _TurnRepo(_Repo):
 
         open_turn = await self._c.fetchrow(
             "SELECT turn_id, user_text, event_ids, late_event_ids, attempts FROM turns "
-            "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PROCESSING'",
+            "WHERE tenant_id=$1 AND conversation_id=$2 AND status='PROCESSING' "
+            "AND (deferred_until IS NULL OR deferred_until <= clock_timestamp())",
             f.tenant_id,
             f.conversation_id,
         )
@@ -306,9 +307,18 @@ class _TurnRepo(_Repo):
         )
         return int(value or 0)
 
+    async def defer(self, turn_id: str, retry_at: datetime) -> None:
+        await self._c.execute(
+            "UPDATE turns SET deferred_until=$3 WHERE tenant_id=$1 AND turn_id=$2 "
+            "AND status='PROCESSING'",
+            self._f.tenant_id,
+            turn_id,
+            retry_at,
+        )
+
     async def complete(self, turn_id: str) -> None:
         await self._c.execute(
-            "UPDATE turns SET status='COMPLETED', completed_at=$3 "
+            "UPDATE turns SET status='COMPLETED', completed_at=$3, deferred_until=NULL "
             "WHERE tenant_id=$1 AND turn_id=$2 AND status='PROCESSING'",
             self._f.tenant_id,
             turn_id,

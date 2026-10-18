@@ -12,6 +12,7 @@ in-memory engine. Add what you use:
 ```bash
 pip install "conversation-agent[postgres]"   # durable runtime: Runtime, serve, migrate, ops (asyncpg)
 pip install "conversation-agent[anthropic]"  # the Anthropic provider (Groq/OpenAI-compatible need nothing)
+pip install "conversation-agent[otel]"       # optional OTLP/HTTP trace export
 pip install "conversation-agent[all]"
 ```
 

@@ -54,6 +54,10 @@ class TurnRepository(Protocol):
         """Counts a genuine failure (not a wait for an external result); returns the total."""
         ...
 
+    async def defer(self, turn_id: str, retry_at: datetime) -> None:
+        """Keeps an open turn durable but invisible to workers until `retry_at`."""
+        ...
+
     async def complete(self, turn_id: str) -> None: ...
     async def cancel(self, turn_id: str) -> None:
         """Abandon a turn (no irreversible effect yet); its events return to READY."""

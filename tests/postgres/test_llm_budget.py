@@ -12,6 +12,7 @@ import pytest
 from pydantic import ValidationError
 
 from conversation_agent.adapters.clock import FixedClock
+from conversation_agent.adapters.llm.fake import FakeLLM, text_response
 from conversation_agent.adapters.observability.asgi import ops_app
 from conversation_agent.adapters.observability.prometheus import PREFIX, available_metrics, render
 from conversation_agent.adapters.postgres.audit import PostgresAuditLog
@@ -37,7 +38,7 @@ from conversation_agent.core.llm_budget import (
 from conversation_agent.core.llm_prices import ModelPrice, PriceTable
 from conversation_agent.core.models.llm_usage import LLMCallRecord
 from conversation_agent.ports.subscriptions import Subscription
-from postgres.world import World
+from postgres.world import KEY, World, event
 from relayplane_sim.main import message_received, webhook_headers
 
 NOW = datetime(2026, 3, 15, 10, tzinfo=UTC)
@@ -107,6 +108,17 @@ def test_only_a_budget_that_asks_for_it_refuses() -> None:
     )
     assert quiet.state == strict.state == "exceeded"
     assert not quiet.refuses_new and strict.refuses_new  # `alert` is the default
+
+
+def test_defer_llm_only_blocks_model_calls() -> None:
+    deferred = evaluate(
+        "t",
+        LLMBudget(daily_tokens=1, on_exceed="defer_llm"),
+        Consumption(tokens=5),
+        Consumption(),
+        NOW,
+    )
+    assert deferred.defers_llm and not deferred.refuses_new
 
 
 # --- the durable store ---
@@ -247,6 +259,27 @@ async def test_the_edge_refuses_a_budget_exceeded_tenant_before_persisting_anyth
         response = await client.post("/webhooks/relayplane/s", content=body, headers=headers)
     assert response.status_code == 503 and response.json() == {"error": "llm_budget_exceeded"}
     assert response.headers["retry-after"] and await world.count("inbox_events") == 0
+
+
+async def test_defer_llm_keeps_the_accepted_turn_until_the_budget_resets(world: World) -> None:
+    monotonic = Clock()
+    budgets, usage = PostgresBudgetStore(world.db), PostgresLLMUsageStore(world.db)
+    now = datetime.now(UTC)
+    evaluator = BudgetEvaluator(
+        budgets, usage, PRICES, ttl_seconds=30, monotonic=monotonic, now=lambda: now
+    )
+    await budgets.set("tenant-1", LLMBudget(daily_tokens=1, on_exceed="defer_llm"), actor="x")
+    await usage.record(spend(1000, at=now, tenant="tenant-1"))
+    await world.inbox.insert_if_absent(event("deferred", "oi", clock=world.clock))
+    llm = FakeLLM([text_response("não deve chamar")])
+
+    run = await world.coordinator("w", llm, llm_gate=evaluator).process_conversation(KEY)
+
+    assert run.status == "retry_later" and llm.calls == 0
+    assert await world.count("turn_journal", "step_type='LLM_REQUEST'") == 0
+    row = await world.db.pool.fetchrow("SELECT deferred_until FROM turns")
+    assert row is not None and row["deferred_until"] == period_end("day", now)
+    assert await world.inbox.list_ready_conversations() == []  # no hot loop before reset
 
 
 # --- the metric ---

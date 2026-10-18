@@ -1,5 +1,6 @@
 """Phase 13: the base install is light. `asyncpg` (extra `postgres`) and `anthropic` (extra
-`anthropic`) are only needed by the code that talks to them; everything else imports without."""
+`anthropic`) and OpenTelemetry are only needed by the code that talks to them; everything else
+imports without."""
 
 from __future__ import annotations
 
@@ -40,7 +41,7 @@ BLOCK = """
 import importlib.abc, sys
 class Block(importlib.abc.MetaPathFinder):
     def find_spec(self, name, path=None, target=None):
-        if name.split(".")[0] in {"asyncpg", "anthropic"}:
+        if name.split(".")[0] in {"asyncpg", "anthropic", "opentelemetry"}:
             raise ModuleNotFoundError(f"No module named {name!r}", name=name)
 sys.meta_path.insert(0, Block())
 """
@@ -77,11 +78,21 @@ def test_choosing_anthropic_without_its_sdk_says_which_extra_it_needs() -> None:
     assert result.returncode != 0 and "conversation-agent[anthropic]" in result.stderr
 
 
+def test_choosing_opentelemetry_without_its_sdk_says_which_extra_it_needs() -> None:
+    result = run("import conversation_agent.adapters.observability.opentelemetry")
+    assert result.returncode != 0 and "conversation-agent[otel]" in result.stderr
+
+
 def test_the_extras_are_declared_and_the_base_install_is_light() -> None:
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     base = " ".join(project["dependencies"])
-    assert "asyncpg" not in base and "anthropic" not in base
+    assert "asyncpg" not in base and "anthropic" not in base and "opentelemetry" not in base
     extras = project["optional-dependencies"]
     assert any("asyncpg" in d for d in extras["postgres"])
     assert any("anthropic" in d for d in extras["anthropic"])
-    assert set(extras["all"]) >= {"conversation-agent[postgres]", "conversation-agent[anthropic]"}
+    assert any("opentelemetry-sdk" in d for d in extras["otel"])
+    assert set(extras["all"]) >= {
+        "conversation-agent[postgres]",
+        "conversation-agent[anthropic]",
+        "conversation-agent[otel]",
+    }
