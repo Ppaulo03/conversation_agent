@@ -1,6 +1,6 @@
 [project]
 name = "conversation-agent"
-version = "0.1.0"
+version = "0.2.0"
 description = "Framework for stateful conversational agents (conversation state, not business state)."
 readme = "README.md"
 requires-python = ">=3.12"
