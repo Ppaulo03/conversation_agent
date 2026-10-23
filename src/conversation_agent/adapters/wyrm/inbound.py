@@ -5,19 +5,26 @@ it (the Wyrm core signs what it dispatches) and passes OUR `tenant_id` from its 
 identity fields come from the dispatch `context`, which the core fills, never from `payload`.
 
     dispatch                      InboundEvent
-    payload.message_id            event_id (else `dispatch_id`) and provider_message_id
+    payload.message_id            provider_message_id; event_id "<provider>:<chat>:<message_id>"
     context.provider_id           channel_id
     context.chat_id               contact_id (where a reply is addressed, see below)
-    (tenant, provider, chat)      conversation_id  "wyrm:<provider>:<chat>"
-    timestamp                     occurred_at (the CORE's clock; falls back to the receive time)
+    (provider, chat)              conversation_id  "wyrm:<provider>:<chat>" (the tenant is NOT in
+                                  it: ids are unique per tenant already and `tenant_id` is passed)
+    timestamp                     occurred_at (the CORE's clock; missing/invalid: receive time)
     injected clock                received_at
+
+`event_id` rests on `payload.message_id` ALONE: a redelivery of the same message reuses it (the
+`dispatch_id` is per dispatch and changes on a redelivery, so it is never a fallback). The ':' in
+`provider_id` and `chat_id` is refused HERE (not by the runtime), which keeps both ids injective;
+`message_id` comes last and may contain one.
 
 `provider_occurred_at` and `reply_to_provider_message_id` stay None: the dispatch carries neither a
 provider clock nor a reply-to, and the core's `timestamp` is not provider evidence (INV-026).
 
-Returns None (nothing to hand to the runtime) for a GROUP chat, for a dispatch with no text (media
-only: attachments are ignored for now) and for a dispatch that does not carry the expected shape.
-A dispatch addressed to another tenant is a wiring bug and raises.
+Returns None (nothing to hand to the runtime) for a GROUP chat (or a missing `channel_type`), for a
+dispatch with no text (media only: attachments are ignored for now), with no `message_id` (no stable
+event identity) and for one that does not carry the expected shape (a non-string field counts as
+missing). A dispatch addressed to another tenant is a wiring bug and raises ValueError.
 """
 
 from __future__ import annotations
@@ -70,15 +77,14 @@ def dispatch_to_event(
     if text is None:
         return None  # attachments are ignored: text-only for now
     message_id = _text(payload.get("message_id"))
-    event_id = message_id or _text(dispatch.get("dispatch_id"))
-    if event_id is None:
-        return None
+    if message_id is None:
+        return None  # `dispatch_id` changes on a redelivery: without a message id we cannot dedupe
     received_at = clock.now()
     conversation_id = conversation_id_for(provider_id, chat_id)
     return InboundEvent(
         tenant_id=tenant_id,
         channel_id=provider_id,
-        event_id=event_id,  # stable across a redelivery of the same message
+        event_id=f"{provider_id}:{chat_id}:{message_id}",  # same on a redelivery
         conversation_id=conversation_id,
         # A reply is addressed to (provider, chat) and `OutboundMessage` carries only `contact_id`,
         # so in a private chat the chat IS the contact (sender.user_id may differ from chat_id).

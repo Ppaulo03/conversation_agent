@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import copy
+import threading
+import time
 from datetime import UTC, datetime, timedelta
 from typing import Any
 
@@ -11,6 +14,8 @@ import pytest
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.wyrm import WyrmSender, conversation_id_for, dispatch_to_event
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus
+from conversation_agent.ports.channel_lookup import MessageLookup
+from conversation_agent.ports.sender import MessageSender
 
 TENANT = "tenant-1"
 NOW = datetime(2026, 1, 1, 12, 0, 5, tzinfo=UTC)
@@ -53,7 +58,8 @@ def test_a_private_text_dispatch_maps_to_an_event_without_provider_evidence() ->
         "telegram-main",
         "chat-42",
     )
-    assert event.event_id == event.provider_message_id == "msg-1"
+    assert event.event_id == "telegram-main:chat-42:msg-1"
+    assert event.provider_message_id == "msg-1"
     assert event.text == "oi"
     assert event.occurred_at == datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)
     assert event.received_at == NOW
@@ -62,13 +68,26 @@ def test_a_private_text_dispatch_maps_to_an_event_without_provider_evidence() ->
     assert event.kind == "user"
 
 
-def test_without_a_message_id_the_dispatch_id_is_the_event_id() -> None:
+def test_without_a_message_id_the_dispatch_is_not_mapped() -> None:
     data = dispatch()
     del data["payload"]["message_id"]
-    event = map_it(data)
+    assert map_it(data) is None  # dispatch_id changes on a redelivery: never an event identity
+
+
+def test_a_non_string_message_id_is_not_mapped() -> None:
+    assert map_it(dispatch(payload={"message_id": 42, "text": "oi"})) is None
+
+
+def test_a_missing_channel_type_is_not_mapped() -> None:
+    data = dispatch()
+    del data["context"]["channel_type"]
+    assert map_it(data) is None
+
+
+def test_an_unparseable_timestamp_falls_back_to_the_receive_time() -> None:
+    event = map_it(dispatch(timestamp="not a date"))
     assert event is not None
-    assert event.event_id == "dsp-1"
-    assert event.provider_message_id is None
+    assert event.occurred_at == event.received_at == NOW
 
 
 def test_a_redelivered_dispatch_maps_to_the_same_event_id_and_conversation() -> None:
@@ -182,6 +201,39 @@ async def test_a_message_the_sdk_refuses_is_failed_and_not_retryable() -> None:
 async def test_a_broker_error_escapes_so_the_framework_records_unknown() -> None:
     with pytest.raises(ConnectionError):
         await WyrmSender(FakePublisher(ConnectionError("broker down"))).send(outbound())
+
+
+def test_the_sender_and_its_policy_fit_the_runtime_contract() -> None:
+    # `Runtime.build` needs Postgres; what it asks of a channel is checked here: a policy that
+    # validates, no resend, and no lookup (an UNKNOWN row has no settlement path over Wyrm).
+    sender = WyrmSender(FakePublisher())
+    checked: MessageSender = sender  # structural: mypy proves it
+    assert checked is sender
+    assert not isinstance(sender, MessageLookup)
+    policy = sender.delivery_policy()
+    assert policy.safe_resend_window == timedelta(minutes=59)
+    assert policy.retry_horizon <= policy.safe_resend_window
+
+
+async def test_publishes_run_one_at_a_time_on_one_thread() -> None:
+    threads: set[int] = set()
+    running = 0
+    overlap = False
+
+    class Probe(FakePublisher):
+        def send_message(self, *args: Any, **kwargs: Any) -> str:
+            nonlocal running, overlap
+            running += 1
+            overlap = overlap or running > 1
+            threads.add(threading.get_ident())
+            time.sleep(0.01)
+            running -= 1
+            return ""
+
+    sender = WyrmSender(Probe())
+    await asyncio.gather(*(sender.send(outbound(f"k{i}")) for i in range(5)))
+    sender.close()
+    assert len(threads) == 1 and not overlap
 
 
 def test_the_delivery_policy_never_resends() -> None:
