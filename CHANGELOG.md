@@ -5,6 +5,12 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ## Unreleased
 
+### Added
+
+- **Wyrm channel adapter** (`conversation_agent.adapters.wyrm`): dispatch -> `InboundEvent` mapper and
+  `WyrmSender` with a zero-retry `DeliveryPolicy`; no `wyrm-sdk` dependency. Text-only, private chats
+  only, no provider evidence (protected actions cannot be confirmed). See `docs/WYRM_CHANNEL.md`.
+
 ### Breaking: what an embedding application must change
 
 - **`Runtime.build` requires `delivery_policy`** (ADR-023, F-010). There is no default resend window

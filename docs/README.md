@@ -15,7 +15,7 @@ Ordem de autoridade e papel de cada documento: [ADR-020](./03_DECISIONS.md).
 ## Normativo e vigente
 
 - [`INVARIANTS.md`](./INVARIANTS.md) e [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md).
-- Operação e uso: [`OPERATIONS.md`](./OPERATIONS.md), [`GUIDE.md`](./GUIDE.md), [`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md), [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md).
+- Operação e uso: [`OPERATIONS.md`](./OPERATIONS.md), [`GUIDE.md`](./GUIDE.md), [`RELAYPLANE_CONTRACT.md`](./RELAYPLANE_CONTRACT.md), [`WYRM_CHANNEL.md`](./WYRM_CHANNEL.md), [`RELEASE_EVIDENCE.md`](./RELEASE_EVIDENCE.md).
 
 ## Histórico (preservado, sem autoridade sobre o estado atual)
 
