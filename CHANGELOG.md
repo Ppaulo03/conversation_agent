@@ -3,6 +3,14 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **A list argument is shown in full in the confirmation question and in `executed_template`**: one `- item` per
+  line, an object as `key: value, ...` (empty fields left out), so a write that takes a list (a weekly plan) can
+  be confirmed by a `summary_template` with a single `{slots}` placeholder.
+
 ## 0.3.0
 
 ### Added

@@ -18,6 +18,8 @@ def display_value(value: Any, timezone: str | None) -> str:
     agent's timezone, or, with no timezone given, in the offset it carries (as the person said)."""
     if isinstance(value, dict) and "media_id" in value:  # a file the contact sent
         return str(value.get("filename") or f"{value.get('kind', 'file')} ({value.get('handle')})")
+    if isinstance(value, list):  # one item per line: the person reads all that will be written
+        return "\n".join(f"- {_item(item, timezone)}" for item in value)
     if isinstance(value, str):
         try:
             moment = datetime.fromisoformat(value)
@@ -28,6 +30,16 @@ def display_value(value: Any, timezone: str | None) -> str:
             return f"{day} às {hour}"
         return value
     return str(value)
+
+
+def _item(item: Any, timezone: str | None) -> str:
+    """One line per item: an object as 'key: value, ...' no empty fields, a list as '(a, b)'."""
+    if isinstance(item, dict) and "media_id" not in item:
+        parts = [f"{k}: {_item(v, timezone)}" for k, v in item.items() if v not in (None, "", [])]
+        return ", ".join(parts)
+    if isinstance(item, list):
+        return "(" + ", ".join(_item(i, timezone) for i in item) + ")"
+    return display_value(item, timezone)
 
 
 def render_executed(

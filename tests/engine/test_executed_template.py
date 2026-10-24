@@ -50,3 +50,21 @@ def test_only_capabilities_that_set_it_carry_it_in_the_digest() -> None:
         if c.executed_template
     )
     assert first.executed_template == "Pronto."
+
+
+def test_a_list_is_shown_one_item_per_line_with_everything_that_will_be_written():
+    slots = [
+        {
+            "weekday": "segunda",
+            "kind": "treino",
+            "name": "A",
+            "note": None,
+            "exercises": [{"name": "agachamento", "sets": 3}],
+        },
+        {"weekday": "quarta", "kind": "descanso"},
+    ]
+    assert display_value(slots, TZ) == (
+        "- weekday: segunda, kind: treino, name: A, exercises: (name: agachamento, sets: 3)\n"
+        "- weekday: quarta, kind: descanso"
+    )
+    assert display_value([], TZ) == ""
