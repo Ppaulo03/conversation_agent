@@ -332,7 +332,16 @@ Decision:
 3. The API key is never in the manifest or the repository: the operator registers the connection (host `api.typesafe.ai` in `allowed_hosts`, TLS on) with `auth.secret_ref`, and the key comes from the SecretProvider (`CA_SECRET__<TENANT>__<REF>` in the environment).
 4. The message text and the tool names and descriptions are sent to the service (documented in the settings docstring).
 Alternatives: an `http` server in front of Jev (still possible, same contract); trusting Jev's `choice` alone (rejected: it hides the second tool of a two-tool message).
-Consequences: the wire format comes from public documentation of the service and was NOT verified against a live key from CI; accuracy on Portuguese is unmeasured until the evaluation runner is run with `--provider jev`.
+Consequences: the wire format was taken from public documentation and confirmed on 2026-10-24 with a real key against `api.typesafe.ai` (not from CI, which has no key). Measured with the evaluation runner (generic 8-tool catalog, Portuguese, top_n 8):
+
+| set | min_score | hit rate | fallback | tools removed |
+| --- | --- | --- | --- | --- |
+| dev (51) | 0.15 | 96.1% | 0% | 83.6% |
+| heldout (16) | 0.15 | 93.8% | 0% | 82.0% |
+| dev (51) | 0.05 | 98.0% | 0% | 77.2% |
+| heldout (16) | 0.05 | 100% | 0% | 74.2% |
+
+The misses are messages that need a second tool (the model answers one choice; the second gets a low share). A lower `min_score` (0.05) recovers them at a smaller saving, so it is the recommended value with this provider; the default 0.15 stays for the others. Small sets: compare providers with them, do not read the last digit.
 
 ---
 

@@ -20,7 +20,8 @@ uv run python -m conversation_agent.app.tool_selection_eval \
 `--provider jev --token-env JEV_API_KEY` measures TypeSafe Jev (`--url` defaults to
 `https://api.typesafe.ai`, `--model` to `jev-latest`; one request per message, so a run costs a few
 cents; the key is read from the environment and never written anywhere). Run it on `dataset.jsonl`
-and then on `heldout.jsonl`.
+and then on `heldout.jsonl`. Measured on 2026-10-24 (`--min-score 0.05`): 98.0% / 100% hit rate with 0% fallback and
+~75% of the tools removed (ADR-031 has the full table).
 
 `--provider package.module:factory` runs any other `ToolSelector` (a classifier, embeddings) over the
 same files; `--json report.json` saves per-example rows; `--min-hit-rate 0.9` fails below a floor.
