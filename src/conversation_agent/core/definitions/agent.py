@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Literal, get_args, get_origin
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from pydantic import BaseModel, ConfigDict, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from conversation_agent.core.definitions.binding import CapabilityBinding, ResolvedToolBinding
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
@@ -113,6 +113,9 @@ class AgentDefinition(BaseModel):
     human_request: HumanRequest | None = None
     max_flow_depth: int = 3  # active + suspended flows kept per conversation
     max_tokens_per_turn: int | None = None  # guardrail: LLM tokens (in+out) per turn
+    # Cap on the tokens ONE model call may produce (None: the framework default, 1024). A reasoning
+    # model spends hidden thinking tokens inside it and can end a call with no text when it is low.
+    max_output_tokens: int | None = Field(default=None, ge=1)
     confirmation: ConfirmationTexts = ConfirmationTexts()
     confirmation_prompt_enabled: bool = True
     media: MediaTexts = MediaTexts()

@@ -82,6 +82,7 @@ class AgentManifest(_Strict):
     max_history_messages: int = 40
     fallback_reply: str = "Sorry, I could not complete that request."
     max_tokens_per_turn: int | None = None
+    max_output_tokens: int | None = None
     max_flow_depth: int = 3
     confirmation: ConfirmationTexts = Field(default_factory=ConfirmationTexts)
     confirmation_prompt_enabled: bool = True
@@ -169,6 +170,7 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         max_history_messages=manifest.max_history_messages,
         fallback_reply=manifest.fallback_reply,
         max_tokens_per_turn=manifest.max_tokens_per_turn,
+        max_output_tokens=manifest.max_output_tokens,
         max_flow_depth=manifest.max_flow_depth,
         confirmation=manifest.confirmation,
         confirmation_prompt_enabled=manifest.confirmation_prompt_enabled,

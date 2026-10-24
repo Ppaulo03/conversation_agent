@@ -3,6 +3,15 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **`max_output_tokens` on the agent** caps the tokens one model call may produce (the default stays 1024). A
+  reasoning model (for example `gpt-oss`) spends hidden thinking tokens inside that cap, so a long answer could end
+  with a `max_tokens` stop and no text, and the person got the fallback reply. Agents that do not set it are unchanged,
+  and so are their manifest digests.
+
 ## 0.6.1 - 2026-10-24
 
 ### Fixed
