@@ -11,6 +11,7 @@ identity fields come from the dispatch `context`, which the core fills, never fr
     (provider, chat)              conversation_id  "wyrm:<provider>:<chat>" (the tenant is NOT in
                                   it: ids are unique per tenant already and `tenant_id` is passed)
     timestamp                     occurred_at (the CORE's clock; missing/invalid: receive time)
+    payload.provider_timestamp    provider_occurred_at (the PLATFORM's clock; missing/invalid: None)
     injected clock                received_at
 
 `event_id` rests on `payload.message_id` ALONE: a redelivery of the same message reuses it (the
@@ -18,8 +19,11 @@ identity fields come from the dispatch `context`, which the core fills, never fr
 `provider_id` and `chat_id` is refused HERE (not by the runtime), which keeps both ids injective;
 `message_id` comes last and may contain one.
 
-`provider_occurred_at` and `reply_to_provider_message_id` stay None: the dispatch carries neither a
-provider clock nor a reply-to, and the core's `timestamp` is not provider evidence (INV-026).
+`provider_occurred_at` is `payload.provider_timestamp` (sdks 0.9.0): when the platform recorded the
+message, set by the provider, on the same clock as the output receipts (INV-026). It is None when
+the provider gave none or the value has no zone or does not parse. The core's `timestamp` is never
+provider evidence, so it is not used for it. `reply_to_provider_message_id` stays None: the dispatch
+carries no reply-to.
 
 Returns None (nothing to hand to the runtime) for a GROUP chat (or a missing `channel_type`), for a
 dispatch with no text (media only: attachments are ignored for now), with no `message_id` (no stable
@@ -48,14 +52,20 @@ def _text(value: object) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _timestamp(value: object) -> datetime | None:
+def parse_timestamp(value: object, *, require_zone: bool = False) -> datetime | None:
+    """An ISO 8601 string as an aware datetime, else None.
+
+    A value with no zone is read as UTC, unless `require_zone`: provider evidence is never guessed
+    (INV-026), so a zone-less one is None."""
     if not isinstance(value, str):
         return None
     try:
         parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError:
         return None
-    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=UTC)
+    if parsed.tzinfo is not None:
+        return parsed
+    return None if require_zone else parsed.replace(tzinfo=UTC)
 
 
 def dispatch_to_event(
@@ -91,7 +101,8 @@ def dispatch_to_event(
         contact_id=chat_id,
         session_id=conversation_id,
         text=text,
-        occurred_at=_timestamp(dispatch.get("timestamp")) or received_at,
+        occurred_at=parse_timestamp(dispatch.get("timestamp")) or received_at,
         received_at=received_at,
         provider_message_id=message_id,
+        provider_occurred_at=parse_timestamp(payload.get("provider_timestamp"), require_zone=True),
     )

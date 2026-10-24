@@ -51,6 +51,7 @@ def map_it(data: dict[str, Any]) -> Any:
 
 
 def test_a_private_text_dispatch_maps_to_an_event_without_provider_evidence() -> None:
+    # No payload.provider_timestamp in the base dispatch, so no provider evidence.
     event = map_it(dispatch())
     assert event is not None
     assert (event.tenant_id, event.channel_id, event.contact_id) == (
@@ -66,6 +67,27 @@ def test_a_private_text_dispatch_maps_to_an_event_without_provider_evidence() ->
     assert event.provider_occurred_at is None  # the core's clock is not provider evidence (INV-026)
     assert event.reply_to_provider_message_id is None
     assert event.kind == "user"
+
+
+def test_the_provider_timestamp_is_the_platform_clock_not_the_cores() -> None:
+    event = map_it(dispatch(payload__provider_timestamp="2026-01-01T12:00:00Z"))
+    assert event is not None
+    assert event.provider_occurred_at == datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
+    assert event.occurred_at == datetime(2026, 1, 1, 12, 0, 1, tzinfo=UTC)  # the core's, apart
+
+
+@pytest.mark.parametrize("value", [None, 1767268800, "yesterday", "2026-01-01T12:00:00", ""])
+def test_a_missing_or_unusable_provider_timestamp_is_no_evidence(value: object) -> None:
+    # A zone-less value is not guessed (INV-026); the event is still mapped.
+    event = map_it(dispatch(payload__provider_timestamp=value))
+    assert event is not None
+    assert event.provider_occurred_at is None
+
+
+def test_a_provider_timestamp_with_an_offset_is_kept_as_an_instant() -> None:
+    event = map_it(dispatch(payload__provider_timestamp="2026-01-01T09:00:00-03:00"))
+    assert event is not None
+    assert event.provider_occurred_at == datetime(2026, 1, 1, 12, 0, 0, tzinfo=UTC)
 
 
 def test_without_a_message_id_the_dispatch_is_not_mapped() -> None:
@@ -146,9 +168,27 @@ def test_a_dispatch_for_another_tenant_is_refused() -> None:
 
 
 class FakePublisher:
-    def __init__(self, error: Exception | None = None) -> None:
+    def __init__(
+        self, error: Exception | None = None, receipt: dict[str, Any] | None = None
+    ) -> None:
         self.calls: list[tuple[str, str, str | None, str | None]] = []
+        self.waited: list[tuple[str, str, str | None, str | None, float]] = []
         self.error = error
+        self.receipt = receipt
+
+    def send_message_and_wait_receipt(
+        self,
+        provider_id: str,
+        chat_id: str,
+        text: str | None = None,
+        *,
+        event_id: str | None = None,
+        wait_seconds: float = 0.0,
+    ) -> dict[str, Any] | None:
+        if self.error is not None:
+            raise self.error
+        self.waited.append((provider_id, chat_id, text, event_id, wait_seconds))
+        return self.receipt
 
     def send_message(
         self,
@@ -164,7 +204,7 @@ class FakePublisher:
         return event_id or ""
 
 
-def outbound(key: str = "key-1") -> OutboundMessage:
+def outbound(key: str = "key-1", action_id: str | None = None) -> OutboundMessage:
     return OutboundMessage(
         outbox_id="ob-1",
         tenant_id=TENANT,
@@ -175,6 +215,7 @@ def outbound(key: str = "key-1") -> OutboundMessage:
         message_index=0,
         text="Olá!",
         idempotency_key=key,
+        action_id=action_id,
     )
 
 
@@ -240,3 +281,61 @@ def test_the_delivery_policy_never_resends() -> None:
     policy = WyrmSender.delivery_policy()
     assert policy.retry_horizon == timedelta(0)
     assert not policy.retries_enabled
+
+
+# ------------------------------------------------------------------- confirmation prompts (receipts)
+
+RECEIPT = {
+    "output_event_id": "key-1",
+    "provider_id": "telegram-main",
+    "status": "ACCEPTED",
+    "provider_message_id": "wamid-1",
+    "provider_timestamp": "2026-01-01T12:00:03Z",
+}
+
+
+async def test_a_confirmation_prompt_waits_for_the_receipt_and_carries_the_platform_clock() -> None:
+    publisher = FakePublisher(receipt=RECEIPT)
+    result = await WyrmSender(publisher, receipt_wait_seconds=7).send(outbound(action_id="act-1"))
+    assert result.status is OutboxStatus.ACCEPTED
+    assert result.provider_message_id == "wamid-1"
+    assert result.provider_accepted_at == datetime(2026, 1, 1, 12, 0, 3, tzinfo=UTC)
+    assert publisher.waited == [("telegram-main", "chat-42", "Olá!", "key-1", 7)]
+    assert publisher.calls == []  # it did not publish a second time
+
+
+async def test_an_ordinary_message_does_not_wait_for_a_receipt() -> None:
+    publisher = FakePublisher(receipt=RECEIPT)
+    result = await WyrmSender(publisher).send(outbound())
+    assert result.status is OutboxStatus.ACCEPTED and result.provider_accepted_at is None
+    assert publisher.waited == [] and len(publisher.calls) == 1
+
+
+async def test_no_receipt_in_time_is_accepted_without_a_provider_clock() -> None:
+    # The broker has it, so it may be delivered; nothing can prove the reply came after it.
+    result = await WyrmSender(FakePublisher(receipt=None)).send(outbound(action_id="act-1"))
+    assert result.status is OutboxStatus.ACCEPTED
+    assert result.provider_accepted_at is None and result.provider_message_id is None
+
+
+async def test_a_rejected_receipt_is_failed_and_not_retryable() -> None:
+    receipt = {**RECEIPT, "status": "REJECTED", "reason": "blocked"}
+    result = await WyrmSender(FakePublisher(receipt=receipt)).send(outbound(action_id="act-1"))
+    assert result.status is OutboxStatus.FAILED
+    assert result.retryable is False
+
+
+@pytest.mark.parametrize("stamp", [None, "yesterday", "2026-01-01T12:00:03", 1767268803])
+async def test_a_receipt_without_a_usable_platform_clock_proves_no_ordering(stamp: object) -> None:
+    receipt = {**RECEIPT, "provider_timestamp": stamp}
+    result = await WyrmSender(FakePublisher(receipt=receipt)).send(outbound(action_id="act-1"))
+    assert result.status is OutboxStatus.ACCEPTED
+    assert result.provider_accepted_at is None  # a zone-less value is not guessed (INV-026)
+    assert result.provider_message_id == "wamid-1"
+
+
+async def test_a_prompt_the_sdk_refuses_is_failed_and_a_broker_error_escapes() -> None:
+    refused = await WyrmSender(FakePublisher(ValueError("bad chat"))).send(outbound(action_id="a"))
+    assert refused.status is OutboxStatus.FAILED and refused.retryable is False
+    with pytest.raises(ConnectionError):
+        await WyrmSender(FakePublisher(ConnectionError("down"))).send(outbound(action_id="a"))

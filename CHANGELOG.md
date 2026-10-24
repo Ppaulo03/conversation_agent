@@ -3,6 +3,19 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **Wyrm channel: confirming protected actions without a quoted reply** (needs wyrm-sdk 0.9.0 and a provider
+  that publishes timestamps and receipts). `dispatch_to_event` maps `payload.provider_timestamp` to
+  `provider_occurred_at`; `WyrmSender` sends a confirmation prompt (`action_id` set) with
+  `send_message_and_wait_receipt` and fills `provider_message_id` and `provider_accepted_at` from the receipt
+  (`WyrmSender(publisher, receipt_wait_seconds=10.0)`). No receipt in time stays `ACCEPTED` without a provider
+  clock, so the runtime asks again; a `REJECTED` receipt is `FAILED`. The `WyrmPublish` protocol gains
+  `send_message_and_wait_receipt`: a publisher passed to `WyrmSender` must have it (the real `WyrmPublisher` does
+  from wyrm-sdk 0.9.0). See `docs/WYRM_CHANNEL.md`.
+
 ## 0.2.0
 
 ### Added
