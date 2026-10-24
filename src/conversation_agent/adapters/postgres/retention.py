@@ -86,10 +86,15 @@ class RetentionService:
         actor: str,
         reason: str,
         force: bool = False,
+        keep_profile: bool = False,
     ) -> ErasureResult:
+        """`keep_profile` erases the CONVERSATIONS (a reset) but keeps what the agent remembers
+        about the contact (name and facts); the default forgets the person entirely."""
         reference = subject_ref(tenant_id, contact_id)
         async with self._db.pool.acquire() as conn:
-            result = await self._erase(conn, tenant_id, contact_id, reference, actor, reason, force)
+            result = await self._erase(
+                conn, tenant_id, contact_id, reference, actor, reason, force, keep_profile
+            )
         return result
 
     async def _erase(
@@ -101,13 +106,16 @@ class RetentionService:
         actor: str,
         reason: str,
         force: bool,
+        keep_profile: bool = False,
     ) -> ErasureResult:
         async with conn.transaction():
             await conn.execute(
                 "SELECT pg_advisory_xact_lock(hashtext($1))", f"erase/{tenant_id}/{ref}"
             )
             conversations = await self._conversations(conn, tenant_id, contact_id)
-            found = await self._footprint(conn, tenant_id, contact_id, conversations)
+            found = await self._footprint(
+                conn, tenant_id, contact_id, conversations, keep_profile=keep_profile
+            )
             if not any(found.values()):
                 return ErasureResult("nothing_found", reference=ref)
             blockers = await self._blockers(conn, tenant_id, conversations, force)
@@ -116,7 +124,9 @@ class RetentionService:
                     conn, tenant_id, actor, ref, "refused", reason, {"blockers": blockers}
                 )
                 return ErasureResult("blocked", blockers=tuple(blockers), reference=ref)
-            counts = await self._do_erase(conn, tenant_id, contact_id, ref, conversations)
+            counts = await self._do_erase(
+                conn, tenant_id, contact_id, ref, conversations, keep_profile=keep_profile
+            )
             await self._audit(
                 conn,
                 tenant_id,
@@ -124,7 +134,12 @@ class RetentionService:
                 ref,
                 "ok",
                 reason,
-                {**counts, "conversations": len(conversations), "forced": force},
+                {
+                    **counts,
+                    "conversations": len(conversations),
+                    "forced": force,
+                    "keep_profile": keep_profile,
+                },
             )
             return ErasureResult("erased", counts=counts, reference=ref)
 
@@ -142,13 +157,18 @@ class RetentionService:
 
     @staticmethod
     async def _footprint(
-        conn: Any, tenant_id: str, contact_id: str, conversations: list[str]
+        conn: Any,
+        tenant_id: str,
+        contact_id: str,
+        conversations: list[str],
+        *,
+        keep_profile: bool = False,
     ) -> dict[str, int]:
         async def count(sql: str, *args: Any) -> int:
             return int(await conn.fetchval(sql, *args))
 
         by_conv = "tenant_id = $1 AND conversation_id = ANY($2)"
-        return {
+        found = {
             "conversation_states": await count(
                 f"SELECT count(*) FROM conversation_states WHERE {by_conv}",
                 tenant_id,
@@ -188,6 +208,13 @@ class RetentionService:
                 conversations,
             ),
         }
+        if not keep_profile:
+            found["contact_profiles"] = await count(
+                "SELECT count(*) FROM contact_profiles WHERE tenant_id = $1 AND contact_id = $2",
+                tenant_id,
+                contact_id,
+            )
+        return found
 
     @staticmethod
     async def _blockers(
@@ -236,7 +263,13 @@ class RetentionService:
 
     @staticmethod
     async def _do_erase(
-        conn: Any, tenant_id: str, contact_id: str, ref: str, conversations: list[str]
+        conn: Any,
+        tenant_id: str,
+        contact_id: str,
+        ref: str,
+        conversations: list[str],
+        *,
+        keep_profile: bool = False,
     ) -> dict[str, int]:
         counts: dict[str, int] = {}
 
@@ -328,6 +361,13 @@ class RetentionService:
             tenant_id,
             conversations,
         )
+        if not keep_profile:  # what the agent remembers about the person goes with the person
+            await run(
+                "contact_profiles",
+                "DELETE FROM contact_profiles WHERE tenant_id = $1 AND contact_id = $2",
+                tenant_id,
+                contact_id,
+            )
         return counts
 
     @staticmethod
@@ -450,3 +490,10 @@ class RetentionService:
             tenant_id,
             state_cut,
         )
+        if policy.memory_days is not None:  # opt-in: no window means the memory never expires
+            await run(
+                "contact_profiles",
+                "DELETE FROM contact_profiles WHERE tenant_id = $1 AND updated_at < $2",
+                tenant_id,
+                now - timedelta(days=policy.memory_days),
+            )

@@ -6,7 +6,7 @@ while something is still in motion, and leaves a trail with no content."""
 from __future__ import annotations
 
 import json
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta
 
 import pytest
 from pydantic import ValidationError
@@ -15,12 +15,14 @@ from conftest import ApiHandle
 from conversation_agent.adapters.clock import FixedClock
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response
 from conversation_agent.adapters.postgres.audit import PostgresAuditLog
+from conversation_agent.adapters.postgres.contact_memory import PostgresContactMemory
 from conversation_agent.adapters.postgres.conversations import ensure_conversation
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.retention import RetentionService
 from conversation_agent.core.models.audit import subject_ref
 from conversation_agent.core.models.conversation import ConversationIdentity
 from conversation_agent.core.retention import RetentionPolicy
+from conversation_agent.ports.contact_memory import MemoryLimits
 from postgres.test_protected_actions import answer, coord, deliver_prompt
 from postgres.world import KEY, World, event
 from support.builders import IDENTITY
@@ -348,3 +350,77 @@ async def test_changing_a_policy_is_audited(service: RetentionService, world: Wo
     await service.set_policy(TENANT, RetentionPolicy(message_days=30), actor="admin@example.com")
     (trail,) = await PostgresAuditLog(world.db).list(TENANT, action="retention.policy")
     assert trail.actor == "admin@example.com" and trail.details["message_days"] == 30
+
+
+# --- contact memory ---
+
+PROFILE_LIMITS = MemoryLimits()
+
+
+async def remembered(world: World, contact_id: str = CONTACT) -> PostgresContactMemory:
+    memory = PostgresContactMemory(world.db)
+    await memory.set_name(TENANT, contact_id, "Ana", PROFILE_LIMITS)
+    await memory.remember(TENANT, contact_id, "Treina de manhã", PROFILE_LIMITS)
+    return memory
+
+
+async def test_erasing_a_contact_also_removes_what_the_agent_remembered(
+    world: World, api: ApiHandle, service: RetentionService
+) -> None:
+    memory = await remembered(world)
+    await remembered(world, OTHER.contact_id)
+    await full_conversation(world, api)
+    assert (await service.locate_contact(TENANT, CONTACT)).counts["contact_profiles"] == 1
+    result = await service.erase_contact(TENANT, CONTACT, actor="dpo", reason="art. 18")
+    assert result.status == "erased" and result.counts["contact_profiles"] == 1
+    assert (await memory.get(TENANT, CONTACT)).empty
+    assert not (await memory.get(TENANT, OTHER.contact_id)).empty  # others intact
+    assert "contact_profiles" not in await where_the_contact_still_appears(world)
+
+
+async def test_a_contact_known_only_by_their_profile_is_still_found_and_erased(
+    world: World, service: RetentionService
+) -> None:
+    memory = await remembered(world)
+    result = await service.erase_contact(TENANT, CONTACT, actor="dpo", reason="art. 18")
+    assert result.status == "erased" and result.counts["contact_profiles"] == 1
+    assert sum(n for table, n in result.counts.items() if table != "contact_profiles") == 0
+    assert (await memory.get(TENANT, CONTACT)).empty
+
+
+async def test_a_reset_erases_the_conversations_and_keeps_the_profile(
+    world: World, api: ApiHandle, service: RetentionService
+) -> None:
+    memory = await remembered(world)
+    await full_conversation(world, api)
+    result = await service.erase_contact(
+        TENANT, CONTACT, actor="chat", reason="reset", force=True, keep_profile=True
+    )
+    assert result.status == "erased" and "contact_profiles" not in result.counts
+    assert await world.db.pool.fetchval("SELECT count(*) FROM conversation_states") == 0
+    profile = await memory.get(TENANT, CONTACT)
+    assert profile.display_name == "Ana" and [f.text for f in profile.facts] == ["Treina de manhã"]
+    audit = await world.db.pool.fetchval(
+        "SELECT details->>'keep_profile' FROM admin_audit WHERE action = 'contact.erase' "
+        "ORDER BY id DESC LIMIT 1"
+    )
+    assert audit == "true"
+
+
+async def test_memory_expires_only_when_the_tenant_set_a_window(
+    world: World, service: RetentionService
+) -> None:
+    memory = await remembered(world)
+    later = datetime.now(UTC) + timedelta(days=400)
+    default = await service.apply_retention(TENANT, actor="job", now=later)
+    assert (
+        "contact_profiles" not in default.counts and not (await memory.get(TENANT, CONTACT)).empty
+    )
+
+    policy = RetentionPolicy(memory_days=30)
+    inside = await service.apply_retention(
+        TENANT, actor="job", now=datetime.now(UTC) + timedelta(days=10), policy=policy
+    )
+    assert inside.counts["contact_profiles"] == 0 and not (await memory.get(TENANT, CONTACT)).empty
+    past = await service.apply_retention(TENANT, actor="job", now=later, policy=policy)
+    assert past.counts["contact_profiles"] == 1 and (await memory.get(TENANT, CONTACT)).empty

@@ -6,6 +6,7 @@ What the runtime keeps about people, and for how long:
   conversation state the conversation's history and open flows (the operational row stays)
   journal payloads   the replay payloads of finished turns (after this, hashes and metadata only)
   media references   the references to attachments
+  contact memory     the name and facts an agent keeps about a contact (opt-in window)
 
 Rows are REDACTED, not deleted, whenever something else still needs them to exist: an inbox row is
 the dedupe record of a delivered event, an outbox row the idempotency record of a send, a tool
@@ -27,6 +28,9 @@ class RetentionPolicy(BaseModel):
     conversation_state_days: int = Field(default=180, ge=1)
     journal_payload_days: int = Field(default=7, ge=1)  # DESIGN: journal_replay_payload_retention
     media_reference_days: int = Field(default=30, ge=1)
+    # What the agent remembers about a contact (contact memory): deleted when it has not changed
+    # for this long. None (the default): it never expires; erasing the contact still removes it.
+    memory_days: int | None = Field(default=None, ge=1)
 
 
 @dataclass(frozen=True)
