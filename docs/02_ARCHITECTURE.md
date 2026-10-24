@@ -4,7 +4,7 @@ Descreve o estado atual, sem histórico. O porquê está em [`03_DECISIONS`](./0
 [`INVARIANTS.md`](./INVARIANTS.md) e [`RUNTIME_PROTOCOL.md`](./RUNTIME_PROTOCOL.md) (continuam sendo a especificação
 fina; este documento é o mapa). Onde este texto e o código divergirem, vale o código/testes e a divergência vira finding em
 [`05_REVIEW_LOG`](./05_REVIEW_LOG.md). Fontes verificadas: árvore `src/`, `pyproject.toml` (contratos import-linter),
-migrations `0001`–`0026` e a suíte em `tests/`.
+migrations `0001`–`0028` e a suíte em `tests/`.
 
 ## 1. Módulos e fronteiras
 
@@ -65,7 +65,7 @@ Vocabulário de domínio (agendamento, suporte) nunca vive em `src/` (teste de a
 
 ## 4. Persistência
 
-PostgreSQL é o único estado durável; toda "fila" é uma tabela. Schema por migrations forward-only (`0001_init` … `0026_contact_profiles`),
+PostgreSQL é o único estado durável; toda "fila" é uma tabela. Schema por migrations forward-only (`0001_init` … `0028_contact_profiles`),
 checksum por arquivo, apply serializado por advisory lock; banco à frente do código ou migration editada impedem aplicar migrations (INV-047).
 Migrar é explícito e muda o schema (`PostgresDatabase.migrate`, `app.migrate apply`); verificar é explícito e somente-leitura
 (`PostgresDatabase.ensure_schema_current`, ADR-026): o host que embute o framework a chama antes de qualquer trabalho durável, e

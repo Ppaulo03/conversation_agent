@@ -5,12 +5,23 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ## Unreleased
 
+### Fixed
+
+- **A 0.5.0 database could not be upgraded to 0.6.0.** The contact-memory migration was numbered `0026_contact_profiles`,
+  but `0026_turn_deferred_until` and `0027_confirmation_budget_deferred` already existed: on a database at 0.5.0 it
+  sorted before two applied migrations, so the migrator refused it as a gap in the history
+  (`MigrationHistoryError`; `ensure_current` failed the same way). It is now `0028_contact_profiles` and a test fails if
+  two migrations ever share a number.
+  A database created from scratch with 0.6.0 recorded the old name; rename it once
+  (`UPDATE schema_migrations SET version = '0028_contact_profiles' WHERE version = '0026_contact_profiles'`, the
+  file content and its checksum are unchanged) or recreate it. Upgrading from 0.5.0 needs nothing.
+
 ## 0.6.0 - 2026-10-24
 
 ### Added
 
 - **Contact memory store (ADR-032, INV-081)**: a `ContactMemory` port, `InMemoryContactMemory`,
-  `PostgresContactMemory` and migration `0026_contact_profiles` keep a display name and short facts per
+  `PostgresContactMemory` and migration `0028_contact_profiles` (shipped as `0026_` in 0.6.0, see 0.6.1) keep a display name and short facts per
   `(tenant_id, contact_id)`, independent of any conversation. New optional `memory` block in the manifest and
   `AgentDefinition.memory` (`max_facts`, `max_fact_chars`, `max_name_chars`); without it the digest does not change.
   With the block, the turn loads the contact's profile (journaled), shows it in the system prompt as quoted data
