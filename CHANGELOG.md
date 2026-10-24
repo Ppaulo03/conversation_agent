@@ -5,6 +5,8 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ## Unreleased
 
+## 0.6.0 - 2026-10-24
+
 ### Added
 
 - **Contact memory store (ADR-032, INV-081)**: a `ContactMemory` port, `InMemoryContactMemory`,
