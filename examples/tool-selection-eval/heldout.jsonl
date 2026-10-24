@@ -1,0 +1,16 @@
+{"id": "h01", "message": "tem algum horário livre na quarta?", "expected": ["agenda_list_availability"]}
+{"id": "h02", "message": "onde eu vejo o que já está marcado pra mim?", "expected": ["agenda_get_booking"]}
+{"id": "h03", "message": "quero um horário de corte na segunda às 17h", "expected": ["agenda_create_booking"]}
+{"id": "h04", "message": "não consigo ir amanhã, pode liberar meu horário?", "expected": ["agenda_cancel_booking"]}
+{"id": "h05", "message": "posso passar meu horário de sexta pra quinta, mesma hora?", "expected": ["agenda_reschedule_booking"]}
+{"id": "h06", "message": "vocês trabalham com unha?", "expected": ["services_list"]}
+{"id": "h07", "message": "fica perto do metrô?", "expected": ["business_info"]}
+{"id": "h08", "message": "pode guardar que eu prefiro cadeira perto da janela", "expected": ["customer_save_preferences"]}
+{"id": "h09", "message": "quanto fica um corte com barba?", "expected": ["services_list"]}
+{"id": "h10", "message": "aceita cartão de crédito?", "expected": ["business_info"]}
+{"id": "h11", "message": "e aí, beleza?", "expected": []}
+{"id": "h12", "message": "qual a capital da França?", "expected": []}
+{"id": "h13", "message": "ok, entendi", "expected": []}
+{"id": "h14", "message": "remarca meu horário de hoje pra amanhã e me fala se tem vaga de manhã", "expected": ["agenda_reschedule_booking", "agenda_list_availability"]}
+{"id": "h15", "message": "sou a Julia, quero marcar hidratação terça às 15h", "expected": ["customer_save_preferences", "agenda_create_booking"]}
+{"id": "h16", "message": "quanto custa a massagem e até que horas vocês ficam abertos?", "expected": ["services_list", "business_info"]}

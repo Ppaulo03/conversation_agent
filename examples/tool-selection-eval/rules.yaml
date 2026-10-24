@@ -1,0 +1,20 @@
+# Rules for the `rules` provider over catalog.json. Keywords match from the start of a word,
+# ignoring case and accents. Written from the tool descriptions and the messages of
+# dataset.jsonl, so that file is a DEVELOPMENT set for these rules; heldout.jsonl was written
+# afterwards and never used to tune them.
+- capability: agenda_list_availability
+  keywords: [horários, "horario livre", vaga, vagas, disponível, disponibilidade, livre, "que dias tem", "tem horário"]
+- capability: agenda_get_booking
+  keywords: ["minha reserva", "minhas reservas", "eu marquei", "tenho algo", "meu horário", agendado, "quando é"]
+- capability: agenda_create_booking
+  keywords: [marcar, marca, agenda, agendar, "preciso de um horário"]
+- capability: agenda_cancel_booking
+  keywords: [cancela, cancelar, desmarca, desmarcar, "não vou poder"]
+- capability: agenda_reschedule_booking
+  keywords: [remarcar, remarca, "muda meu horário", "troca o dia", adiantar, "mudar o horário"]
+- capability: services_list
+  keywords: [serviços, serviço, "quanto custa", preço, "quanto tempo", "quanto é o", "vocês fazem", demora]
+- capability: business_info
+  keywords: [onde fica, endereço, "até que horas", abre, fecha, pix, cartão, estacionamento, telefone, "formas de pagamento"]
+- capability: customer_save_preferences
+  keywords: ["meu nome", "me chamo", "sou o", "sou a", "prefiro", alérgico, alergia, "anota aí", sempre]
