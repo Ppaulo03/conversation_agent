@@ -1,0 +1,48 @@
+{"id": "h001", "message": "vocês atendem domingo? que horas tem livre?", "expected": ["schedule_list_slots"]}
+{"id": "h002", "message": "fecha pra mim a depilação de quarta às 16h", "expected": ["schedule_book"]}
+{"id": "h003", "message": "não vou conseguir ir na consulta de hoje, cancela", "expected": ["schedule_cancel"]}
+{"id": "h004", "message": "posso adiantar meu horário de sábado pra manhã?", "expected": ["schedule_reschedule"]}
+{"id": "h005", "message": "lembra pra mim quando é minha próxima sessão", "expected": ["schedule_get_bookings"]}
+{"id": "h006", "message": "se abrir encaixe esta semana, me chama", "expected": ["schedule_join_waitlist"]}
+{"id": "h007", "message": "quero ver opções de vestido de festa", "expected": ["shop_search_products"]}
+{"id": "h008", "message": "qual o material dessa bolsa? vem com alça removível?", "expected": ["shop_get_product"]}
+{"id": "h009", "message": "o sofá cinza tem pronta entrega?", "expected": ["shop_check_stock"]}
+{"id": "h010", "message": "algum desconto em eletrônicos agora?", "expected": ["shop_get_promotions"]}
+{"id": "h011", "message": "bota 3 meias no pedido", "expected": ["cart_add_item"]}
+{"id": "h012", "message": "tira o cinto da sacola", "expected": ["cart_remove_item"]}
+{"id": "h013", "message": "me mostra a sacola", "expected": ["cart_view"]}
+{"id": "h014", "message": "pode finalizar, mesmo endereço de sempre, boleto", "expected": ["order_checkout"]}
+{"id": "h015", "message": "meu pedido já saiu pra entrega?", "expected": ["order_status"]}
+{"id": "h016", "message": "desisti da compra, cancela o último pedido", "expected": ["order_cancel"]}
+{"id": "h017", "message": "o código de rastreio não atualiza, cadê meu pacote?", "expected": ["order_track_shipping"]}
+{"id": "h018", "message": "comprei a cor errada, dá pra devolver?", "expected": ["order_request_return"]}
+{"id": "h019", "message": "dá pra pagar parcelado sem juros?", "expected": ["payment_get_methods"]}
+{"id": "h020", "message": "manda o boleto de novo, perdi", "expected": ["payment_send_link"]}
+{"id": "h021", "message": "o cartão passou ou deu erro?", "expected": ["payment_status"]}
+{"id": "h022", "message": "preciso da nota em nome da empresa", "expected": ["invoice_send"]}
+{"id": "h023", "message": "faz 10 dias que pedi o estorno, nada ainda", "expected": ["refund_status"]}
+{"id": "h024", "message": "confere se meu endereço está certo no cadastro", "expected": ["customer_get_profile"]}
+{"id": "h025", "message": "o telefone de contato agora é 21 97777-6666", "expected": ["customer_update_contact"]}
+{"id": "h026", "message": "só pra constar: sou alérgica a látex", "expected": ["customer_save_preferences"]}
+{"id": "h027", "message": "meus pontos vencem quando?", "expected": ["customer_loyalty_points"]}
+{"id": "h028", "message": "quero ser esquecida, pode apagar minhas informações", "expected": ["customer_delete_data"]}
+{"id": "h029", "message": "vocês fecham pra almoço?", "expected": ["business_hours"]}
+{"id": "h030", "message": "como chego aí de metrô?", "expected": ["business_location"]}
+{"id": "h031", "message": "tem um e-mail pra falar com vocês?", "expected": ["business_contact"]}
+{"id": "h032", "message": "vocês trabalham com marca própria?", "expected": ["faq_search"]}
+{"id": "h033", "message": "qual o prazo de garantia dos eletrônicos?", "expected": ["policy_get"]}
+{"id": "h034", "message": "meu login não funciona e já tentei de tudo", "expected": ["support_open_ticket"]}
+{"id": "h035", "message": "qual o status do chamado 1042?", "expected": ["support_ticket_status"]}
+{"id": "h036", "message": "isso é urgente, preciso de um humano agora", "expected": ["handoff_to_human"]}
+{"id": "h037", "message": "o entregador foi super educado, quero elogiar", "expected": ["feedback_submit"]}
+{"id": "h038", "message": "tem como usar o cupom NATAL15?", "expected": ["coupon_apply"]}
+{"id": "h039", "message": "me vê quais descontos eu posso usar", "expected": ["coupon_list"]}
+{"id": "h040", "message": "não quero mais e-mails de promoção", "expected": ["newsletter_unsubscribe"]}
+{"id": "h041", "message": "vê se tem horário quinta de manhã e já agenda o primeiro", "expected": ["schedule_list_slots", "schedule_book"]}
+{"id": "h042", "message": "tem esse fone preto? coloca no carrinho", "expected": ["shop_check_stock", "cart_add_item"]}
+{"id": "h043", "message": "meu pedido 5502 foi pago e já foi separado?", "expected": ["order_status", "payment_status"]}
+{"id": "h044", "message": "qual o prazo pra devolução? quero devolver a calça", "expected": ["policy_get", "order_request_return"]}
+{"id": "h045", "message": "me chama de Lu e pode me mandar as promoções", "expected": ["customer_save_preferences", "newsletter_subscribe"]}
+{"id": "h046", "message": "a que horas abrem e qual é meu horário amanhã?", "expected": ["business_hours", "schedule_get_bookings"]}
+{"id": "h047", "message": "e aí, beleza?", "expected": []}
+{"id": "h048", "message": "ótimo, obrigada pela ajuda", "expected": []}

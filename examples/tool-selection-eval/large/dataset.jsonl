@@ -1,0 +1,101 @@
+{"id": "d001", "message": "que horários tem pra manicure amanhã?", "expected": ["schedule_list_slots"]}
+{"id": "d002", "message": "tem vaga na quinta à tarde?", "expected": ["schedule_list_slots"]}
+{"id": "d003", "message": "pode marcar o corte pra sábado às 10h", "expected": ["schedule_book"]}
+{"id": "d004", "message": "quero agendar uma limpeza de pele dia 12 às 14h", "expected": ["schedule_book"]}
+{"id": "d005", "message": "preciso cancelar meu horário de amanhã", "expected": ["schedule_cancel"]}
+{"id": "d006", "message": "desmarca minha reserva de sexta por favor", "expected": ["schedule_cancel"]}
+{"id": "d007", "message": "dá pra passar meu horário de terça pra quarta?", "expected": ["schedule_reschedule"]}
+{"id": "d008", "message": "quero trocar o horário da massagem pra mais tarde", "expected": ["schedule_reschedule"]}
+{"id": "d009", "message": "que horas é meu agendamento mesmo?", "expected": ["schedule_get_bookings"]}
+{"id": "d010", "message": "quais reservas eu tenho essa semana?", "expected": ["schedule_get_bookings"]}
+{"id": "d011", "message": "se alguém desistir sábado me avisa?", "expected": ["schedule_join_waitlist"]}
+{"id": "d012", "message": "tá lotado, coloca meu nome na fila de espera", "expected": ["schedule_join_waitlist"]}
+{"id": "d013", "message": "vocês têm tênis de corrida?", "expected": ["shop_search_products"]}
+{"id": "d014", "message": "procuro uma mochila até 200 reais", "expected": ["shop_search_products"]}
+{"id": "d015", "message": "me fala mais sobre a jaqueta de couro, que tamanhos tem?", "expected": ["shop_get_product"]}
+{"id": "d016", "message": "o relógio azul é resistente à água?", "expected": ["shop_get_product"]}
+{"id": "d017", "message": "ainda tem o tênis 42 em estoque?", "expected": ["shop_check_stock"]}
+{"id": "d018", "message": "quantas unidades restam da camiseta preta M?", "expected": ["shop_check_stock"]}
+{"id": "d019", "message": "tem alguma promoção rolando hoje?", "expected": ["shop_get_promotions"]}
+{"id": "d020", "message": "quais ofertas vocês têm essa semana?", "expected": ["shop_get_promotions"]}
+{"id": "d021", "message": "coloca duas camisetas no meu carrinho", "expected": ["cart_add_item"]}
+{"id": "d022", "message": "adiciona o fone bluetooth ao carrinho", "expected": ["cart_add_item"]}
+{"id": "d023", "message": "tira a mochila do carrinho", "expected": ["cart_remove_item"]}
+{"id": "d024", "message": "não quero mais o boné, remove", "expected": ["cart_remove_item"]}
+{"id": "d025", "message": "o que tem no meu carrinho?", "expected": ["cart_view"]}
+{"id": "d026", "message": "quanto deu o total do carrinho até agora?", "expected": ["cart_view"]}
+{"id": "d027", "message": "pode fechar o pedido, entrega na minha casa e pago no cartão", "expected": ["order_checkout"]}
+{"id": "d028", "message": "finaliza a compra com pix", "expected": ["order_checkout"]}
+{"id": "d029", "message": "como está meu pedido 4821?", "expected": ["order_status"]}
+{"id": "d030", "message": "já separaram o que eu comprei ontem?", "expected": ["order_status"]}
+{"id": "d031", "message": "quero cancelar o pedido 3310 antes de enviar", "expected": ["order_cancel"]}
+{"id": "d032", "message": "me arrependi, cancela a compra de hoje", "expected": ["order_cancel"]}
+{"id": "d033", "message": "onde está minha encomenda?", "expected": ["order_track_shipping"]}
+{"id": "d034", "message": "qual a previsão de entrega do pedido 5502?", "expected": ["order_track_shipping"]}
+{"id": "d035", "message": "o tênis veio pequeno, quero trocar", "expected": ["order_request_return"]}
+{"id": "d036", "message": "chegou com defeito, quero devolver o produto", "expected": ["order_request_return"]}
+{"id": "d037", "message": "aceitam cartão em quantas vezes?", "expected": ["payment_get_methods"]}
+{"id": "d038", "message": "quais formas de pagamento vocês têm?", "expected": ["payment_get_methods"]}
+{"id": "d039", "message": "me manda o link pra pagar", "expected": ["payment_send_link"]}
+{"id": "d040", "message": "gera o link de pagamento do pedido 4821", "expected": ["payment_send_link"]}
+{"id": "d041", "message": "paguei no pix, já caiu?", "expected": ["payment_status"]}
+{"id": "d042", "message": "meu pagamento foi aprovado?", "expected": ["payment_status"]}
+{"id": "d043", "message": "preciso da nota fiscal da minha compra", "expected": ["invoice_send"]}
+{"id": "d044", "message": "pode mandar o comprovante do serviço?", "expected": ["invoice_send"]}
+{"id": "d045", "message": "e o meu reembolso, quando cai?", "expected": ["refund_status"]}
+{"id": "d046", "message": "já devolveram o dinheiro do pedido cancelado?", "expected": ["refund_status"]}
+{"id": "d047", "message": "quais dados vocês têm cadastrados meus?", "expected": ["customer_get_profile"]}
+{"id": "d048", "message": "me mostra meu cadastro", "expected": ["customer_get_profile"]}
+{"id": "d049", "message": "mudei de número, o novo é 11 98888-7777", "expected": ["customer_update_contact"]}
+{"id": "d050", "message": "atualiza meu e-mail para ana@exemplo.com", "expected": ["customer_update_contact"]}
+{"id": "d051", "message": "me chama de Duda, tá?", "expected": ["customer_save_preferences"]}
+{"id": "d052", "message": "prefiro ser atendida de manhã e por mensagem de texto", "expected": ["customer_save_preferences"]}
+{"id": "d053", "message": "quantos pontos eu tenho?", "expected": ["customer_loyalty_points"]}
+{"id": "d054", "message": "dá pra trocar meus pontos por algum prêmio?", "expected": ["customer_loyalty_points"]}
+{"id": "d055", "message": "quero que apaguem meus dados pessoais", "expected": ["customer_delete_data"]}
+{"id": "d056", "message": "pela LGPD, exclui tudo que vocês guardam de mim", "expected": ["customer_delete_data"]}
+{"id": "d057", "message": "até que horas vocês abrem hoje?", "expected": ["business_hours"]}
+{"id": "d058", "message": "abrem no feriado de segunda?", "expected": ["business_hours"]}
+{"id": "d059", "message": "qual o endereço de vocês?", "expected": ["business_location"]}
+{"id": "d060", "message": "tem estacionamento aí perto?", "expected": ["business_location"]}
+{"id": "d061", "message": "qual o telefone da loja?", "expected": ["business_contact"]}
+{"id": "d062", "message": "vocês têm instagram?", "expected": ["business_contact"]}
+{"id": "d063", "message": "vocês fazem embalagem para presente?", "expected": ["faq_search"]}
+{"id": "d064", "message": "como funciona o programa de indicação?", "expected": ["faq_search"]}
+{"id": "d065", "message": "qual a política de troca?", "expected": ["policy_get"]}
+{"id": "d066", "message": "com quantas horas de antecedência posso cancelar sem multa?", "expected": ["policy_get"]}
+{"id": "d067", "message": "o site travou na hora de pagar, abre um chamado", "expected": ["support_open_ticket"]}
+{"id": "d068", "message": "recebi o produto errado e preciso de ajuda da equipe", "expected": ["support_open_ticket"]}
+{"id": "d069", "message": "e aquele chamado que abri semana passada?", "expected": ["support_ticket_status"]}
+{"id": "d070", "message": "tem novidade do protocolo 778?", "expected": ["support_ticket_status"]}
+{"id": "d071", "message": "quero falar com uma pessoa", "expected": ["handoff_to_human"]}
+{"id": "d072", "message": "me passa pra um atendente", "expected": ["handoff_to_human"]}
+{"id": "d073", "message": "adorei o atendimento, nota 10", "expected": ["feedback_submit"]}
+{"id": "d074", "message": "queria deixar uma sugestão sobre o site", "expected": ["feedback_submit"]}
+{"id": "d075", "message": "tenho o cupom BEMVINDO10, aplica aí", "expected": ["coupon_apply"]}
+{"id": "d076", "message": "usa o código PRIMEIRA no meu pedido", "expected": ["coupon_apply"]}
+{"id": "d077", "message": "tenho algum cupom disponível?", "expected": ["coupon_list"]}
+{"id": "d078", "message": "quais cupons posso usar?", "expected": ["coupon_list"]}
+{"id": "d079", "message": "quero receber as novidades de vocês", "expected": ["newsletter_subscribe"]}
+{"id": "d080", "message": "me inscreve nas ofertas por mensagem", "expected": ["newsletter_subscribe"]}
+{"id": "d081", "message": "para de me mandar propaganda", "expected": ["newsletter_unsubscribe"]}
+{"id": "d082", "message": "quero sair da lista de ofertas", "expected": ["newsletter_unsubscribe"]}
+{"id": "d083", "message": "tem vaga sexta? se tiver, marca às 10h", "expected": ["schedule_list_slots", "schedule_book"]}
+{"id": "d084", "message": "cancela meu horário e me diz o que tem livre amanhã", "expected": ["schedule_cancel", "schedule_list_slots"]}
+{"id": "d085", "message": "até que horas abre e onde fica?", "expected": ["business_hours", "business_location"]}
+{"id": "d086", "message": "se tiver o tênis 40 em estoque, já coloca no carrinho", "expected": ["shop_check_stock", "cart_add_item"]}
+{"id": "d087", "message": "mostra meu carrinho e aplica o cupom FRETE10", "expected": ["cart_view", "coupon_apply"]}
+{"id": "d088", "message": "como está o pedido 4821 e onde está a entrega?", "expected": ["order_status", "order_track_shipping"]}
+{"id": "d089", "message": "quais formas de pagamento e cupons eu tenho?", "expected": ["payment_get_methods", "coupon_list"]}
+{"id": "d090", "message": "sou a Marina e quero marcar corte sábado às 9h", "expected": ["customer_save_preferences", "schedule_book"]}
+{"id": "d091", "message": "devolvi o casaco, e o reembolso quando sai?", "expected": ["order_request_return", "refund_status"]}
+{"id": "d092", "message": "troca meu e-mail pra bia@exemplo.com e me inscreve nas novidades", "expected": ["customer_update_contact", "newsletter_subscribe"]}
+{"id": "d093", "message": "o app errou minha cobrança, abre chamado e chama um atendente", "expected": ["support_open_ticket", "handoff_to_human"]}
+{"id": "d094", "message": "tem promoção de tênis?", "expected": ["shop_get_promotions", "shop_search_products"]}
+{"id": "d095", "message": "cancela o pedido 3310 e me fala quando devolvem o valor", "expected": ["order_cancel", "refund_status"]}
+{"id": "d096", "message": "meu pix caiu? se sim manda a nota", "expected": ["payment_status", "invoice_send"]}
+{"id": "d097", "message": "oi, tudo bem?", "expected": []}
+{"id": "d098", "message": "obrigado, era só isso!", "expected": []}
+{"id": "d099", "message": "kkkk que legal", "expected": []}
+{"id": "d100", "message": "bom dia", "expected": []}
+{"id": "d101", "message": "valeu, até mais", "expected": []}

@@ -54,7 +54,7 @@ from conversation_agent.engine.tool_selection import (
     estimate_tokens,
     reduce_catalog,
 )
-from conversation_agent.ports.tool_selector import ToolSelector
+from conversation_agent.ports.tool_selector import ToolScore, ToolSelector
 
 
 @dataclass(frozen=True)
@@ -85,6 +85,7 @@ class Report:
     fallback_rate: float  # share of examples that got the full list
     tools_removed: float  # mean share of the catalog removed
     tokens_removed: float  # mean share of the (estimated) tool tokens removed
+    tools_kept: float  # mean number of tools shown to the model
     catalog_tools: int
     catalog_tokens: int
     per_tool_recall: dict[str, float]
@@ -242,11 +243,51 @@ async def evaluate(
         fallback_rate=sum(r.mode == "full" for r in rows) / n,
         tools_removed=sum(removed_tools) / n,
         tokens_removed=sum(removed_tokens) / n,
+        tools_kept=sum(len(r.shown) for r in rows) / n,
         catalog_tools=len(catalog),
         catalog_tokens=total_tokens,
         per_tool_recall={k: v[0] / v[1] for k, v in sorted(seen.items())},
         rows=rows,
     )
+
+
+class MemoSelector:
+    """Remembers each answer so a sweep over `min_score` asks the provider once per message."""
+
+    def __init__(self, inner: ToolSelector) -> None:
+        self._inner = inner
+        self._seen: dict[str, list[ToolScore]] = {}
+
+    async def rank(
+        self, message: str, candidates: tuple[LLMToolDefinition, ...], *, tenant_id: str
+    ) -> list[ToolScore]:
+        if message not in self._seen:
+            self._seen[message] = await self._inner.rank(message, candidates, tenant_id=tenant_id)
+        return self._seen[message]
+
+
+async def sweep(
+    selector: ToolSelector,
+    catalog: tuple[LLMToolDefinition, ...],
+    examples: list[Example],
+    settings: ToolSelectionSettings,
+    min_scores: list[float],
+) -> list[tuple[float, Report]]:
+    memo = MemoSelector(selector)
+    return [
+        (ms, await evaluate(memo, catalog, examples, settings.model_copy(update={"min_score": ms})))
+        for ms in min_scores
+    ]
+
+
+def render_sweep(results: list[tuple[float, Report]]) -> str:
+    lines = ["min_score   hit rate   recall   fallback   shown (mean)   tools removed"]
+    for ms, r in results:
+        lines.append(
+            f"{ms:9.2f}  {pct(r.hit_rate)}  {pct(r.tool_recall)}  {pct(r.fallback_rate)}  "
+            f"{r.tools_kept:12.2f}  {pct(r.tools_removed)}"
+        )
+    return "\n".join(lines)
 
 
 def pct(x: float) -> str:
@@ -263,6 +304,7 @@ def render(report: Report) -> str:
         f"fallback rate (full list sent): {pct(report.fallback_rate)}",
         f"saving: tools removed {pct(report.tools_removed)}, "
         f"tokens removed {pct(report.tokens_removed)}",
+        f"tools shown to the model (mean): {report.tools_kept:.2f} of {report.catalog_tools}",
         "per-tool recall:",
         *[f"  {name:<24}{pct(r)}" for name, r in report.per_tool_recall.items()],
     ]
@@ -285,6 +327,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--token-env", help="env var holding a bearer token for the server")
     parser.add_argument("--top-n", type=int, default=ToolSelectionSettings().top_n)
     parser.add_argument("--min-score", type=float, default=ToolSelectionSettings().min_score)
+    parser.add_argument(
+        "--sweep",
+        help="comma-separated min_score values (e.g. 0.05,0.1,0.15,0.25): one provider call per "
+        "message, one table row per value",
+    )
     parser.add_argument("--json", type=Path, help="also write the full report here")
     parser.add_argument("--min-hit-rate", type=float, help="exit 1 below this hit rate")
     args = parser.parse_args(argv)
@@ -302,6 +349,10 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
     )
     settings = ToolSelectionSettings(top_n=args.top_n, min_score=args.min_score)
+    if args.sweep:
+        values = [float(v) for v in args.sweep.split(",")]
+        print(render_sweep(asyncio.run(sweep(selector, catalog, examples, settings, values))))
+        return 0
     report = asyncio.run(evaluate(selector, catalog, examples, settings))
     print(render(report))
     if args.json:

@@ -1,0 +1,581 @@
+[
+  {
+    "name": "schedule_list_slots",
+    "description": "Lista horários livres de um serviço em um dia ou período. Use antes de marcar ou quando perguntarem o que há disponível.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "date_from": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "date_from"
+      ]
+    }
+  },
+  {
+    "name": "schedule_book",
+    "description": "Cria uma reserva para a pessoa em um serviço, data e horário já escolhidos.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        },
+        "time": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "date",
+        "time"
+      ]
+    }
+  },
+  {
+    "name": "schedule_cancel",
+    "description": "Cancela uma reserva existente da pessoa.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "booking_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "booking_id"
+      ]
+    }
+  },
+  {
+    "name": "schedule_reschedule",
+    "description": "Move uma reserva existente para outra data ou horário.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "booking_id": {
+          "type": "string"
+        },
+        "new_date": {
+          "type": "string"
+        },
+        "new_time": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "booking_id",
+        "new_date",
+        "new_time"
+      ]
+    }
+  },
+  {
+    "name": "schedule_get_bookings",
+    "description": "Consulta as reservas futuras da pessoa: data, horário, serviço e status.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "schedule_join_waitlist",
+    "description": "Coloca a pessoa na lista de espera de um horário já lotado e avisa se abrir vaga.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "date"
+      ]
+    }
+  },
+  {
+    "name": "shop_search_products",
+    "description": "Busca produtos da loja por palavra-chave, categoria ou faixa de preço.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "shop_get_product",
+    "description": "Mostra detalhes de um produto: descrição, tamanhos, cores, avaliações.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "product_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_id"
+      ]
+    }
+  },
+  {
+    "name": "shop_check_stock",
+    "description": "Informa se um produto, tamanho ou cor está em estoque e quantas unidades restam.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "product_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_id"
+      ]
+    }
+  },
+  {
+    "name": "shop_get_promotions",
+    "description": "Lista as promoções e ofertas ativas hoje na loja.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "cart_add_item",
+    "description": "Adiciona um produto ao carrinho da pessoa.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "product_id": {
+          "type": "string"
+        },
+        "quantity": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_id",
+        "quantity"
+      ]
+    }
+  },
+  {
+    "name": "cart_remove_item",
+    "description": "Remove um produto do carrinho da pessoa.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "product_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "product_id"
+      ]
+    }
+  },
+  {
+    "name": "cart_view",
+    "description": "Mostra o conteúdo atual do carrinho e o total.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "order_checkout",
+    "description": "Fecha o pedido com os itens do carrinho, endereço de entrega e forma de pagamento.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "address": {
+          "type": "string"
+        },
+        "payment_method": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "address",
+        "payment_method"
+      ]
+    }
+  },
+  {
+    "name": "order_status",
+    "description": "Consulta o andamento de um pedido já feito (separação, enviado, entregue).",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "order_cancel",
+    "description": "Cancela um pedido que ainda não foi enviado.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "order_track_shipping",
+    "description": "Mostra onde está a encomenda e a previsão de entrega pelo código de rastreio.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "order_request_return",
+    "description": "Abre troca ou devolução de um item já recebido.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id",
+        "reason"
+      ]
+    }
+  },
+  {
+    "name": "payment_get_methods",
+    "description": "Lista as formas de pagamento aceitas, parcelamento e descontos por forma.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "payment_send_link",
+    "description": "Gera e envia um link de pagamento para um pedido ou reserva em aberto.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "payment_status",
+    "description": "Confirma se um pagamento foi recebido, está pendente ou falhou.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "invoice_send",
+    "description": "Envia a nota fiscal ou o comprovante de um pedido ou serviço por mensagem.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "refund_status",
+    "description": "Informa o andamento e o prazo de um reembolso solicitado.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "order_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "order_id"
+      ]
+    }
+  },
+  {
+    "name": "customer_get_profile",
+    "description": "Mostra os dados cadastrados da pessoa: nome, contato e endereço.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "customer_update_contact",
+    "description": "Atualiza telefone, e-mail ou endereço cadastrados da pessoa.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string"
+        },
+        "value": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "field",
+        "value"
+      ]
+    }
+  },
+  {
+    "name": "customer_save_preferences",
+    "description": "Guarda nome, apelido ou preferências que a pessoa disser sobre si, para atendimentos futuros.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "preferences": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "preferences"
+      ]
+    }
+  },
+  {
+    "name": "customer_loyalty_points",
+    "description": "Consulta o saldo de pontos do programa de fidelidade e os prêmios disponíveis.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "customer_delete_data",
+    "description": "Registra o pedido da pessoa de apagar seus dados pessoais (LGPD).",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "business_hours",
+    "description": "Informa os horários de funcionamento, feriados e exceções.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "business_location",
+    "description": "Informa o endereço, como chegar e se há estacionamento.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "business_contact",
+    "description": "Informa telefone, e-mail e redes sociais para contato.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "faq_search",
+    "description": "Busca respostas em perguntas frequentes sobre o funcionamento geral do negócio.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "query": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ]
+    }
+  },
+  {
+    "name": "policy_get",
+    "description": "Informa as políticas escritas: cancelamento, troca, devolução, garantia e privacidade.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "topic"
+      ]
+    }
+  },
+  {
+    "name": "support_open_ticket",
+    "description": "Abre um chamado de suporte para um problema que exige análise da equipe.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "subject": {
+          "type": "string"
+        },
+        "details": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "subject",
+        "details"
+      ]
+    }
+  },
+  {
+    "name": "support_ticket_status",
+    "description": "Consulta o andamento de um chamado de suporte aberto antes.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "ticket_id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ticket_id"
+      ]
+    }
+  },
+  {
+    "name": "handoff_to_human",
+    "description": "Passa a conversa para um atendente humano quando a pessoa pede ou o caso é sensível.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "feedback_submit",
+    "description": "Registra elogio, sugestão ou avaliação da pessoa sobre o atendimento ou produto.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "rating": {
+          "type": "string"
+        },
+        "comment": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "rating",
+        "comment"
+      ]
+    }
+  },
+  {
+    "name": "coupon_apply",
+    "description": "Aplica um cupom de desconto ao carrinho ou pedido.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "code"
+      ]
+    }
+  },
+  {
+    "name": "coupon_list",
+    "description": "Lista os cupons disponíveis para a pessoa e as regras de uso.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "newsletter_subscribe",
+    "description": "Inscreve a pessoa para receber novidades e ofertas.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  },
+  {
+    "name": "newsletter_unsubscribe",
+    "description": "Cancela o recebimento de novidades e ofertas.",
+    "input_schema": {
+      "type": "object",
+      "properties": {},
+      "required": []
+    }
+  }
+]
