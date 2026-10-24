@@ -33,7 +33,7 @@ def display_value(value: Any, timezone: str | None) -> str:
 
 
 def _item(item: Any, timezone: str | None) -> str:
-    """A list item on one line: an object as 'key: value, ...' (empty fields left out), a list as '(a, b)'."""
+    """One line per item: an object as 'key: value, ...' without empty fields, a list as '(a, b)'."""
     if isinstance(item, dict) and "media_id" not in item:
         parts = [f"{k}: {_item(v, timezone)}" for k, v in item.items() if v not in (None, "", [])]
         return ", ".join(parts)
