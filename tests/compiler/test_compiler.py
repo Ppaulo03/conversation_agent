@@ -745,3 +745,23 @@ def test_an_argument_no_binding_produces_may_stay_unsent() -> None:
     m = raw()
     tool(m, "erp_get_available_slots")["input"]["unused"] = {"type": "string", "required": False}
     assert compile_manifest(m).digest  # nothing can fill it, so nothing is lost
+
+
+# --- contact memory (opt-in) ---
+
+
+def test_an_agent_without_a_memory_block_keeps_nothing_and_its_digest_does_not_change() -> None:
+    plain = load_compiled_agent()
+    assert plain.agent.memory is None
+    with_memory = compile_manifest({**raw(), "memory": {}})
+    assert with_memory.agent.memory is not None
+    assert with_memory.digest != plain.digest
+
+
+def test_the_memory_block_has_defaults_and_bounds() -> None:
+    settings = compile_manifest({**raw(), "memory": {}}).agent.memory
+    assert settings is not None
+    assert (settings.max_facts, settings.max_fact_chars, settings.max_name_chars) == (20, 200, 60)
+    assert settings.limits().max_facts == 20
+    for bad in ({"max_facts": 0}, {"max_facts": 101}, {"max_fact_chars": 1001}, {"extra": 1}):
+        assert "MANIFEST_INVALID" in codes_of({**raw(), "memory": bad})

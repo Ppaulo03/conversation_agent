@@ -20,6 +20,7 @@ from conversation_agent.core.definitions.agent import (
 from conversation_agent.core.definitions.binding import CapabilityBinding
 from conversation_agent.core.definitions.capability import CapabilityDefinition, Risk
 from conversation_agent.core.definitions.flow import FlowDefinition
+from conversation_agent.core.definitions.memory import MemorySettings
 from conversation_agent.core.definitions.pack import PackLock, PackUse
 from conversation_agent.core.definitions.schema_spec import ModelSpec, build_model
 from conversation_agent.core.definitions.tool import (
@@ -90,6 +91,7 @@ class AgentManifest(_Strict):
     budget_exceeded_reply: str | None = None
     transcription: Literal["off", "on"] = "off"
     tool_selection: ToolSelectionSettings | None = None
+    memory: MemorySettings | None = None
     cancelled_after_effect_reply: str | None = None  # None: the framework default
     # Packs to install (input) and what was installed (provenance, set by the compiler). The
     # runtime never reads either: installation turns Pack content into ordinary definitions.
@@ -150,6 +152,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         extra["transcription"] = manifest.transcription
     if manifest.tool_selection is not None:
         extra["tool_selection"] = manifest.tool_selection
+    if manifest.memory is not None:
+        extra["memory"] = manifest.memory
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply
     return AgentDefinition(

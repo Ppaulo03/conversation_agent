@@ -5,6 +5,14 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ## Unreleased
 
+### Added
+
+- **Contact memory store (ADR-032, INV-081)**: a `ContactMemory` port, `InMemoryContactMemory`,
+  `PostgresContactMemory` and migration `0026_contact_profiles` keep a display name and short facts per
+  `(tenant_id, contact_id)`, independent of any conversation. New optional `memory` block in the manifest and
+  `AgentDefinition.memory` (`max_facts`, `max_fact_chars`, `max_name_chars`); without it the digest does not change.
+  This increment only adds the store: nothing reads or writes it yet, so existing agents are unaffected.
+
 ## 0.5.0 - 2026-10-24
 
 ### Added

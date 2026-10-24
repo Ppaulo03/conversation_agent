@@ -14,6 +14,7 @@ from conversation_agent.core.definitions.binding import CapabilityBinding, Resol
 from conversation_agent.core.definitions.capability import RISK_ORDER, CapabilityDefinition
 from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Invoke, Propose
 from conversation_agent.core.definitions.media_args import media_fields
+from conversation_agent.core.definitions.memory import MemorySettings
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.definitions.tool_selection import ToolSelectionSettings
@@ -127,6 +128,8 @@ class AgentDefinition(BaseModel):
     transcription: Literal["off", "on"] = "off"
     # None: the model always sees every allowed tool (and the digest of old agents is unchanged).
     tool_selection: ToolSelectionSettings | None = None
+    # None: the agent keeps nothing about a contact beyond the conversation itself.
+    memory: MemorySettings | None = None
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
