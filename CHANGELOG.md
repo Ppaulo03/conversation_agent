@@ -7,6 +7,13 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ### Added
 
+- **Tool selection `http` provider (ADR-029)**: an optional external ranking server, reached through a
+  pre-registered tenant connection with the same outbound guards as tools; versioned contract in
+  `docs/TOOL_SELECTOR_CONTRACT.md`, reference server in `examples/reference-tool-selector/`, and
+  `--provider http --url ...` in the evaluation runner. `ToolSelector.rank` now takes `tenant_id`;
+  pass `tool_selection_guard=` to `Runtime.build`/`build_memory_engine` (or `guard=` to
+  `tool_selector_for`) when an agent uses it. Any failure sends the model the full list.
+
 - **Tool selection evaluation**: `python -m conversation_agent.app.tool_selection_eval` measures any `ToolSelector`
   (`rules` or `package.module:factory`) over a labelled JSONL dataset: hit rate, per-tool recall, fallback rate and
   tools/tokens removed. `examples/tool-selection-eval/` ships an 8-tool catalog, 51 + 16 Portuguese messages and rules.

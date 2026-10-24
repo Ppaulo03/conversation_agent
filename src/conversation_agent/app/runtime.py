@@ -32,6 +32,7 @@ from conversation_agent.adapters.postgres.outbox import PostgresOutboxStore
 from conversation_agent.adapters.postgres.scheduler import PostgresScheduler
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
 from conversation_agent.adapters.tool_selection.factory import tool_selector_for
+from conversation_agent.adapters.tools.guard import GuardedTransport
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import FenceToken, InboundEvent
@@ -106,6 +107,7 @@ class Runtime:
         debounce_max_wait: timedelta = timedelta(seconds=10),
         restart_on_new_message: bool = False,
         llm_gate: LLMCallGate | None = None,
+        tool_selection_guard: GuardedTransport | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -157,6 +159,7 @@ class Runtime:
             compiled, policy or PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
         )
 
+        selector = tool_selector_for(agent, guard=tool_selection_guard)
         selection_monitor = None
         if agent.tool_selection is not None and agent.tool_selection.enabled:
             selection_monitor = SelectionMonitor(  # shared: an engine lives for one turn only
@@ -186,7 +189,7 @@ class Runtime:
                 transcriber=transcriber,
                 llm_gate=llm_gate,
                 tenant_id=fence.tenant_id if llm_gate is not None else None,
-                tool_selector=tool_selector_for(agent),
+                tool_selector=selector,
                 selection_monitor=selection_monitor,
             )
             engine.attach_confirmation(

@@ -9,6 +9,7 @@ from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
 from conversation_agent.adapters.tool_selection.factory import tool_selector_for
+from conversation_agent.adapters.tools.guard import GuardedTransport
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.compiler import CompiledAgent, compile_agent, compile_manifest
 from conversation_agent.core.definitions.agent import AgentDefinition
@@ -65,6 +66,7 @@ def build_engine(
     tenant_id: str | None = None,
     tool_selector: ToolSelector | None = None,
     selection_monitor: SelectionMonitor | None = None,
+    tool_selection_guard: GuardedTransport | None = None,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
@@ -83,7 +85,7 @@ def build_engine(
         transcriber=transcriber,
         llm_gate=llm_gate,
         tenant_id=tenant_id,
-        tool_selector=tool_selector or tool_selector_for(agent),
+        tool_selector=tool_selector or tool_selector_for(agent, guard=tool_selection_guard),
         selection_monitor=selection_monitor,
     )
     return engine, agent, http

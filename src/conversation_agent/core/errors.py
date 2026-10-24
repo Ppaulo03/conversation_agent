@@ -124,3 +124,8 @@ class RegistryCompatibilityError(RegistryIntegrityError):
 class InvalidConnectionError(ConversationAgentError):
     """A connection exists but cannot be used (malformed URL/port): a configuration error that
     must surface as a canonical pre-I/O result, never as a raw exception in a turn."""
+
+
+class ToolSelectorError(ConversationAgentError):
+    """A tool selector could not rank the tools (unreachable, refused, invalid answer). The engine
+    treats it as "send the full list"; the message never contains a secret or the user's text."""

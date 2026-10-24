@@ -23,11 +23,30 @@ class ToolRule(BaseModel):
     keywords: tuple[str, ...] = Field(min_length=1)
 
 
+class HttpSelectorSettings(BaseModel):
+    """`http` provider: an external ranking server, reached through a pre-registered per-tenant
+    CONNECTION (URL, host allowlist, TLS policy and the credential's secret reference all belong to
+    the operator, as for tools); the manifest only names the connection. Wire contract: ADR-029
+    and `docs/TOOL_SELECTOR_CONTRACT.md`. The user's message text is sent to that server."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    connection: str
+    path: str = "/tool-selection"
+    timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)  # capped by the connection
+
+    @model_validator(mode="after")
+    def _path_is_only_a_path(self) -> HttpSelectorSettings:
+        if not self.path.startswith("/") or any(c in self.path for c in "?#") or ".." in self.path:
+            raise ValueError("http.path must be an absolute path without query, fragment or '..'")
+        return self
+
+
 class ToolSelectionSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
-    provider: Literal["none", "rules"] = "none"
+    provider: Literal["none", "rules", "http"] = "none"
     # Triggers. Selection runs when ANY configured limit is exceeded; with none configured, never.
     max_tools_per_call: int | None = Field(default=None, ge=1)
     max_tool_tokens: int | None = Field(default=None, ge=1)  # estimated, see `estimate_tokens`
@@ -40,6 +59,7 @@ class ToolSelectionSettings(BaseModel):
     # Above this share of fallbacks (over the recent window) the filter switches itself off.
     max_fallback_rate: float | None = Field(default=None, gt=0.0, le=1.0)
     rules: tuple[ToolRule, ...] = ()
+    http: HttpSelectorSettings | None = None
 
     @model_validator(mode="after")
     def _coherent(self) -> ToolSelectionSettings:
@@ -49,6 +69,10 @@ class ToolSelectionSettings(BaseModel):
             raise ValueError("tool_selection is enabled but provider is 'none'")
         if self.provider == "rules" and self.enabled and not self.rules:
             raise ValueError("provider 'rules' needs at least one rule")
+        if self.provider == "http" and self.http is None:
+            raise ValueError("provider 'http' needs an http block (connection, path, timeout)")
+        if self.provider != "http" and self.http is not None:
+            raise ValueError("an http block needs provider 'http'")
         names = [r.capability for r in self.rules]
         if len(set(names)) != len(names):
             raise ValueError("duplicate capability in tool_selection.rules")
