@@ -8,6 +8,20 @@ Sending is a SYNCHRONOUS publish (pika) that returns once the broker confirmed i
         any other error               -> escapes: the framework records UNKNOWN (the broker may or
                                          may not have the message)
 
+A CONFIRMATION PROMPT (`message.action_id` set) also waits for the provider's receipt, because the
+runtime accepts a "yes" only if it was written after the platform accepted the question, on the
+platform's own clock (INV-022, INV-026):
+
+    publisher.send_message_and_wait_receipt(..., wait_seconds=N)
+        receipt ACCEPTED              -> ACCEPTED with provider_message_id and provider_accepted_at
+        receipt REJECTED              -> FAILED, not retryable (the platform refused it)
+        None (no receipt in time)     -> ACCEPTED with no provider clock: the broker has it, so the
+                                         message may well be delivered, but nothing can prove the
+                                         reply came after it and the runtime asks again
+
+Ordinary messages skip the wait: they gain nothing from it and a provider that publishes no receipts
+would otherwise cost `wait_seconds` per message.
+
 The Wyrm core does NOT dedupe outputs: the same `event_id` published twice is delivered twice. The
 channel therefore cannot honour the idempotency contract of `MessageSender`, and the only safe
 policy is `retry_horizon == 0`: a row is sent once and an ambiguous send is never repeated.
@@ -29,11 +43,13 @@ reported FAILED (the row ends UNKNOWN).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Mapping
 from concurrent.futures import ThreadPoolExecutor
 from datetime import timedelta
 from functools import partial
-from typing import Protocol
+from typing import Any, Protocol
 
+from conversation_agent.adapters.wyrm.inbound import parse_timestamp
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import OutboundMessage, OutboxStatus, SendResult
 
@@ -54,10 +70,23 @@ class WyrmPublish(Protocol):
         event_id: str | None = None,
     ) -> str: ...
 
+    def send_message_and_wait_receipt(
+        self,
+        provider_id: str,
+        chat_id: str,
+        text: str | None = None,
+        *,
+        event_id: str | None = None,
+        wait_seconds: float = ...,
+    ) -> Mapping[str, Any] | None: ...
+
 
 class WyrmSender:
-    def __init__(self, publisher: WyrmPublish) -> None:
+    """`receipt_wait_seconds`: how long a confirmation prompt waits for the provider receipt."""
+
+    def __init__(self, publisher: WyrmPublish, *, receipt_wait_seconds: float = 10.0) -> None:
         self._publisher = publisher
+        self._receipt_wait_seconds = receipt_wait_seconds
         self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="wyrm-publish")
 
     def close(self) -> None:
@@ -68,17 +97,38 @@ class WyrmSender:
         return DeliveryPolicy.no_retry(idempotency_retention=_RETENTION)
 
     async def send(self, message: OutboundMessage) -> SendResult:
-        try:
-            await asyncio.get_running_loop().run_in_executor(
-                self._executor,
-                partial(
-                    self._publisher.send_message,
-                    message.channel_id,  # the Wyrm provider_id
-                    message.contact_id,  # the Wyrm chat_id (see inbound.py)
-                    message.text,
-                    event_id=message.idempotency_key,  # stable per delivery (not a dedupe key here)
-                ),
+        address = (
+            message.channel_id,  # the Wyrm provider_id
+            message.contact_id,  # the Wyrm chat_id (see inbound.py)
+            message.text,
+        )
+        # stable per delivery (not a dedupe key here)
+        send = (
+            partial(
+                self._publisher.send_message_and_wait_receipt,
+                *address,
+                event_id=message.idempotency_key,
+                wait_seconds=self._receipt_wait_seconds,
             )
+            if message.action_id is not None
+            else partial(self._publisher.send_message, *address, event_id=message.idempotency_key)
+        )
+        try:
+            outcome = await asyncio.get_running_loop().run_in_executor(self._executor, send)
         except ValueError:
             return SendResult(status=OutboxStatus.FAILED, retryable=False)  # refused before I/O
-        return SendResult(status=OutboxStatus.ACCEPTED)  # provider_accepted_at stays None
+        if message.action_id is None or not isinstance(outcome, Mapping):
+            return SendResult(status=OutboxStatus.ACCEPTED)  # provider_accepted_at stays None
+        return _from_receipt(outcome)
+
+
+def _from_receipt(receipt: Mapping[str, Any]) -> SendResult:
+    if receipt.get("status") == "REJECTED":
+        return SendResult(status=OutboxStatus.FAILED, retryable=False)  # the platform refused it
+    message_id = receipt.get("provider_message_id")
+    return SendResult(
+        status=OutboxStatus.ACCEPTED,
+        provider_message_id=message_id if isinstance(message_id, str) and message_id else None,
+        # Only the platform's own clock counts, and only with a zone (INV-026).
+        provider_accepted_at=parse_timestamp(receipt.get("provider_timestamp"), require_zone=True),
+    )
