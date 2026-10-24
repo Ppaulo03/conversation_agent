@@ -268,7 +268,7 @@ instructions), and offers three tools next to your capabilities: `memory__set_na
 `memory__forget` (the `memory.` capability prefix is reserved). Identity is always the turn's. A text that does not
 fit is refused, never cut; a full memory answers `full` so the agent can offer to forget one. Tell the model *what*
 to keep in your persona; the framework only enforces the limits. `Runtime.build` stores it in PostgreSQL (migration
-`0026`); pass `contact_memory=` to use another `ContactMemory`.
+`0028`); pass `contact_memory=` to use another `ContactMemory`.
 
 The facts are personal data. Erasing a contact (`RetentionService.erase_contact`) removes the profile with them;
 `erase_contact(..., keep_profile=True)` erases only the conversations, which is what a "start over" command should do.
