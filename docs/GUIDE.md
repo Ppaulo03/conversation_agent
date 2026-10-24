@@ -241,6 +241,7 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | the contact's id in your API | `send_contact_id: true` on the CONNECTION (operator-side, off by default): sent as `X-Contact-Id` |
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
+| a reasoning model ends calls with no text (`max_tokens` stop, empty reply) | `max_output_tokens: 4096` on the agent: the cap of ONE model call, hidden thinking included (default 1024) |
 | remember the contact's name and a few facts across conversations | `memory:` block (see *Contact memory*) |
 
 Voice messages are transcribed when the agent says `transcription: on` AND you pass a `Transcriber`

@@ -7,10 +7,12 @@ import json
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
 
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.tools.fake import FakeToolProvider
 from conversation_agent.core.compiler import compile_agent
+from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import (
     LLMResponse,
@@ -175,6 +177,32 @@ async def test_the_token_budget_halts_the_turn_before_more_tools_run() -> None:
     assert outcome.halted == "token_budget"
     assert tools.calls == []  # the very first response already exceeded the budget (600 > 500)
     assert outcome.reply == build_agent().fallback_reply
+
+
+async def test_max_output_tokens_reaches_every_model_request_and_defaults_to_1024() -> None:
+    llm = FakeLLM([text_response("ok")])
+    engine, _ = engine_for(llm, PolicyGate(ALL))
+    await turn(engine)
+    assert llm.requests[0].max_tokens == 1024  # unset: the framework default
+
+    llm = FakeLLM([text_response("ok")])
+    engine, _ = engine_for(llm, PolicyGate(ALL), max_output_tokens=4096)
+    await turn(engine)
+    assert llm.requests[0].max_tokens == 4096
+
+
+def test_max_output_tokens_must_be_positive_and_leaves_the_digest_alone_when_unset() -> None:
+    base = build_agent()
+    assert (
+        compile_agent(base).digest
+        == compile_agent(base.model_copy(update={"max_output_tokens": None})).digest
+    )
+    assert (
+        compile_agent(base.model_copy(update={"max_output_tokens": 2048})).digest
+        != compile_agent(base).digest
+    )
+    with pytest.raises(ValidationError):
+        AgentDefinition.model_validate({**base.model_dump(), "max_output_tokens": 0})
 
 
 def test_oversized_tool_results_are_replaced_by_a_marker() -> None:

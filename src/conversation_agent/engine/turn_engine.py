@@ -609,6 +609,8 @@ class TurnEngine:
             tools=self._pipeline.exposed_tools() if tools is None else tools,
             structured_output=structured,
         )
+        if self._agent.max_output_tokens:  # unset: the request keeps its default cap
+            request = request.model_copy(update={"max_tokens": self._agent.max_output_tokens})
         request_hash = llm_request_hash(request)
         llm_request_id = stable_hash(turn_id, cursor.next_index, request_hash)[:32]
         # LLM_REQUEST is persisted *before* the external call (DESIGN §25.1).

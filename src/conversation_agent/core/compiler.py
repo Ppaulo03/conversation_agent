@@ -284,6 +284,8 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         "media": _media_document(agent),
         "max_media_bytes": agent.max_media_bytes,
     }
+    if agent.max_output_tokens is not None:  # only agents that set it carry it (stable digests)
+        document["max_output_tokens"] = agent.max_output_tokens
     if agent.split_replies:  # only agents that use it carry it (digests stay stable)
         document["split_replies"] = True
     if agent.transcription != "off":
