@@ -11,7 +11,9 @@ from conversation_agent.ports.tool_selector import ToolScore
 
 class RulesToolSelector:
     """Keyword relevance per tool (free, deterministic). A keyword matches from the start of a word
-    (so "horario" also finds "horarios"); a tool without a rule scores 0."""
+    (so "horario" also finds "horarios"). The score depends on how many keywords matched, not on
+    how many were declared, so a tool with a long list is not penalised; a tool without a rule
+    scores 0."""
 
     def __init__(self, rules: Iterable[ToolRule]) -> None:
         self._rules: dict[str, list[re.Pattern[str]]] = {}
@@ -32,5 +34,5 @@ class RulesToolSelector:
         for tool in candidates:
             patterns = self._rules.get(tool.name, [])
             hits = sum(1 for p in patterns if p.search(text))
-            scores.append(ToolScore(tool.name, hits / len(patterns) if patterns else 0.0))
+            scores.append(ToolScore(tool.name, 1 - 0.5**hits))  # 0 hits: 0; 1: 0.5; 2: 0.75
         return scores

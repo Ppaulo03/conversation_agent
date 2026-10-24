@@ -15,7 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 class ToolRule(BaseModel):
     """`rules` provider: a capability is relevant when the message contains any keyword (accent
     and case insensitive; matches from the start of a word, so plurals are found).
-    Score = matched keywords / declared keywords."""
+    Score = 1 - 0.5**matched keywords."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 

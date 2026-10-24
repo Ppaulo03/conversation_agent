@@ -7,6 +7,12 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ### Added
 
+- **Tool selection evaluation**: `python -m conversation_agent.app.tool_selection_eval` measures any `ToolSelector`
+  (`rules` or `package.module:factory`) over a labelled JSONL dataset: hit rate, per-tool recall, fallback rate and
+  tools/tokens removed. `examples/tool-selection-eval/` ships an 8-tool catalog, 51 + 16 Portuguese messages and rules.
+- The `rules` score is now `1 - 0.5**matched keywords` (it used matched/declared, which sank tools with long keyword
+  lists below `min_score`; found by the evaluation).
+
 - **Tool selection (ADR-028)**: `tool_selection` in the agent manifest shrinks the tool list the model sees once
   `max_tools_per_call` and/or `max_tool_tokens` is exceeded. Off by default; `rules` provider; never adds a tool;
   decision journaled (`TOOL_SELECTION`); fallback to the full list; metric `tool_selections_total`.

@@ -1,0 +1,176 @@
+[
+  {
+    "name": "agenda_list_availability",
+    "description": "Lista os horários livres de um serviço em um dia ou período. Use quando a pessoa perguntar o que há disponível, antes de marcar.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string",
+          "description": "nome do serviço"
+        },
+        "date_from": {
+          "type": "string",
+          "description": "AAAA-MM-DD"
+        },
+        "date_to": {
+          "type": "string",
+          "description": "AAAA-MM-DD, opcional"
+        }
+      },
+      "required": [
+        "service",
+        "date_from"
+      ]
+    }
+  },
+  {
+    "name": "agenda_get_booking",
+    "description": "Consulta as reservas futuras da pessoa: data, horário, serviço e status.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "booking_id": {
+          "type": "string",
+          "description": "opcional; sem ele lista as próximas"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "agenda_create_booking",
+    "description": "Cria uma reserva de um serviço em um horário livre. Só PREPARA: a pessoa confirma antes de gravar. Preencha só o que ela disse.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "service": {
+          "type": "string"
+        },
+        "date": {
+          "type": "string",
+          "description": "AAAA-MM-DD"
+        },
+        "time": {
+          "type": "string",
+          "description": "HH:MM"
+        },
+        "notes": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "service",
+        "date",
+        "time"
+      ]
+    }
+  },
+  {
+    "name": "agenda_cancel_booking",
+    "description": "Cancela uma reserva existente da pessoa. Só PREPARA: a pessoa confirma antes de cancelar.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "booking_id": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "booking_id"
+      ]
+    }
+  },
+  {
+    "name": "agenda_reschedule_booking",
+    "description": "Move uma reserva existente para outra data ou horário livre. Só PREPARA: a pessoa confirma antes.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "booking_id": {
+          "type": "string"
+        },
+        "new_date": {
+          "type": "string",
+          "description": "AAAA-MM-DD"
+        },
+        "new_time": {
+          "type": "string",
+          "description": "HH:MM"
+        }
+      },
+      "required": [
+        "booking_id",
+        "new_date",
+        "new_time"
+      ]
+    }
+  },
+  {
+    "name": "services_list",
+    "description": "Lista os serviços oferecidos com duração e preço. Use para perguntas sobre o que existe, quanto custa e quanto tempo leva.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "business_info",
+    "description": "Informações fixas do estabelecimento: endereço, como chegar, horário de funcionamento, telefone, formas de pagamento e estacionamento.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "topic": {
+          "type": "string",
+          "enum": [
+            "endereco",
+            "horario_funcionamento",
+            "pagamento",
+            "contato",
+            "estacionamento"
+          ]
+        }
+      },
+      "required": []
+    }
+  },
+  {
+    "name": "customer_save_preferences",
+    "description": "Memoriza um ou mais fatos duradouros que a pessoa contou sobre si (nome, preferência de profissional ou de horário, alergia), para conversas futuras. Inclua todos os fatos da mensagem numa só chamada; não use para o assunto só desta conversa.",
+    "input_schema": {
+      "type": "object",
+      "properties": {
+        "facts": {
+          "type": "array",
+          "minItems": 1,
+          "items": {
+            "type": "object",
+            "properties": {
+              "key": {
+                "type": "string"
+              },
+              "value": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "key",
+              "value"
+            ]
+          }
+        }
+      },
+      "required": [
+        "facts"
+      ]
+    }
+  }
+]

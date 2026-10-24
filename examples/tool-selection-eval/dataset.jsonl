@@ -1,0 +1,51 @@
+{"id": "m01", "message": "quais horários vocês têm amanhã pra corte?", "expected": ["agenda_list_availability"]}
+{"id": "m02", "message": "tem vaga sexta de manhã?", "expected": ["agenda_list_availability"]}
+{"id": "m03", "message": "o que tem livre essa semana pra massagem?", "expected": ["agenda_list_availability"]}
+{"id": "m04", "message": "tem horário disponível hoje à tarde?", "expected": ["agenda_list_availability"]}
+{"id": "m05", "message": "que dias tem vaga pra barba no sábado", "expected": ["agenda_list_availability"]}
+{"id": "m06", "message": "quando é a minha reserva?", "expected": ["agenda_get_booking"]}
+{"id": "m07", "message": "qual o horário que eu marquei?", "expected": ["agenda_get_booking"]}
+{"id": "m08", "message": "me mostra minhas reservas", "expected": ["agenda_get_booking"]}
+{"id": "m09", "message": "tenho algo agendado essa semana?", "expected": ["agenda_get_booking"]}
+{"id": "m10", "message": "quero marcar um corte amanhã às 15h", "expected": ["agenda_create_booking"]}
+{"id": "m11", "message": "agenda uma massagem pra mim sexta às 10:30", "expected": ["agenda_create_booking"]}
+{"id": "m12", "message": "pode marcar barba no sábado às 9h?", "expected": ["agenda_create_booking"]}
+{"id": "m13", "message": "preciso de um horário pra coloração terça 14h", "expected": ["agenda_create_booking"]}
+{"id": "m14", "message": "marca pra mim quinta às 16h, corte e barba", "expected": ["agenda_create_booking"]}
+{"id": "m15", "message": "cancela minha reserva de amanhã", "expected": ["agenda_cancel_booking"]}
+{"id": "m16", "message": "não vou poder ir, cancela por favor", "expected": ["agenda_cancel_booking"]}
+{"id": "m17", "message": "desmarca o horário de sexta", "expected": ["agenda_cancel_booking"]}
+{"id": "m18", "message": "quero cancelar a massagem", "expected": ["agenda_cancel_booking"]}
+{"id": "m19", "message": "muda meu horário de quinta pra sexta às 11h", "expected": ["agenda_reschedule_booking"]}
+{"id": "m20", "message": "preciso remarcar minha reserva para segunda de manhã", "expected": ["agenda_reschedule_booking"]}
+{"id": "m21", "message": "dá pra adiantar meu horário de hoje pra 14h?", "expected": ["agenda_reschedule_booking"]}
+{"id": "m22", "message": "troca o dia da minha reserva para o sábado", "expected": ["agenda_reschedule_booking"]}
+{"id": "m23", "message": "quais serviços vocês fazem?", "expected": ["services_list"]}
+{"id": "m24", "message": "quanto custa um corte?", "expected": ["services_list"]}
+{"id": "m25", "message": "quanto tempo demora a coloração?", "expected": ["services_list"]}
+{"id": "m26", "message": "qual o preço da massagem", "expected": ["services_list"]}
+{"id": "m27", "message": "vocês fazem hidratação?", "expected": ["services_list"]}
+{"id": "m28", "message": "onde fica a loja?", "expected": ["business_info"]}
+{"id": "m29", "message": "até que horas vocês abrem hoje?", "expected": ["business_info"]}
+{"id": "m30", "message": "vocês aceitam pix?", "expected": ["business_info"]}
+{"id": "m31", "message": "tem estacionamento aí?", "expected": ["business_info"]}
+{"id": "m32", "message": "qual o telefone de vocês", "expected": ["business_info"]}
+{"id": "m33", "message": "abre no domingo?", "expected": ["business_info"]}
+{"id": "m34", "message": "meu nome é Carlos", "expected": ["customer_save_preferences"]}
+{"id": "m35", "message": "prefiro ser atendido pela Marina", "expected": ["customer_save_preferences"]}
+{"id": "m36", "message": "sou alérgico a amônia, anota aí", "expected": ["customer_save_preferences"]}
+{"id": "m37", "message": "sempre prefiro horário depois das 18h", "expected": ["customer_save_preferences"]}
+{"id": "m38", "message": "oi", "expected": []}
+{"id": "m39", "message": "bom dia!", "expected": []}
+{"id": "m40", "message": "obrigado", "expected": []}
+{"id": "m41", "message": "quanto é 15% de 200?", "expected": []}
+{"id": "m42", "message": "me conta uma piada", "expected": []}
+{"id": "m43", "message": "tudo bem?", "expected": []}
+{"id": "m44", "message": "valeu, até mais", "expected": []}
+{"id": "m45", "message": "que dia é hoje?", "expected": []}
+{"id": "m46", "message": "tem vaga sexta? se tiver, marca às 10h", "expected": ["agenda_list_availability", "agenda_create_booking"]}
+{"id": "m47", "message": "cancela minha reserva e me diz o que mais tem livre amanhã", "expected": ["agenda_cancel_booking", "agenda_list_availability"]}
+{"id": "m48", "message": "quanto custa o corte e qual o endereço?", "expected": ["services_list", "business_info"]}
+{"id": "m49", "message": "sou o Pedro e quero marcar corte sábado às 9h", "expected": ["customer_save_preferences", "agenda_create_booking"]}
+{"id": "m50", "message": "qual meu horário de amanhã e tem estacionamento?", "expected": ["agenda_get_booking", "business_info"]}
+{"id": "m51", "message": "preciso remarcar, o que tem livre na terça?", "expected": ["agenda_reschedule_booking", "agenda_list_availability"]}
