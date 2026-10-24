@@ -350,6 +350,17 @@ With the 41-tool catalog (`examples/tool-selection-eval/large/`, 101 + 48 messag
 
 The misses are messages that need a second tool (the model answers one choice; the second gets a low share). A lower `min_score` (0.05) recovers them at a smaller saving, so it is the recommended value with this provider; the default 0.15 stays for the others. Small sets: compare providers with them, do not read the last digit.
 
+## ADR-032 — Contact memory: a profile per contact, in its own table
+Status: Accepted (store); the engine integration follows in the next increments
+Context: conversation state (history, proposals, flows, media) lives and dies with the conversation, so an agent forgets the contact's name and preferences as soon as the history window moves on or the conversation is reset. In a private chat conversation and contact coincide, but the framework serves any channel.
+Decision:
+1. A `ContactMemory` port and a `contact_profiles` table keyed by `(tenant_id, contact_id)`: a display name and a short list of facts (`f<n>`, the number only grows). It is NOT a field of `ConversationState`: it must survive a reset and be shared by the contact's conversations.
+2. Opt-in per agent through a `memory` block (`max_facts` 20, `max_fact_chars` 200, `max_name_chars` 60). No block: nothing is loaded, written or shown, and the digest is unchanged.
+3. Limits are enforced where the write happens and a text that does not fit is refused, never cut. A full memory refuses (`full`) instead of forgetting the oldest fact: the contact is told and decides.
+4. Both adapters share one normalization (`core/contact_text.py`): one line, spaces collapsed, no control characters. The PostgreSQL adapter serializes per contact with the row lock and uses the database clock.
+Alternatives: a field in `ConversationState` (dies with the conversation); evicting the oldest fact when full (silent data loss); a free-form text blob (no limits per fact, no way to forget one).
+Consequences: erasing a contact must also remove the profile, and a conversation reset must be able to keep it; both are the next increments, together with the prompt block and the three memory capabilities. The facts are personal data: they never go to logs, metrics or the journal as text.
+
 ---
 
 ## Questões em aberto (não são decisões)
