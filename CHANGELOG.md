@@ -16,6 +16,8 @@ What changed for an application that embeds the framework. Internal detail lives
   `Runtime.build`, `build_memory_engine` and `TurnEngine` take `contact_memory=` (PostgreSQL by default in
   `Runtime.build`); a `memory.` capability prefix is reserved for those agents. Agents without the block are
   unaffected.
+  `RetentionService.erase_contact` also removes the profile and takes `keep_profile=True` to erase only the
+  conversations (a reset); `RetentionPolicy.memory_days` (default `None`, never) expires profiles (INV-083).
 
 ## 0.5.0 - 2026-10-24
 

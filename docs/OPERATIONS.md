@@ -244,7 +244,9 @@ work starts, and the rollout order around it.
 an unfinished external effect, an undelivered message or a pending confirmation is in motion, and says
 which; `force` cancels only undelivered messages and pending confirmations. What other guarantees need
 stays as a content-free tombstone (dedupe, idempotency, ledger). The audit trail records who and what
-counts, never the person or the content.
+counts, never the person or the content. The name and facts an agent remembers (contact memory) are erased with the
+contact; `keep_profile=True` erases only the conversations (a reset), and `RetentionPolicy.memory_days` expires
+profiles that have not changed for that long (off by default).
 
 ## Backup and disaster recovery
 

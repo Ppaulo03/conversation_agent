@@ -241,6 +241,7 @@ Without `reprompt_unproven`, `reprompt` is used for both cases. The reason is al
 | the contact's id in your API | `send_contact_id: true` on the CONNECTION (operator-side, off by default): sent as `X-Contact-Id` |
 | other languages for media and confirmations | `media:` and `confirmation:` texts |
 | limits on cost and size | `max_tokens_per_turn`, `max_media_bytes`, LLM budgets |
+| remember the contact's name and a few facts across conversations | `memory:` block (see *Contact memory*) |
 
 Voice messages are transcribed when the agent says `transcription: on` AND you pass a `Transcriber`
 (`transcriber=` to `Runtime.build`; see *Voice messages*); images, video and documents are named to the
@@ -249,6 +250,30 @@ agent, never described. A capability can take a file by handle: see *Passing a f
 Two flows can never share a trigger phrase at the same priority (the compiler says `FLOW_TRIGGER_TIE`).
 If different phrases both match one message with equal priority and specificity ("cancelar minha
 reserva"), no flow starts and the runtime logs `flow trigger tie: a, b`; set `priority`.
+
+## Contact memory
+
+Conversation state (history, flows) belongs to the conversation. To remember a contact's name and a few short
+facts across conversations, give the agent a `memory:` block (off without it):
+
+```yaml
+memory:
+  max_facts: 20        # 1..100
+  max_fact_chars: 200  # 1..1000
+  max_name_chars: 60   # 1..200
+```
+
+The runtime loads the contact's profile for each turn and shows it to the model as quoted data (never
+instructions), and offers three tools next to your capabilities: `memory__set_name`, `memory__remember` and
+`memory__forget` (the `memory.` capability prefix is reserved). Identity is always the turn's. A text that does not
+fit is refused, never cut; a full memory answers `full` so the agent can offer to forget one. Tell the model *what*
+to keep in your persona; the framework only enforces the limits. `Runtime.build` stores it in PostgreSQL (migration
+`0026`); pass `contact_memory=` to use another `ContactMemory`.
+
+The facts are personal data. Erasing a contact (`RetentionService.erase_contact`) removes the profile with them;
+`erase_contact(..., keep_profile=True)` erases only the conversations, which is what a "start over" command should do.
+A tenant can also let memory expire: `RetentionPolicy(memory_days=N)` deletes profiles not changed for N days (off by
+default).
 
 ## Voice messages (speech-to-text)
 
