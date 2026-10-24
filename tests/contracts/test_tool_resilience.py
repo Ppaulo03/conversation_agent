@@ -175,9 +175,9 @@ async def test_only_the_configured_number_of_probes_are_let_through() -> None:
     provider = breaker(inner, clock, half_open_probes=1)
     await trip(provider, binding())
     clock.t = 31
-    first = provider._admit(provider._circuits[("t1", "erp")], "erp")  # type: ignore[attr-defined]
-    second = provider._admit(provider._circuits[("t1", "erp")], "erp")  # type: ignore[attr-defined]
-    assert (first, second) == (True, False)  # a flood does not all become probes
+    first = provider._breaker.admit(("t1", "erp"))  # type: ignore[attr-defined]
+    second = provider._breaker.admit(("t1", "erp"))  # type: ignore[attr-defined]
+    assert (first, second) == ("probe", "refuse")  # a flood does not all become probes
 
 
 async def test_circuits_are_per_tenant_and_per_connection() -> None:

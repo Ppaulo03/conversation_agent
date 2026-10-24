@@ -311,6 +311,20 @@ Follow-ups: native classifier (Jev) as a provider; a circuit breaker for a down 
 
 ---
 
+## ADR-030 — Circuit breaker for the `http` tool selector
+Status: Accepted
+Context: ADR-029 follow-up. A selector server that is down made every triggered turn wait for the timeout before the full-list fallback; only `max_fallback_rate` slowed it, and slowly.
+Decision:
+1. The state machine of `CircuitBreakerToolProvider` (closed -> open -> half_open) is extracted, behavior unchanged, into `adapters/circuit.py` (`CircuitBreaker`) and reused by `HttpToolSelector`. The existing breaker tests pass untouched except for one that reached into private attributes.
+2. Per (tenant, connection), in memory, per process. After `failure_threshold` consecutive health failures it opens: for `open_seconds` the server is not called (`ToolSelectorCircuitOpenError`, no I/O) and the model gets the full list; then `half_open_probes` calls decide: a healthy one closes it, a failed one reopens it.
+3. Only the server's HEALTH counts: unreachable, timeout, broken read, 5xx and 429, an oversize or invalid answer, a wrong contract version. A refused connection (our configuration, an unavailable secret, SSRF refusal), a request too large and other statuses (401, 403, 404) prove the server answers or are not its fault and count as healthy, as for tools (DESIGN §37).
+4. Settings under `tool_selection.http.circuit`: `enabled` (default true), `failure_threshold` (5), `open_seconds` (30), `half_open_probes` (1). The key is part of the agent digest only for agents that use the `http` provider.
+5. Metrics: transitions go to `circuit_transitions_total{provider="tool_selector",scope=<connection>,state}` (the same series as tools); `tool_selections_total` gets the outcome `circuit_open`.
+Alternatives: a second copy of the state machine (rejected: drift); counting 401/403 as failures (rejected: a bad token fails fast and the breaker would only hide the misconfiguration behind a quiet fallback; it still shows as `provider_error`).
+Consequences: a down server costs at most `failure_threshold` slow turns per window and per process. The circuit is not shared between processes.
+
+---
+
 ## Questões em aberto (não são decisões)
 
 - A lista de “questões deliberadamente abertas” em [`DESIGN.md` §51](./DESIGN.md) **não foi reauditada** nesta iteration contra o código; alguns itens

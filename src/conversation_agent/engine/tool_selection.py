@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from conversation_agent.core.definitions.tool_selection import ToolSelectionSettings
+from conversation_agent.core.errors import ToolSelectorCircuitOpenError
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.ports.tool_selector import ToolSelector
 
@@ -22,7 +23,8 @@ MIN_SAMPLES = 20  # no auto-disable before this many
 
 class ToolSelectionMetrics(Protocol):
     def record_tool_selection(self, *, agent_id: str, agent_version: str, outcome: str) -> None:
-        """`outcome`: applied | skipped | provider_error | fallback | auto_disabled."""
+        """`outcome`: applied | skipped | provider_error | circuit_open | fallback |
+        auto_disabled."""
         ...
 
 
@@ -109,6 +111,9 @@ async def decide(
         return {"mode": "full", "kept": [], "reason": "below_limits"}
     try:
         ranked = await selector.rank(message, catalog, tenant_id=tenant_id)
+    except ToolSelectorCircuitOpenError:  # the server was not even called
+        monitor.record("circuit_open")
+        return {"mode": "full", "kept": [], "reason": "circuit_open"}
     except Exception:  # on_error=full_list: a broken selector never blocks the turn
         monitor.record("provider_error")
         return {"mode": "full", "kept": [], "reason": "provider_error"}

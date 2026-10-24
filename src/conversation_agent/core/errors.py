@@ -129,3 +129,7 @@ class InvalidConnectionError(ConversationAgentError):
 class ToolSelectorError(ConversationAgentError):
     """A tool selector could not rank the tools (unreachable, refused, invalid answer). The engine
     treats it as "send the full list"; the message never contains a secret or the user's text."""
+
+
+class ToolSelectorCircuitOpenError(ToolSelectorError):
+    """The selector's circuit is open: the server was not called."""

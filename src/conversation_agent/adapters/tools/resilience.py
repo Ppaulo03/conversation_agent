@@ -16,10 +16,10 @@ Both are TRANSPARENT to the runtime's guarantees:
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
-from dataclasses import dataclass
+from collections.abc import Callable, Hashable
 from typing import Any
 
+from conversation_agent.adapters.circuit import CircuitBreaker
 from conversation_agent.core.definitions.binding import ResolvedToolBinding
 from conversation_agent.core.models.tooling import ToolContext, ToolError, ToolResult
 from conversation_agent.ports.metrics import ToolMetrics
@@ -52,14 +52,6 @@ def is_health_failure(result: ToolResult) -> bool:
     )
 
 
-@dataclass
-class _Circuit:
-    state: str = "closed"
-    failures: int = 0
-    opened_at: float = 0.0
-    probes: int = 0
-
-
 class CircuitBreakerToolProvider:
     def __init__(
         self,
@@ -72,19 +64,24 @@ class CircuitBreakerToolProvider:
         metrics: ToolMetrics | None = None,
         monotonic: Callable[[], float] = time.monotonic,
     ) -> None:
-        if failure_threshold < 1 or half_open_probes < 1 or open_seconds <= 0:
-            raise ValueError("the circuit needs a positive threshold, window and probe count")
         self._inner = inner
         self._provider = provider_name
-        self._threshold = failure_threshold
-        self._open_seconds = open_seconds
-        self._probes = half_open_probes
         self._metrics = metrics
-        self._now = monotonic
-        self._circuits: dict[tuple[str, str], _Circuit] = {}
+        self._breaker = CircuitBreaker(
+            failure_threshold=failure_threshold,
+            open_seconds=open_seconds,
+            half_open_probes=half_open_probes,
+            on_state=self._record_state,
+            monotonic=monotonic,
+        )
 
     def state(self, tenant_id: str, scope: str) -> str:
-        return self._circuits.get((tenant_id, scope), _Circuit()).state
+        return self._breaker.state((tenant_id, scope))
+
+    def _record_state(self, key: Hashable, state: str) -> None:
+        if self._metrics is not None:
+            scope = key[1] if isinstance(key, tuple) else str(key)
+            self._metrics.record_circuit(provider=self._provider, scope=scope, state=state)
 
     async def destination_fingerprint(
         self, binding: ResolvedToolBinding, context: ToolContext
@@ -99,9 +96,9 @@ class CircuitBreakerToolProvider:
         *,
         destination_fingerprint: str | None = None,
     ) -> ToolResult:
-        scope = binding.tool.connection or binding.tool.name
-        circuit = self._circuits.setdefault((context.tenant_id, scope), _Circuit())
-        if not self._admit(circuit, scope):
+        key = (context.tenant_id, binding.tool.connection or binding.tool.name)
+        admission = self._breaker.admit(key)
+        if admission == "refuse":
             return ToolResult(
                 status="technical_error",
                 error=ToolError(
@@ -110,52 +107,16 @@ class CircuitBreakerToolProvider:
                     retryable=True,
                 ),
             )
-        probing = circuit.state == "half_open"
+        probing = admission == "probe"
         try:
             result = await self._inner.execute(
                 binding, args, context, destination_fingerprint=destination_fingerprint
             )
         except BaseException:
-            self._settle(circuit, scope, healthy=False, probing=probing)
+            self._breaker.settle(key, healthy=False, probing=probing)
             raise
-        self._settle(circuit, scope, healthy=not is_health_failure(result), probing=probing)
+        self._breaker.settle(key, healthy=not is_health_failure(result), probing=probing)
         return result
-
-    # ------------------------------------------------------------------ state machine
-
-    def _admit(self, circuit: _Circuit, scope: str) -> bool:
-        if circuit.state == "open":
-            if self._now() - circuit.opened_at < self._open_seconds:
-                return False
-            self._move(circuit, scope, "half_open")
-            circuit.probes = 0
-        if circuit.state == "half_open":
-            if circuit.probes >= self._probes:
-                return False
-            circuit.probes += 1
-        return True
-
-    def _settle(self, circuit: _Circuit, scope: str, *, healthy: bool, probing: bool) -> None:
-        if healthy:
-            circuit.failures = 0
-            if probing and circuit.state == "half_open":
-                self._move(circuit, scope, "closed")
-            return
-        circuit.failures += 1
-        if probing or circuit.failures >= self._threshold:
-            circuit.opened_at = self._now()
-            if circuit.state != "open":
-                self._move(circuit, scope, "open")
-
-    def _move(self, circuit: _Circuit, scope: str, state: str) -> None:
-        circuit.state = state
-        if state == "closed":
-            circuit.failures = 0
-        if self._metrics is not None:
-            try:
-                self._metrics.record_circuit(provider=self._provider, scope=scope, state=state)
-            except Exception:  # metrics must never change what a tool call does
-                return
 
 
 class MeteredToolProvider:

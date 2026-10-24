@@ -54,6 +54,7 @@ from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.llm_budget import LLMCallGate
+from conversation_agent.ports.metrics import ToolMetrics
 from conversation_agent.ports.sender import MessageSender
 from conversation_agent.ports.tool_provider import ToolProvider
 from conversation_agent.ports.transcriber import Transcriber
@@ -108,6 +109,7 @@ class Runtime:
         restart_on_new_message: bool = False,
         llm_gate: LLMCallGate | None = None,
         tool_selection_guard: GuardedTransport | None = None,
+        tool_metrics: ToolMetrics | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -159,7 +161,7 @@ class Runtime:
             compiled, policy or PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
         )
 
-        selector = tool_selector_for(agent, guard=tool_selection_guard)
+        selector = tool_selector_for(agent, guard=tool_selection_guard, metrics=tool_metrics)
         selection_monitor = None
         if agent.tool_selection is not None and agent.tool_selection.enabled:
             selection_monitor = SelectionMonitor(  # shared: an engine lives for one turn only

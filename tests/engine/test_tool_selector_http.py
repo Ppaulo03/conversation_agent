@@ -24,7 +24,7 @@ from conversation_agent.core.definitions.tool_selection import (
     HttpSelectorSettings,
     ToolSelectionSettings,
 )
-from conversation_agent.core.errors import ToolSelectorError
+from conversation_agent.core.errors import ToolSelectorCircuitOpenError, ToolSelectorError
 from conversation_agent.core.models.connections import AuthSpec, ResolvedConnection
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import LLMToolDefinition
@@ -253,3 +253,172 @@ async def test_the_reference_server_is_measurable_with_the_evaluation_runner() -
     report = await ev.evaluate(chosen, catalog, examples, ToolSelectionSettings())
     assert report.examples == len(examples) and 0 <= report.hit_rate <= 1
     assert report.fallback_rate < 1  # the server answered: it is not the full list every time
+
+
+# --- circuit breaker ---------------------------------------------------------------------------
+
+
+class Clock:
+    def __init__(self) -> None:
+        self.t = 0.0
+
+    def __call__(self) -> float:
+        return self.t
+
+
+class Circuits:
+    def __init__(self) -> None:
+        self.events: list[tuple[str, str, str]] = []
+
+    def record_circuit(self, *, provider: str, scope: str, state: str) -> None:
+        self.events.append((provider, scope, state))
+
+
+def tripping(
+    handler: Callable[[httpx.Request], httpx.Response],
+    clock: Clock,
+    metrics: Circuits | None = None,
+    **circuit: Any,
+) -> tuple[HttpToolSelector, list[int]]:
+    calls: list[int] = []
+
+    def counted(request: httpx.Request) -> httpx.Response:
+        calls.append(1)
+        return handler(request)
+
+    settings = HttpSelectorSettings(
+        connection="sel", circuit={"failure_threshold": 3, "open_seconds": 30, **circuit}
+    )
+    chosen = HttpToolSelector(
+        guard_for(counted), settings, top_n=8, metrics=metrics, monotonic=clock
+    )
+    return chosen, calls
+
+
+async def fail_n(chosen: HttpToolSelector, n: int) -> None:
+    for _ in range(n):
+        with pytest.raises(ToolSelectorError):
+            await chosen.rank("oi", tools(AVAIL), tenant_id=TENANT)
+
+
+async def test_the_circuit_opens_after_consecutive_health_failures_and_stops_calling() -> None:
+    clock, events = Clock(), Circuits()
+    chosen, calls = tripping(answer({}, 503), clock, events)
+    await fail_n(chosen, 3)
+    assert chosen.circuit_state(TENANT) == "open" and len(calls) == 3
+    with pytest.raises(ToolSelectorCircuitOpenError):
+        await chosen.rank("oi", tools(AVAIL), tenant_id=TENANT)
+    assert len(calls) == 3  # not called while open
+    assert events.events == [("tool_selector", "sel", "open")]
+
+
+async def test_a_probe_after_the_window_closes_or_reopens_the_circuit() -> None:
+    clock, events = Clock(), Circuits()
+    healthy = {"version": 1, "scores": [{"name": AVAIL, "score": 0.9}]}
+    state = {"body": answer({}, 500)}
+    chosen, calls = tripping(lambda r: state["body"](r), clock, events)
+    await fail_n(chosen, 3)
+    clock.t = 31  # window over: one probe, and it fails -> open again
+    await fail_n(chosen, 1)
+    assert chosen.circuit_state(TENANT) == "open" and len(calls) == 4
+    clock.t = 62
+    state["body"] = answer(healthy)  # the server recovered: the probe closes the circuit
+    assert await chosen.rank("oi", tools(AVAIL), tenant_id=TENANT)
+    assert chosen.circuit_state(TENANT) == "closed"
+    assert [e[2] for e in events.events] == ["open", "half_open", "open", "half_open", "closed"]
+
+
+async def test_only_health_failures_count_against_the_circuit() -> None:
+    clock = Clock()
+    for status in (401, 403, 404):  # the server answers: our configuration, not its health
+        chosen, _ = tripping(answer({}, status), clock)
+        await fail_n(chosen, 5)
+        assert chosen.circuit_state(TENANT) == "closed"
+    refused, _ = tripping(answer({}), Clock())
+    refused._guard = guard_for(connection=conn(tls_required=True))  # type: ignore[attr-defined]
+    await fail_n(refused, 5)  # rejected before any I/O
+    assert refused.circuit_state(TENANT) == "closed"
+    for handler in (  # all of these are the server being unwell
+        answer({}, 429),
+        lambda r: httpx.Response(200, content=b"garbage"),
+        lambda r: (_ for _ in ()).throw(httpx.ReadTimeout("slow")),
+        answer({"version": 2, "scores": []}),
+    ):
+        chosen, _ = tripping(handler, Clock())
+        await fail_n(chosen, 3)
+        assert chosen.circuit_state(TENANT) == "open"
+
+
+async def test_a_success_resets_the_failure_count() -> None:
+    clock = Clock()
+    ok = {"version": 1, "scores": []}
+    sequence = iter([500, 500, 200, 500, 500])
+    chosen, _ = tripping(
+        lambda r: httpx.Response(next(sequence), json=ok),
+        clock,
+    )
+    await fail_n(chosen, 2)
+    assert await chosen.rank("oi", tools(AVAIL), tenant_id=TENANT)
+    await fail_n(chosen, 2)
+    assert chosen.circuit_state(TENANT) == "closed"  # never 3 in a row
+
+
+async def test_circuits_are_per_tenant() -> None:
+    chosen, calls = tripping(answer({}, 500), Clock())
+    await fail_n(chosen, 3)
+    with pytest.raises(ToolSelectorError) as other:  # another tenant is still called
+        await chosen.rank("oi", tools(AVAIL), tenant_id="another-tenant")
+    assert not isinstance(other.value, ToolSelectorCircuitOpenError) and len(calls) == 4
+
+
+async def test_a_disabled_breaker_always_calls() -> None:
+    chosen, calls = tripping(answer({}, 500), Clock(), enabled=False)
+    await fail_n(chosen, 10)
+    assert len(calls) == 10 and chosen.circuit_state(TENANT) == "closed"
+
+
+async def test_the_engine_counts_an_open_circuit_and_sends_the_full_list(api: ApiHandle) -> None:
+    from conversation_agent.engine.tool_selection import SelectionMonitor
+
+    class Counting:
+        def __init__(self) -> None:
+            self.outcomes: list[str] = []
+
+        def record_tool_selection(self, *, agent_id: str, agent_version: str, outcome: str) -> None:
+            self.outcomes.append(outcome)
+
+    agent = build_agent()
+    fields = {n: getattr(agent, n) for n in AgentDefinition.model_fields}
+    sel = ToolSelectionSettings(
+        enabled=True,
+        provider="http",
+        max_tools_per_call=1,
+        http=HttpSelectorSettings(connection="sel", circuit={"failure_threshold": 1}),
+    )
+    with_http = AgentDefinition(**{**fields, "tool_selection": sel})
+    metrics = Counting()
+    monitor = SelectionMonitor("a", "1", metrics)
+    shared = tool_selector_for(with_http, guard=guard_for(answer({}, 500)))  # one per runtime
+    seen: list[set[str]] = []
+    for turn in ("t1", "t2"):
+        llm = FakeLLM([text_response("ok")])
+        engine, _, _ = build_engine(
+            llm,
+            api_base_url=api.base_url,
+            journal=new_journal(),
+            clock=new_clock(),
+            agent=with_http,
+            tool_selector=shared,
+            selection_monitor=monitor,
+        )
+        await engine.process_turn(IDENTITY, ConversationState(), "disponibilidade", turn)
+        seen.append({t.name for t in llm.requests[0].tools})
+    assert seen == [{AVAIL, CREATE}, {AVAIL, CREATE}]  # both turns: the full list
+    assert metrics.outcomes == ["provider_error", "circuit_open"]
+
+
+def test_circuit_settings_are_validated() -> None:
+    for bad in ({"failure_threshold": 0}, {"open_seconds": 0}, {"half_open_probes": 0}):
+        with pytest.raises(ValidationError):
+            HttpSelectorSettings(connection="sel", circuit=bad)
+    assert HttpSelectorSettings(connection="sel").circuit.enabled  # on by default
