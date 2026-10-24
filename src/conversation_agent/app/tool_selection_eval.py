@@ -5,7 +5,8 @@
         --dataset examples/tool-selection-eval/dataset.jsonl \\
         --provider rules --rules examples/tool-selection-eval/rules.yaml
 
-`--provider` is `rules`, `http` (an external server: `--url`, optional `--token-env`) or
+`--provider` is `rules`, `http` (an external server: `--url`, optional `--token-env`), `jev`
+(TypeSafe Jev: `--token-env` required, `--url` defaults to https://api.typesafe.ai, `--model`) or
 `package.module:factory` (a callable taking no arguments that returns a `ToolSelector`), so a
 classifier or embeddings provider is measured with the same files.
 
@@ -36,10 +37,12 @@ import yaml
 from conversation_agent.adapters.connections.static import StaticConnectionResolver
 from conversation_agent.adapters.secrets.providers import InMemorySecretProvider
 from conversation_agent.adapters.tool_selection.http import HttpToolSelector
+from conversation_agent.adapters.tool_selection.jev import JevToolSelector
 from conversation_agent.adapters.tool_selection.rules import RulesToolSelector
 from conversation_agent.adapters.tools.guard import GuardedTransport
 from conversation_agent.core.definitions.tool_selection import (
     HttpSelectorSettings,
+    JevSelectorSettings,
     ToolRule,
     ToolSelectionSettings,
 )
@@ -132,19 +135,45 @@ def http_selector(
     return HttpToolSelector(guard, HttpSelectorSettings(connection="eval", path=path), top_n=top_n)
 
 
+def jev_selector(
+    url: str, path: str | None, token: str, model: str, top_n: int, timeout: float = 10.0
+) -> ToolSelector:
+    """The `jev` provider against `url` with the key in `token` (evaluation connection; in
+    production the OPERATOR registers it and the key comes from the SecretProvider)."""
+    connection = ResolvedConnection(
+        connection_id="eval",
+        base_url=url,
+        allowed_hosts=(httpx.URL(url).host,),
+        tls_required=url.startswith("https://"),
+        auth=AuthSpec(secret_ref="token"),
+    )
+    guard = GuardedTransport(
+        StaticConnectionResolver({"eval": connection}),
+        InMemorySecretProvider({("eval", "token"): token}),
+    )
+    extra = {"path": path} if path else {}
+    settings = JevSelectorSettings(connection="eval", model=model, timeout_seconds=timeout, **extra)
+    return JevToolSelector(guard, settings, top_n=top_n)
+
+
 def load_selector(
     provider: str,
     rules_path: Path | None,
     *,
     url: str | None = None,
-    path: str = "/tool-selection",
+    path: str | None = None,
     token: str | None = None,
     top_n: int = 8,
+    model: str = "jev-latest",
 ) -> ToolSelector:
+    if provider == "jev":
+        if token is None:
+            raise ValueError("--provider jev needs --token-env naming a set variable")
+        return jev_selector(url or "https://api.typesafe.ai", path, token, model, top_n)
     if provider == "http":
         if url is None:
             raise ValueError("--provider http needs --url")
-        return http_selector(url, path, token, top_n)
+        return http_selector(url, path or "/tool-selection", token, top_n)
     if provider == "rules":
         if rules_path is None:
             raise ValueError("--provider rules needs --rules")
@@ -251,7 +280,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--provider", default="rules")
     parser.add_argument("--rules", type=Path)
     parser.add_argument("--url", help="base URL of the external server (--provider http)")
-    parser.add_argument("--path", default="/tool-selection")
+    parser.add_argument("--path", help="endpoint path (default: the provider's own)")
+    parser.add_argument("--model", default="jev-latest", help="Jev model (--provider jev)")
     parser.add_argument("--token-env", help="env var holding a bearer token for the server")
     parser.add_argument("--top-n", type=int, default=ToolSelectionSettings().top_n)
     parser.add_argument("--min-score", type=float, default=ToolSelectionSettings().min_score)
@@ -263,7 +293,13 @@ def main(argv: list[str] | None = None) -> int:
     examples = load_dataset(args.dataset, catalog)
     token = os.environ.get(args.token_env) if args.token_env else None
     selector = load_selector(
-        args.provider, args.rules, url=args.url, path=args.path, token=token, top_n=args.top_n
+        args.provider,
+        args.rules,
+        url=args.url,
+        path=args.path,
+        token=token,
+        top_n=args.top_n,
+        model=args.model,
     )
     settings = ToolSelectionSettings(top_n=args.top_n, min_score=args.min_score)
     report = asyncio.run(evaluate(selector, catalog, examples, settings))

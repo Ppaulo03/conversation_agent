@@ -7,6 +7,11 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ### Added
 
+- **Tool selection `jev` provider (ADR-031)**: ranks tools with TypeSafe Jev through an operator connection
+  (key from the SecretProvider, never in the manifest): one `choice` question over the candidate tools, probabilities
+  rescaled to scores, same guards, circuit breaker and full-list fallback as `http`. `--provider jev --token-env VAR`
+  in the evaluation runner. The wire format is from public documentation and not yet verified against a live key.
+
 - **Circuit breaker for the `http` tool selector (ADR-030)**: after `failure_threshold` consecutive health failures
   the server is not called for `open_seconds` and the model gets the full list (outcome `circuit_open`);
   `tool_selection.http.circuit` (on by default), transitions in `circuit_transitions_total{provider="tool_selector"}`.

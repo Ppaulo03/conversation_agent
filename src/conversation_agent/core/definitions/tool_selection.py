@@ -56,11 +56,27 @@ class HttpSelectorSettings(BaseModel):
         return self
 
 
+class JevSelectorSettings(HttpSelectorSettings):
+    """`jev` provider: a hosted decision model (TypeSafe Jev) asked ONE `choice` question over the
+    candidate tools; the probabilities become scores. Same connection model as `http`: URL, host
+    allowlist and the API key's secret reference belong to the operator. The user's message text
+    and the tool names/descriptions are sent to that service. Wire format: ADR-031."""
+
+    path: str = "/v1/systemone"
+    timeout_seconds: float = Field(default=5.0, gt=0.0, le=30.0)
+    model: str = Field(default="jev-latest", min_length=1)
+    instructions: str = Field(
+        default="Escolha a ferramenta mais adequada para atender a mensagem do usuário.",
+        min_length=1,
+        max_length=500,
+    )
+
+
 class ToolSelectionSettings(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     enabled: bool = False
-    provider: Literal["none", "rules", "http"] = "none"
+    provider: Literal["none", "rules", "http", "jev"] = "none"
     # Triggers. Selection runs when ANY configured limit is exceeded; with none configured, never.
     max_tools_per_call: int | None = Field(default=None, ge=1)
     max_tool_tokens: int | None = Field(default=None, ge=1)  # estimated, see `estimate_tokens`
@@ -74,6 +90,7 @@ class ToolSelectionSettings(BaseModel):
     max_fallback_rate: float | None = Field(default=None, gt=0.0, le=1.0)
     rules: tuple[ToolRule, ...] = ()
     http: HttpSelectorSettings | None = None
+    jev: JevSelectorSettings | None = None
 
     @model_validator(mode="after")
     def _coherent(self) -> ToolSelectionSettings:
@@ -87,6 +104,10 @@ class ToolSelectionSettings(BaseModel):
             raise ValueError("provider 'http' needs an http block (connection, path, timeout)")
         if self.provider != "http" and self.http is not None:
             raise ValueError("an http block needs provider 'http'")
+        if self.provider == "jev" and self.jev is None:
+            raise ValueError("provider 'jev' needs a jev block (connection, model)")
+        if self.provider != "jev" and self.jev is not None:
+            raise ValueError("a jev block needs provider 'jev'")
         names = [r.capability for r in self.rules]
         if len(set(names)) != len(names):
             raise ValueError("duplicate capability in tool_selection.rules")

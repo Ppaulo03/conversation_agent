@@ -323,6 +323,17 @@ Decision:
 Alternatives: a second copy of the state machine (rejected: drift); counting 401/403 as failures (rejected: a bad token fails fast and the breaker would only hide the misconfiguration behind a quiet fallback; it still shows as `provider_error`).
 Consequences: a down server costs at most `failure_threshold` slow turns per window and per process. The circuit is not shared between processes.
 
+## ADR-031 — `jev` tool selector (TypeSafe Jev)
+Status: Accepted
+Context: ADR-029/030 added an optional external ranker; the planned native provider was Jev, a hosted decision model that answers questions about a state with a probability per option in one pass (not a chat LLM).
+Decision:
+1. `provider: jev` with a `jev` block (`JevSelectorSettings`, an `HttpSelectorSettings` plus `model` default `jev-latest`, `instructions`, default `path` `/v1/systemone`, default timeout 5 s). It reuses everything of `HttpToolSelector` (operator connection, `GuardedTransport`, secret via `AuthSpec`, bounded read, circuit breaker, ADR-030 failure classes); only the payload and the answer parsing differ (`adapters/tool_selection/jev.py`).
+2. One `choice` question whose criteria are the candidate tools (`name -> description`) and `state` is the user's message. Probabilities are rescaled by the largest, so the best tool scores 1.0 and `min_score` means "at least that fraction as likely as the best". Only `probabilities` for names that were sent are read; a missing map counts the `choice` as 1.0; a value outside [0, 1], no usable probability or a bad shape is a health failure (full list).
+3. The API key is never in the manifest or the repository: the operator registers the connection (host `api.typesafe.ai` in `allowed_hosts`, TLS on) with `auth.secret_ref`, and the key comes from the SecretProvider (`CA_SECRET__<TENANT>__<REF>` in the environment).
+4. The message text and the tool names and descriptions are sent to the service (documented in the settings docstring).
+Alternatives: an `http` server in front of Jev (still possible, same contract); trusting Jev's `choice` alone (rejected: it hides the second tool of a two-tool message).
+Consequences: the wire format comes from public documentation of the service and was NOT verified against a live key from CI; accuracy on Portuguese is unmeasured until the evaluation runner is run with `--provider jev`.
+
 ---
 
 ## Questões em aberto (não são decisões)

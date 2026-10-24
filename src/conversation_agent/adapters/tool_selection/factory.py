@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from conversation_agent.adapters.tool_selection.http import HttpToolSelector
+from conversation_agent.adapters.tool_selection.jev import JevToolSelector
 from conversation_agent.adapters.tool_selection.rules import RulesToolSelector
 from conversation_agent.adapters.tools.guard import GuardedTransport
 from conversation_agent.core.definitions.agent import AgentDefinition
@@ -25,4 +26,8 @@ def tool_selector_for(
         if guard is None:
             raise ValueError("tool_selection provider 'http' needs a GuardedTransport (guard=)")
         return HttpToolSelector(guard, sel.http, top_n=sel.top_n, metrics=metrics)
+    if sel.provider == "jev" and sel.jev is not None:
+        if guard is None:
+            raise ValueError("tool_selection provider 'jev' needs a GuardedTransport (guard=)")
+        return JevToolSelector(guard, sel.jev, top_n=sel.top_n, metrics=metrics)
     raise ValueError(f"unsupported tool_selection provider {sel.provider!r}")
