@@ -8,6 +8,7 @@ from pathlib import Path
 from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
+from conversation_agent.adapters.tool_selection.factory import tool_selector_for
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.compiler import CompiledAgent, compile_agent, compile_manifest
 from conversation_agent.core.definitions.agent import AgentDefinition
@@ -15,12 +16,14 @@ from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.side_effects import ToolStepExecutor
 from conversation_agent.engine.tool_runner import ToolRunner
+from conversation_agent.engine.tool_selection import SelectionMonitor
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.llm_budget import LLMCallGate
 from conversation_agent.ports.tool_provider import ToolProvider
+from conversation_agent.ports.tool_selector import ToolSelector
 from conversation_agent.ports.transcriber import Transcriber
 from vertical_slice.definitions import CONNECTION, build_agent
 
@@ -60,6 +63,8 @@ def build_engine(
     transcriber: Transcriber | None = None,
     llm_gate: LLMCallGate | None = None,
     tenant_id: str | None = None,
+    tool_selector: ToolSelector | None = None,
+    selection_monitor: SelectionMonitor | None = None,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
@@ -78,6 +83,8 @@ def build_engine(
         transcriber=transcriber,
         llm_gate=llm_gate,
         tenant_id=tenant_id,
+        tool_selector=tool_selector or tool_selector_for(agent),
+        selection_monitor=selection_monitor,
     )
     return engine, agent, http
 

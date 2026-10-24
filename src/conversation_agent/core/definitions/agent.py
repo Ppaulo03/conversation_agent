@@ -16,6 +16,7 @@ from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Inv
 from conversation_agent.core.definitions.media_args import media_fields
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
+from conversation_agent.core.definitions.tool_selection import ToolSelectionSettings
 from conversation_agent.core.errors import DefinitionError
 from conversation_agent.core.templates import check_template, placeholders
 from conversation_agent.core.temporal_ptbr import fold
@@ -124,6 +125,8 @@ class AgentDefinition(BaseModel):
     # Voice messages leave the system only when BOTH the operator configured a transcriber (it may
     # be a third-party API) AND the agent says `on`. The default is off: audio is personal data.
     transcription: Literal["off", "on"] = "off"
+    # None: the model always sees every allowed tool (and the digest of old agents is unchanged).
+    tool_selection: ToolSelectionSettings | None = None
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
@@ -154,10 +157,22 @@ class AgentDefinition(BaseModel):
         self._check_retry_against_effective_risk(by_cap, by_tool)
         self._check_recovery_lookups(by_cap, by_tool)
         self._check_safe_retry_recovery()
+        self._check_tool_selection(caps)
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_tool_selection(self, caps: list[str]) -> None:
+        sel = self.tool_selection
+        if sel is None:
+            return
+        named = [*sel.always_include, *(r.capability for r in sel.rules)]
+        for name in named:
+            if name not in caps:
+                raise DefinitionError(f"tool_selection references unknown capability {name!r}")
+            if name not in self.allowed_capabilities:
+                raise DefinitionError(f"tool_selection references non-allowed capability {name!r}")
 
     def _check_texts(self, by_cap: dict[str, CapabilityDefinition]) -> None:
         """Every runtime template must format, and a protected capability must always be asked

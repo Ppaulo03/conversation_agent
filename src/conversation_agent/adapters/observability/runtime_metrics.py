@@ -23,6 +23,7 @@ class InMemoryRuntimeMetrics:
     llm_calls: Counter[tuple[str, str]] = field(default_factory=Counter)
     proposals: Counter[tuple[str, str]] = field(default_factory=Counter)
     handoffs: Counter[tuple[str, str]] = field(default_factory=Counter)
+    tool_selections: Counter[tuple[str, str, str]] = field(default_factory=Counter)
 
     def record_turn(
         self,
@@ -45,3 +46,6 @@ class InMemoryRuntimeMetrics:
 
     def record_handoff(self, *, agent_id: str, agent_version: str) -> None:
         self.handoffs[(agent_id, agent_version)] += 1
+
+    def record_tool_selection(self, *, agent_id: str, agent_version: str, outcome: str) -> None:
+        self.tool_selections[(agent_id, agent_version, outcome)] += 1

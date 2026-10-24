@@ -14,6 +14,7 @@ from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.manifest.pack_loader import DirectoryPackLoader
 from conversation_agent.adapters.manifest.yaml_loader import load_manifest_file
+from conversation_agent.adapters.tool_selection.factory import tool_selector_for
 from conversation_agent.adapters.tools.http import HTTPToolProvider, local_dev_connection
 from conversation_agent.core.compiler import CompiledAgent, compile_manifest
 from conversation_agent.core.models.audit import configure_pseudonym_key
@@ -67,6 +68,7 @@ def build_memory_engine(
         pipeline,
         InMemoryTurnJournal(),
         clock or SystemClock(agent.timezone),
+        tool_selector=tool_selector_for(agent),
     )
 
 

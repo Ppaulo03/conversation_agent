@@ -29,6 +29,7 @@ from conversation_agent.core.definitions.tool import (
     RetryPolicy,
     ToolDefinition,
 )
+from conversation_agent.core.definitions.tool_selection import ToolSelectionSettings
 from conversation_agent.core.versioning import MANIFEST_SCHEMA_VERSION
 
 
@@ -88,6 +89,7 @@ class AgentManifest(_Strict):
     split_replies: bool = False
     budget_exceeded_reply: str | None = None
     transcription: Literal["off", "on"] = "off"
+    tool_selection: ToolSelectionSettings | None = None
     cancelled_after_effect_reply: str | None = None  # None: the framework default
     # Packs to install (input) and what was installed (provenance, set by the compiler). The
     # runtime never reads either: installation turns Pack content into ordinary definitions.
@@ -146,6 +148,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
         extra["budget_exceeded_reply"] = manifest.budget_exceeded_reply
     if manifest.transcription != "off":
         extra["transcription"] = manifest.transcription
+    if manifest.tool_selection is not None:
+        extra["tool_selection"] = manifest.tool_selection
     if manifest.cancelled_after_effect_reply is not None:
         extra["cancelled_after_effect_reply"] = manifest.cancelled_after_effect_reply
     return AgentDefinition(

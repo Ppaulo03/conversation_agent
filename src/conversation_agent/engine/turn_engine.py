@@ -56,10 +56,12 @@ from conversation_agent.engine.media import MediaNormalizer
 from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
+from conversation_agent.engine.tool_selection import SelectionMonitor, decide, reduce_catalog
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.llm_budget import LLMCallGate
+from conversation_agent.ports.tool_selector import ToolSelector
 from conversation_agent.ports.transcriber import Transcriber
 
 MAX_STEPS_DEFAULT = 8
@@ -79,6 +81,8 @@ class TurnEngine:
         transcriber: Transcriber | None = None,
         llm_gate: LLMCallGate | None = None,
         tenant_id: str | None = None,
+        tool_selector: ToolSelector | None = None,
+        selection_monitor: SelectionMonitor | None = None,
     ) -> None:
         # The engine only runs what the compiler produced (INV-029), and every part of the graph
         # must come from THAT compiled agent (INV-030): no split-brain between definitions.
@@ -103,6 +107,17 @@ class TurnEngine:
             raise ValueError("llm_gate and tenant_id go together")
         self._llm_gate = llm_gate
         self._tenant_id = tenant_id
+        selection = agent.agent.tool_selection
+        self._selection = selection if selection is not None and selection.enabled else None
+        self._selector: ToolSelector | None = None
+        self._selection_monitor = selection_monitor
+        if self._selection is not None:
+            if tool_selector is None:
+                raise ValueError("tool_selection is enabled: pass a tool_selector (see wiring)")
+            self._selector = tool_selector
+            self._selection_monitor = selection_monitor or SelectionMonitor(
+                agent.agent.agent_id, agent.agent.version
+            )
 
     @property
     def pipeline(self) -> CapabilityPipeline:
@@ -324,11 +339,28 @@ class TurnEngine:
         halted: Literal["step_limit", "llm_truncated", "token_budget"] | None = None
         tokens_used = 0
 
+        model_tools = await self._select_tools(cursor, user_text, catalog)
+        selected = model_tools is not catalog
+        fell_back = False
+
         for _ in range(self._max_steps):
             self.boundary(guard, policy_state)  # safe boundary: no new step if stale/cancelled
-            response = await self.llm_step(cursor, turn_id, system, working, tools=catalog)
+            response = await self.llm_step(cursor, turn_id, system, working, tools=model_tools)
             llm_calls += 1
             tokens_used += response.usage.input_tokens + response.usage.output_tokens
+            if (
+                selected
+                and not fell_back
+                and self._selection is not None
+                and self._selection.retry_with_full_list
+                and self._asks_removed_tool(response, model_tools, catalog)
+            ):
+                # The filter hid a tool the model wants: repeat THIS call once with the full list.
+                fell_back, model_tools = True, catalog
+                self.boundary(guard, policy_state)
+                response = await self.llm_step(cursor, turn_id, system, working, tools=model_tools)
+                llm_calls += 1
+                tokens_used += response.usage.input_tokens + response.usage.output_tokens
             budget = self._agent.max_tokens_per_turn
             if budget is not None and tokens_used > budget:
                 halted = "token_budget"  # guardrail: no more tool calls on an exhausted budget
@@ -359,6 +391,13 @@ class TurnEngine:
                 )
                 result_parts.append(part)
             working.append(LLMMessage(role="user", parts=tuple(result_parts)))
+
+        if selected and self._selection is not None and self._selection_monitor is not None:
+            if fell_back:
+                self._selection_monitor.record("fallback")
+            self._selection_monitor.note(
+                fell_back=fell_back, max_rate=self._selection.max_fallback_rate
+            )
 
         if reply is None and halted is None:
             halted = "step_limit"
@@ -470,6 +509,37 @@ class TurnEngine:
             reprompt_action_id=reprompt_action_id,
             handoff_requested=handoff,
         )
+
+    async def _select_tools(
+        self,
+        cursor: TurnJournalCursor,
+        user_text: str,
+        catalog: tuple[LLMToolDefinition, ...],
+    ) -> tuple[LLMToolDefinition, ...]:
+        """The tools the model sees: `catalog` itself (same object) unless the filter applied.
+        The decision is a journal step: a replay reuses it, whatever the selector would say now."""
+        settings, selector, monitor = self._selection, self._selector, self._selection_monitor
+        if settings is None or selector is None or monitor is None:
+            return catalog
+        payload = await cursor.step(
+            JournalStepType.TOOL_SELECTION,
+            stable_hash(user_text, [t.name for t in catalog]),
+            lambda: decide(settings, selector, monitor, user_text, catalog),
+        )
+        if payload["mode"] != "selected":
+            return catalog
+        reduced = reduce_catalog(settings, catalog, payload["kept"])
+        return reduced if 0 < len(reduced) < len(catalog) else catalog
+
+    @staticmethod
+    def _asks_removed_tool(
+        response: LLMResponse,
+        shown: tuple[LLMToolDefinition, ...],
+        catalog: tuple[LLMToolDefinition, ...],
+    ) -> bool:
+        shown_names = {t.name for t in shown}
+        allowed = {t.name for t in catalog}
+        return any(c.name in allowed - shown_names for c in response.tool_calls)
 
     def _history_messages(self, state: ConversationState) -> list[LLMMessage]:
         window = state.history[-self._agent.max_history_messages :]
