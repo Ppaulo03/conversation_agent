@@ -5,6 +5,8 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ## Unreleased
 
+## 0.5.0 - 2026-10-24
+
 ### Added
 
 - **Tool selection `jev` provider (ADR-031)**: ranks tools with TypeSafe Jev through an operator connection
