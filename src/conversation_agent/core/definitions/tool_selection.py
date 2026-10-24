@@ -23,6 +23,19 @@ class ToolRule(BaseModel):
     keywords: tuple[str, ...] = Field(min_length=1)
 
 
+class CircuitSettings(BaseModel):
+    """Circuit breaker of the `http` provider, per (tenant, connection), in memory: after
+    `failure_threshold` consecutive health failures (unreachable, timeout, 5xx/429, unusable
+    answer) the server is not called for `open_seconds` and the model gets the full list."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    enabled: bool = True
+    failure_threshold: int = Field(default=5, ge=1)
+    open_seconds: float = Field(default=30.0, gt=0.0)
+    half_open_probes: int = Field(default=1, ge=1)
+
+
 class HttpSelectorSettings(BaseModel):
     """`http` provider: an external ranking server, reached through a pre-registered per-tenant
     CONNECTION (URL, host allowlist, TLS policy and the credential's secret reference all belong to
@@ -34,6 +47,7 @@ class HttpSelectorSettings(BaseModel):
     connection: str
     path: str = "/tool-selection"
     timeout_seconds: float = Field(default=2.0, gt=0.0, le=30.0)  # capped by the connection
+    circuit: CircuitSettings = CircuitSettings()
 
     @model_validator(mode="after")
     def _path_is_only_a_path(self) -> HttpSelectorSettings:

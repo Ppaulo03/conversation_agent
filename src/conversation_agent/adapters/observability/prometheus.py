@@ -182,7 +182,7 @@ def _render_runtime(rt: InMemoryRuntimeMetrics) -> list[str]:
             )
     lines += [
         f"# HELP {PREFIX}{TOOL_SELECTIONS} Tool selection outcomes (applied, skipped, "
-        "provider_error, fallback, auto_disabled).",
+        "provider_error, circuit_open, fallback, auto_disabled).",
         f"# TYPE {PREFIX}{TOOL_SELECTIONS} counter",
     ]
     for (agent_id, version, outcome), count in sorted(rt.tool_selections.items()):

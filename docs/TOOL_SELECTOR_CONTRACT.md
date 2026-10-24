@@ -17,6 +17,11 @@ tool_selection:
     connection: tool-ranker       # a connection id the OPERATOR registered for the tenant
     path: /tool-selection         # default
     timeout_seconds: 2            # capped by the connection's max_timeout_seconds
+    circuit:                      # optional; these are the defaults
+      enabled: true
+      failure_threshold: 5        # consecutive health failures to open
+      open_seconds: 30            # not called while open; then one probe
+      half_open_probes: 1
 ```
 
 The URL, host allowlist, TLS policy, size limits and the credential (a `secret_ref` resolved by the
@@ -59,6 +64,15 @@ non-200, redirect, another `version`, a body that does not match, a score outsid
 oversize body, a timeout, a refused or missing connection, an unavailable secret. Failures count as
 `provider_error` in `tool_selections_total` and never carry the message text or a secret. The
 decision (not the server's answer) is journaled, so a replay does not call the server again.
+
+## Circuit breaker
+
+Per tenant and connection, in memory (per process). After `failure_threshold` consecutive *health*
+failures the server is not called for `open_seconds` (the model gets the full list at once, counted
+as `circuit_open`); then `half_open_probes` calls decide whether it closes or reopens. Health failures
+are unreachable/timeout, 5xx and 429, an oversize or invalid answer and a wrong contract version.
+Misconfiguration (refused connection, missing secret) and other statuses (401, 403, 404) do not
+count. Transitions are exported as `circuit_transitions_total{provider="tool_selector"}`.
 
 ## Evolving
 

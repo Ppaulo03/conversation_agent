@@ -25,6 +25,7 @@ from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.llm import LLMProvider
+from conversation_agent.ports.metrics import ToolMetrics
 from conversation_agent.ports.tool_provider import ToolProvider
 
 
@@ -57,6 +58,7 @@ def build_memory_engine(
     policy: PolicyGate | None = None,
     clock: Clock | None = None,
     tool_selection_guard: GuardedTransport | None = None,
+    tool_metrics: ToolMetrics | None = None,
 ) -> TurnEngine:
     """An engine with in-memory state for one process. Protected actions stop at the proposal
     (nothing executes without the durable runtime's confirmation); reads work end to end."""
@@ -70,7 +72,7 @@ def build_memory_engine(
         pipeline,
         InMemoryTurnJournal(),
         clock or SystemClock(agent.timezone),
-        tool_selector=tool_selector_for(agent, guard=tool_selection_guard),
+        tool_selector=tool_selector_for(agent, guard=tool_selection_guard, metrics=tool_metrics),
     )
 
 

@@ -7,6 +7,12 @@ What changed for an application that embeds the framework. Internal detail lives
 
 ### Added
 
+- **Circuit breaker for the `http` tool selector (ADR-030)**: after `failure_threshold` consecutive health failures
+  the server is not called for `open_seconds` and the model gets the full list (outcome `circuit_open`);
+  `tool_selection.http.circuit` (on by default), transitions in `circuit_transitions_total{provider="tool_selector"}`.
+  The state machine moved to `adapters/circuit.py` and is shared with the tool breaker (no behavior change).
+  `Runtime.build`/`build_memory_engine` take `tool_metrics=` for the transitions.
+
 - **Tool selection `http` provider (ADR-029)**: an optional external ranking server, reached through a
   pre-registered tenant connection with the same outbound guards as tools; versioned contract in
   `docs/TOOL_SELECTOR_CONTRACT.md`, reference server in `examples/reference-tool-selector/`, and
