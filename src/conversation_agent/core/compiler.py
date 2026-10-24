@@ -290,6 +290,8 @@ def agent_document(agent: AgentDefinition) -> dict[str, Any]:
         document["transcription"] = agent.transcription
     if agent.budget_exceeded_reply is not None:  # only agents that set it carry it
         document["budget_exceeded_reply"] = agent.budget_exceeded_reply
+    if agent.tool_selection is not None:  # only agents that use it carry it (digests stay stable)
+        document["tool_selection"] = agent.tool_selection.model_dump(mode="json")
     if agent.human_request is not None:  # only agents that use it carry it (digests stay stable)
         document["human_request"] = agent.human_request.model_dump(mode="json")
     return document

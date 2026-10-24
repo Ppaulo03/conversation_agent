@@ -31,6 +31,7 @@ from conversation_agent.adapters.postgres.ledger import PostgresToolInvocationSt
 from conversation_agent.adapters.postgres.outbox import PostgresOutboxStore
 from conversation_agent.adapters.postgres.scheduler import PostgresScheduler
 from conversation_agent.adapters.postgres.uow import PostgresTurnJournal, PostgresUnitOfWorkFactory
+from conversation_agent.adapters.tool_selection.factory import tool_selector_for
 from conversation_agent.core.compiler import CompiledAgent
 from conversation_agent.core.models.delivery import DeliveryPolicy
 from conversation_agent.core.models.runtime import FenceToken, InboundEvent
@@ -44,6 +45,7 @@ from conversation_agent.engine.reconciliation import RECONCILE_EVENT, Reconcilia
 from conversation_agent.engine.scheduler_worker import SchedulerWorker
 from conversation_agent.engine.side_effects import LedgerToolExecutor
 from conversation_agent.engine.tool_runner import ToolRunner
+from conversation_agent.engine.tool_selection import SelectionMonitor
 from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.channel_lookup import MessageLookup
@@ -155,6 +157,12 @@ class Runtime:
             compiled, policy or PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
         )
 
+        selection_monitor = None
+        if agent.tool_selection is not None and agent.tool_selection.enabled:
+            selection_monitor = SelectionMonitor(  # shared: an engine lives for one turn only
+                agent.agent_id, agent.version, coordinator_options.get("metrics")
+            )
+
         def journal_factory(fence: FenceToken) -> TurnJournal:
             return PostgresTurnJournal(uows, db, fence)
 
@@ -178,6 +186,8 @@ class Runtime:
                 transcriber=transcriber,
                 llm_gate=llm_gate,
                 tenant_id=fence.tenant_id if llm_gate is not None else None,
+                tool_selector=tool_selector_for(agent),
+                selection_monitor=selection_monitor,
             )
             engine.attach_confirmation(
                 ConfirmationStage(

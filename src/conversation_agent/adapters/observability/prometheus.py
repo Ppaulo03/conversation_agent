@@ -95,8 +95,10 @@ TURN_QUEUE = "turn_queue_wait_seconds"
 TURN_LLM_CALLS = "turn_llm_calls_total"
 TURN_PROPOSALS = "turn_proposals_total"
 HANDOFFS = "handoffs_total"
+TOOL_SELECTIONS = "tool_selections_total"
 RUNTIME_METRICS = {
     TURNS,
+    TOOL_SELECTIONS,
     f"{TURN_PROCESSING}_bucket",
     f"{TURN_PROCESSING}_sum",
     f"{TURN_PROCESSING}_count",
@@ -178,6 +180,14 @@ def _render_runtime(rt: InMemoryRuntimeMetrics) -> list[str]:
             lines.append(
                 f"{PREFIX}{name}{_labels(agent_id=agent_id, agent_version=version)} {count}"
             )
+    lines += [
+        f"# HELP {PREFIX}{TOOL_SELECTIONS} Tool selection outcomes (applied, skipped, "
+        "provider_error, fallback, auto_disabled).",
+        f"# TYPE {PREFIX}{TOOL_SELECTIONS} counter",
+    ]
+    for (agent_id, version, outcome), count in sorted(rt.tool_selections.items()):
+        labels = _labels(agent_id=agent_id, agent_version=version, outcome=outcome)
+        lines.append(f"{PREFIX}{TOOL_SELECTIONS}{labels} {count}")
     return lines
 
 

@@ -281,6 +281,21 @@ Follow-ups: none for F-015 (RESOLVED).
 
 ---
 
+## ADR-028 — Tool selection: the model may see fewer tools, never more
+Status: Accepted
+Context: the tool catalog grows with the number of modules and agents; every tool costs prompt tokens and makes the choice harder. Approved by the project owner on 2026-10-24 (thread "Modelo local no mod-chat").
+Decision:
+1. A `ToolSelector` port ranks the tools already allowed (capability, policy, allowlist) for the message. The framework keeps only names that are in the allowed list: the output is always a subset (selected ⊆ allowed) and a selector can never add or authorize a tool. Providers in this step: `none` and `rules` (keywords per capability); further providers plug into the same port.
+2. Per-agent `tool_selection` in the manifest (absent or `enabled: false` = today's behavior; the digest only carries it when set). With it enabled, at least one of `max_tools_per_call` / `max_tool_tokens` is mandatory and the other may stay off; with both set, whichever is exceeded first triggers the filter. Tokens are estimated (about 4 characters per token of the serialized definition). Also: `top_n`, `min_score`, `always_include`, `on_error: full_list`, `retry_with_full_list`, `max_fallback_rate`.
+3. The decision is the journal step `TOOL_SELECTION` (request hash = message + allowed names), so a replay shows the model the same list.
+4. Fallbacks: provider error, no candidate above `min_score`, or a disabled filter = the full list. If the model calls an allowed tool the filter hid, that one model call is repeated once with the full list (`retry_with_full_list`). Over `max_fallback_rate` (window of the last 50 triggered selections, at least 20) the filter switches itself off for that runtime (in memory; resets on restart).
+5. Metric `tool_selections_total{agent_id,agent_version,outcome}` (applied, skipped, provider_error, fallback, auto_disabled).
+Alternatives: filtering by policy only (rejected: no relevance); a provider that can add tools (rejected: breaks allowlist authority).
+Consequences: nothing changes for agents without `tool_selection`. A hidden protected tool cannot cause an unconfirmed write: removal only makes the model unable to propose it until the fallback.
+Follow-ups: embeddings and classifier (Jev) providers; the model saying it cannot serve the request is not yet treated as a fallback trigger.
+
+---
+
 ## Questões em aberto (não são decisões)
 
 - A lista de “questões deliberadamente abertas” em [`DESIGN.md` §51](./DESIGN.md) **não foi reauditada** nesta iteration contra o código; alguns itens

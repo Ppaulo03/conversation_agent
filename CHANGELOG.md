@@ -3,6 +3,15 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **Tool selection (ADR-028)**: `tool_selection` in the agent manifest shrinks the tool list the model sees once
+  `max_tools_per_call` and/or `max_tool_tokens` is exceeded. Off by default; `rules` provider; never adds a tool;
+  decision journaled (`TOOL_SELECTION`); fallback to the full list; metric `tool_selections_total`.
+  `TurnEngine` takes `tool_selector` (use `tool_selector_for(agent)`) when the agent enables it.
+
 ## 0.4.0
 
 ### Added

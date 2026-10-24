@@ -26,6 +26,7 @@ from conversation_agent.adapters.llm.fake import (
 )
 from conversation_agent.adapters.llm.metered import MeteredLLMProvider
 from conversation_agent.adapters.llm.usage_memory import InMemoryLLMUsageStore
+from conversation_agent.adapters.tool_selection.factory import tool_selector_for
 from conversation_agent.adapters.tools.spy import ExecutionSpy
 from conversation_agent.adapters.transcribers.fake import FakeTranscriber
 from conversation_agent.core.compiler import CompiledAgent
@@ -161,6 +162,7 @@ class EvalHarness:
                 InMemoryTurnJournal(),
                 FixedClock(self._now),
                 transcriber=transcriber,
+                tool_selector=tool_selector_for(agent),
             )
             identity = ConversationIdentity(
                 tenant_id="eval",
