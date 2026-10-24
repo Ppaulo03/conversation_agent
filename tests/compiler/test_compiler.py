@@ -765,3 +765,12 @@ def test_the_memory_block_has_defaults_and_bounds() -> None:
     assert settings.limits().max_facts == 20
     for bad in ({"max_facts": 0}, {"max_facts": 101}, {"max_fact_chars": 1001}, {"extra": 1}):
         assert "MANIFEST_INVALID" in codes_of({**raw(), "memory": bad})
+
+
+def test_the_memory_prefix_is_reserved_when_the_agent_has_memory() -> None:
+    m = raw()
+    spare = copy.deepcopy(m["capabilities"][0])
+    spare["name"] = "memory.lookup"
+    m["capabilities"].append(spare)
+    compile_manifest(m)  # fine without a memory block
+    assert "DEFINITION_INVALID" in codes_of({**m, "memory": {}})

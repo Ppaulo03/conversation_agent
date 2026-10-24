@@ -23,6 +23,7 @@ from typing import Any
 
 from conversation_agent.adapters.clock import SystemClock
 from conversation_agent.adapters.faults import NoFaults
+from conversation_agent.adapters.postgres.contact_memory import PostgresContactMemory
 from conversation_agent.adapters.postgres.coordination import CoordinationTime
 from conversation_agent.adapters.postgres.db import PostgresDatabase
 from conversation_agent.adapters.postgres.inbox import PostgresInboxStore
@@ -51,6 +52,7 @@ from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
 from conversation_agent.ports.channel_lookup import MessageLookup
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.contact_memory import ContactMemory
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.llm_budget import LLMCallGate
@@ -110,6 +112,7 @@ class Runtime:
         llm_gate: LLMCallGate | None = None,
         tool_selection_guard: GuardedTransport | None = None,
         tool_metrics: ToolMetrics | None = None,
+        contact_memory: ContactMemory | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -161,6 +164,8 @@ class Runtime:
             compiled, policy or PolicyGate(agent.allowed_capabilities), ToolRunner(providers)
         )
 
+        if agent.memory is not None and contact_memory is None:
+            contact_memory = PostgresContactMemory(db)  # shared by every worker, like the rest
         selector = tool_selector_for(agent, guard=tool_selection_guard, metrics=tool_metrics)
         selection_monitor = None
         if agent.tool_selection is not None and agent.tool_selection.enabled:
@@ -193,6 +198,7 @@ class Runtime:
                 tenant_id=fence.tenant_id if llm_gate is not None else None,
                 tool_selector=selector,
                 selection_monitor=selection_monitor,
+                contact_memory=contact_memory if agent.memory is not None else None,
             )
             engine.attach_confirmation(
                 ConfirmationStage(
