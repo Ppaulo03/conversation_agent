@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 from conversation_agent.adapters.clock import FixedClock
+from conversation_agent.adapters.contact_memory.memory import InMemoryContactMemory
 from conversation_agent.adapters.journal.memory import InMemoryTurnJournal
 from conversation_agent.adapters.llm.fake import (
     FakeLLM,
@@ -163,6 +164,7 @@ class EvalHarness:
                 FixedClock(self._now),
                 transcriber=transcriber,
                 tool_selector=tool_selector_for(agent),
+                contact_memory=InMemoryContactMemory() if agent.memory is not None else None,
             )
             identity = ConversationIdentity(
                 tenant_id="eval",

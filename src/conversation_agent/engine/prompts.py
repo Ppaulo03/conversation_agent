@@ -22,9 +22,12 @@ conversation, session, credentials or permissions.
 """
 
 
-def build_system_prompt(persona: str, reference_time: datetime, timezone: str) -> str:
+def build_system_prompt(
+    persona: str, reference_time: datetime, timezone: str, memory_block: str = ""
+) -> str:
     rules = _RULES.format(now=reference_time.isoformat(), tz=timezone)
-    return f"{persona.strip()}\n\n{rules}"
+    prompt = f"{persona.strip()}\n\n{rules}"
+    return f"{prompt}\n\n{memory_block}" if memory_block else prompt
 
 
 MAX_RESULT_CHARS = 8000

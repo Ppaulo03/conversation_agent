@@ -49,6 +49,14 @@ from conversation_agent.engine.capability_pipeline import (
     Evaluation,
 )
 from conversation_agent.engine.confirmation_stage import ConfirmationStage, StageInput
+from conversation_agent.engine.contact_memory import (
+    MEMORY_TOOL_NAMES,
+    MemoryTools,
+    memory_tools,
+    profile_from_payload,
+    profile_to_payload,
+    prompt_block,
+)
 from conversation_agent.engine.flow_runner import FlowRunner, FlowTurn
 from conversation_agent.engine.flow_understanding import matches_request
 from conversation_agent.engine.journal_steps import TurnJournalCursor
@@ -58,6 +66,7 @@ from conversation_agent.engine.prompts import build_system_prompt, render_propos
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
 from conversation_agent.engine.tool_selection import SelectionMonitor, decide, reduce_catalog
 from conversation_agent.ports.clock import Clock
+from conversation_agent.ports.contact_memory import ContactMemory
 from conversation_agent.ports.journal import TurnJournal
 from conversation_agent.ports.llm import LLMProvider
 from conversation_agent.ports.llm_budget import LLMCallGate
@@ -83,6 +92,7 @@ class TurnEngine:
         tenant_id: str | None = None,
         tool_selector: ToolSelector | None = None,
         selection_monitor: SelectionMonitor | None = None,
+        contact_memory: ContactMemory | None = None,
     ) -> None:
         # The engine only runs what the compiler produced (INV-029), and every part of the graph
         # must come from THAT compiled agent (INV-030): no split-brain between definitions.
@@ -107,6 +117,15 @@ class TurnEngine:
             raise ValueError("llm_gate and tenant_id go together")
         self._llm_gate = llm_gate
         self._tenant_id = tenant_id
+        settings = agent.agent.memory
+        if (settings is None) != (contact_memory is None):
+            raise ValueError("contact_memory is passed exactly when the agent has a memory block")
+        self._memory: MemoryTools | None = None
+        self._memory_tools: tuple[LLMToolDefinition, ...] = ()
+        self._contact_memory = contact_memory
+        if settings is not None and contact_memory is not None:
+            self._memory = MemoryTools(contact_memory, settings.limits())
+            self._memory_tools = memory_tools(settings.limits())
         selection = agent.agent.tool_selection
         self._selection = selection if selection is not None and selection.enabled else None
         self._selector: ToolSelector | None = None
@@ -174,7 +193,22 @@ class TurnEngine:
             user_text = await self._normalize_media(
                 cursor, identity, turn_id, user_text, media, handles
             )
-        system = build_system_prompt(self._agent.persona, reference_time, self._agent.timezone)
+        memory_block = ""
+        if self._contact_memory is not None:
+            # The profile as the turn saw it, journaled: a replay must build the same prompt even
+            # if this turn's own earlier attempt already changed the memory (INV-014).
+            memory = self._contact_memory
+
+            async def load_profile() -> dict[str, Any]:
+                return profile_to_payload(await memory.get(identity.tenant_id, identity.contact_id))
+
+            snapshot = await cursor.step(
+                JournalStepType.CONTACT_PROFILE, stable_hash(identity.contact_id), load_profile
+            )
+            memory_block = prompt_block(profile_from_payload(snapshot))
+        system = build_system_prompt(
+            self._agent.persona, reference_time, self._agent.timezone, memory_block
+        )
 
         working: list[LLMMessage] = [
             *self._history_messages(state),
@@ -341,6 +375,9 @@ class TurnEngine:
 
         model_tools = await self._select_tools(cursor, identity.tenant_id, user_text, catalog)
         selected = model_tools is not catalog
+        if self._memory_tools:  # offered next to the selection, never filtered by it
+            model_tools = (*model_tools, *self._memory_tools)
+            catalog = (*catalog, *self._memory_tools)
         fell_back = False
 
         for _ in range(self._max_steps):
@@ -605,6 +642,10 @@ class TurnEngine:
         reference_time: datetime,
     ) -> ToolResultPart:
         """One LLM tool call: the shared capability path, rendered back to the model."""
+        if self._memory is not None and tool_name in MEMORY_TOOL_NAMES:
+            return await self._memory_step(
+                cursor, identity, turn_id, tool_call_id, tool_name, arguments, guard, policy_state
+            )
         outcome = await self.run_capability(
             cursor,
             identity,
@@ -627,6 +668,31 @@ class TurnEngine:
             content=render_result(outcome.result),
             is_error=outcome.result.status != "success",
         )
+
+    async def _memory_step(
+        self,
+        cursor: TurnJournalCursor,
+        identity: ConversationIdentity,
+        turn_id: str,
+        tool_call_id: str,
+        tool_name: str,
+        arguments: dict[str, Any],
+        guard: Callable[[], None] | None,
+        policy_state: _PolicyTurnState,
+    ) -> ToolResultPart:
+        """A memory tool call. The write is a journal step: a replay reuses its payload and never
+        writes again; the identity is the turn's, never an argument."""
+        assert self._memory is not None
+        memory = self._memory
+        self.boundary(guard, policy_state)  # safe boundary: before the write, never inside it
+        payload = await cursor.step(
+            JournalStepType.MEMORY_WRITE,
+            stable_hash(tool_name, arguments),
+            lambda: memory.run(identity.tenant_id, identity.contact_id, tool_name, arguments),
+            logical_step_id=f"{turn_id}:{cursor.next_index}",
+        )
+        text, is_error = memory.render(payload)
+        return ToolResultPart(tool_call_id=tool_call_id, content=text, is_error=is_error)
 
     async def run_capability(
         self,

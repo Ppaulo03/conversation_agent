@@ -11,7 +11,11 @@ What changed for an application that embeds the framework. Internal detail lives
   `PostgresContactMemory` and migration `0026_contact_profiles` keep a display name and short facts per
   `(tenant_id, contact_id)`, independent of any conversation. New optional `memory` block in the manifest and
   `AgentDefinition.memory` (`max_facts`, `max_fact_chars`, `max_name_chars`); without it the digest does not change.
-  This increment only adds the store: nothing reads or writes it yet, so existing agents are unaffected.
+  With the block, the turn loads the contact's profile (journaled), shows it in the system prompt as quoted data
+  and offers `memory__set_name`, `memory__remember` and `memory__forget`; each write is a journaled step (INV-082).
+  `Runtime.build`, `build_memory_engine` and `TurnEngine` take `contact_memory=` (PostgreSQL by default in
+  `Runtime.build`); a `memory.` capability prefix is reserved for those agents. Agents without the block are
+  unaffected.
 
 ## 0.5.0 - 2026-10-24
 

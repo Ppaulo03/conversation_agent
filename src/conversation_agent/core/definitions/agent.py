@@ -161,10 +161,20 @@ class AgentDefinition(BaseModel):
         self._check_recovery_lookups(by_cap, by_tool)
         self._check_safe_retry_recovery()
         self._check_tool_selection(caps)
+        self._check_memory(caps)
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_memory(self, caps: list[str]) -> None:
+        if self.memory is None:
+            return
+        for name in caps:
+            if name.startswith("memory."):  # reserved: the runtime offers memory__* tools itself
+                raise DefinitionError(
+                    f"capability {name!r} uses the prefix reserved for contact memory"
+                )
 
     def _check_tool_selection(self, caps: list[str]) -> None:
         sel = self.tool_selection
