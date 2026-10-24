@@ -71,3 +71,37 @@ def test_any_selector_can_be_plugged_by_module_path(monkeypatch: pytest.MonkeyPa
         )
     )
     assert report.hit_rate == 1.0 and report.tools_removed == 0.0  # keeps all: no saving
+
+
+def test_the_large_catalog_and_its_datasets_are_consistent() -> None:
+    catalog = ev.load_catalog(DATA / "large" / "catalog.json")
+    dev = ev.load_dataset(DATA / "large" / "dataset.jsonl", catalog)
+    held = ev.load_dataset(DATA / "large" / "heldout.jsonl", catalog)
+    assert len(catalog) >= 40 and len(dev) >= 100 and len(held) >= 40
+    assert not {e.message for e in dev} & {e.message for e in held}
+    assert {t for e in dev for t in e.expected} == {
+        t.name for t in catalog
+    }  # every tool is covered
+
+
+def test_a_sweep_asks_the_provider_once_per_message_and_orders_the_saving() -> None:
+    import asyncio
+
+    calls = 0
+
+    class Graded:
+        async def rank(self, message, candidates, *, tenant_id):  # type: ignore[no-untyped-def]
+            nonlocal calls
+            calls += 1
+            return [ToolScore(t.name, 1 / (1 + i)) for i, t in enumerate(candidates)]
+
+    catalog = ev.load_catalog(DATA / "catalog.json")
+    examples = ev.load_dataset(DATA / "dataset.jsonl", catalog)
+    results = asyncio.run(
+        ev.sweep(Graded(), catalog, examples, ToolSelectionSettings(top_n=8), [0.5, 0.2, 0.05])
+    )
+    assert calls == len(examples)
+    kept = [r.tools_kept for _, r in results]
+    assert kept == sorted(kept) and kept[0] < kept[-1]
+    table = ev.render_sweep(results)
+    assert "min_score" in table and "0.05" in table

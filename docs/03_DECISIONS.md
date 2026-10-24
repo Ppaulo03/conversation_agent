@@ -323,6 +323,33 @@ Decision:
 Alternatives: a second copy of the state machine (rejected: drift); counting 401/403 as failures (rejected: a bad token fails fast and the breaker would only hide the misconfiguration behind a quiet fallback; it still shows as `provider_error`).
 Consequences: a down server costs at most `failure_threshold` slow turns per window and per process. The circuit is not shared between processes.
 
+## ADR-031 — `jev` tool selector (TypeSafe Jev)
+Status: Accepted
+Context: ADR-029/030 added an optional external ranker; the planned native provider was Jev, a hosted decision model that answers questions about a state with a probability per option in one pass (not a chat LLM).
+Decision:
+1. `provider: jev` with a `jev` block (`JevSelectorSettings`, an `HttpSelectorSettings` plus `model` default `jev-latest`, `instructions`, default `path` `/v1/systemone`, default timeout 5 s). It reuses everything of `HttpToolSelector` (operator connection, `GuardedTransport`, secret via `AuthSpec`, bounded read, circuit breaker, ADR-030 failure classes); only the payload and the answer parsing differ (`adapters/tool_selection/jev.py`).
+2. One `choice` question whose criteria are the candidate tools (`name -> description`) and `state` is the user's message. Probabilities are rescaled by the largest, so the best tool scores 1.0 and `min_score` means "at least that fraction as likely as the best". Only `probabilities` for names that were sent are read; a missing map counts the `choice` as 1.0; a value outside [0, 1], no usable probability or a bad shape is a health failure (full list).
+3. The API key is never in the manifest or the repository: the operator registers the connection (host `api.typesafe.ai` in `allowed_hosts`, TLS on) with `auth.secret_ref`, and the key comes from the SecretProvider (`CA_SECRET__<TENANT>__<REF>` in the environment).
+4. The message text and the tool names and descriptions are sent to the service (documented in the settings docstring).
+Alternatives: an `http` server in front of Jev (still possible, same contract); trusting Jev's `choice` alone (rejected: it hides the second tool of a two-tool message).
+Consequences: the wire format was taken from public documentation and confirmed on 2026-10-24 with a real key against `api.typesafe.ai` (not from CI, which has no key). Measured with the evaluation runner (generic 8-tool catalog, Portuguese, top_n 8):
+
+| set | min_score | hit rate | fallback | tools removed |
+| --- | --- | --- | --- | --- |
+| dev (51) | 0.15 | 96.1% | 0% | 83.6% |
+| heldout (16) | 0.15 | 93.8% | 0% | 82.0% |
+| dev (51) | 0.05 | 98.0% | 0% | 77.2% |
+| heldout (16) | 0.05 | 100% | 0% | 74.2% |
+
+With the 41-tool catalog (`examples/tool-selection-eval/large/`, 101 + 48 messages, `--sweep`, same day), the filter keeps 1.3 to 1.9 tools per message even at the lowest cut, so a low `min_score` does not mean "everything passes":
+
+| set | min_score | hit rate | fallback | tools shown (mean) | tools removed |
+| --- | --- | --- | --- | --- | --- |
+| dev (101) | 0.05 / 0.10 / 0.15 / 0.25 | 98.0 / 96.0 / 95.0 / 94.1% | 0% | 1.63 / 1.47 / 1.37 / 1.27 | 96.0 / 96.4 / 96.7 / 96.9% |
+| heldout (48) | 0.05 / 0.10 / 0.15 / 0.25 | 97.9 / 97.9 / 95.8 / 91.7% | 0% | 1.94 / 1.65 / 1.50 / 1.31 | 95.3 / 96.0 / 96.3 / 96.8% |
+
+The misses are messages that need a second tool (the model answers one choice; the second gets a low share). A lower `min_score` (0.05) recovers them at a smaller saving, so it is the recommended value with this provider; the default 0.15 stays for the others. Small sets: compare providers with them, do not read the last digit.
+
 ---
 
 ## Questões em aberto (não são decisões)

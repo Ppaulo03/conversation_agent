@@ -103,12 +103,7 @@ class HttpToolSelector:
     async def _ask(
         self, message: str, candidates: tuple[LLMToolDefinition, ...], tenant_id: str
     ) -> list[ToolScore]:
-        body = SelectRequest(
-            message=message,
-            tools=[WireTool(name=t.name, description=t.description) for t in candidates],
-            top_n=self._top_n,
-        )
-        payload = body.model_dump_json().encode()
+        payload = self._payload(message, candidates)
         try:
             connection = await self._guard.connection(tenant_id, self._settings.connection, None)
             if len(payload) > connection.max_request_bytes:
@@ -151,6 +146,22 @@ class HttpToolSelector:
             )
         if content is None:
             raise _Failure("selector answer too large", health=True)
+        ranked = self._scores(content, candidates)
+        sent = {t.name for t in candidates}
+        return [ToolScore(name, ranked.get(name, 0.0)) for name in sorted(sent)]
+
+    # The two hooks a provider speaking another wire format overrides (see `jev.py`).
+    def _payload(self, message: str, candidates: tuple[LLMToolDefinition, ...]) -> bytes:
+        body = SelectRequest(
+            message=message,
+            tools=[WireTool(name=t.name, description=t.description) for t in candidates],
+            top_n=self._top_n,
+        )
+        return body.model_dump_json().encode()
+
+    def _scores(
+        self, content: bytes, candidates: tuple[LLMToolDefinition, ...]
+    ) -> dict[str, float]:
         try:
             answer = SelectResponse.model_validate_json(content)
         except ValidationError:
@@ -158,5 +169,4 @@ class HttpToolSelector:
         if answer.version != CONTRACT_VERSION:
             raise _Failure(f"selector speaks contract v{answer.version}", health=True)
         sent = {t.name for t in candidates}
-        ranked = {s.name: s.score for s in answer.scores if s.name in sent}
-        return [ToolScore(name, ranked.get(name, 0.0)) for name in sorted(sent)]
+        return {s.name: s.score for s in answer.scores if s.name in sent}
