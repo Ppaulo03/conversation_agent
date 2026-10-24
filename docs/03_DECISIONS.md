@@ -341,6 +341,13 @@ Consequences: the wire format was taken from public documentation and confirmed 
 | dev (51) | 0.05 | 98.0% | 0% | 77.2% |
 | heldout (16) | 0.05 | 100% | 0% | 74.2% |
 
+With the 41-tool catalog (`examples/tool-selection-eval/large/`, 101 + 48 messages, `--sweep`, same day), the filter keeps 1.3 to 1.9 tools per message even at the lowest cut, so a low `min_score` does not mean "everything passes":
+
+| set | min_score | hit rate | fallback | tools shown (mean) | tools removed |
+| --- | --- | --- | --- | --- | --- |
+| dev (101) | 0.05 / 0.10 / 0.15 / 0.25 | 98.0 / 96.0 / 95.0 / 94.1% | 0% | 1.63 / 1.47 / 1.37 / 1.27 | 96.0 / 96.4 / 96.7 / 96.9% |
+| heldout (48) | 0.05 / 0.10 / 0.15 / 0.25 | 97.9 / 97.9 / 95.8 / 91.7% | 0% | 1.94 / 1.65 / 1.50 / 1.31 | 95.3 / 96.0 / 96.3 / 96.8% |
+
 The misses are messages that need a second tool (the model answers one choice; the second gets a low share). A lower `min_score` (0.05) recovers them at a smaller saving, so it is the recommended value with this provider; the default 0.15 stays for the others. Small sets: compare providers with them, do not read the last digit.
 
 ---
