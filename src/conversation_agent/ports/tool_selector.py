@@ -21,5 +21,7 @@ class ToolSelector(Protocol):
     """
 
     async def rank(
-        self, message: str, candidates: tuple[LLMToolDefinition, ...]
-    ) -> list[ToolScore]: ...
+        self, message: str, candidates: tuple[LLMToolDefinition, ...], *, tenant_id: str
+    ) -> list[ToolScore]:
+        """`tenant_id` selects tenant-scoped resources (a connection, a credential)."""
+        ...

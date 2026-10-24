@@ -47,6 +47,7 @@ dev-mode-dirs = [
     "examples/reference-relayplane",
     "examples/reference-mcp",
     "examples/reference-agenda-api",
+    "examples/reference-tool-selector",
 ]
 
 [tool.pytest.ini_options]
@@ -68,6 +69,7 @@ src = [
     "examples/reference-relayplane",
     "examples/reference-mcp",
     "examples/reference-agenda-api",
+    "examples/reference-tool-selector",
     "tests",
 ]
 
@@ -89,6 +91,7 @@ mypy_path = [
     "examples/reference-relayplane",
     "examples/reference-mcp",
     "examples/reference-agenda-api",
+    "examples/reference-tool-selector",
 ]
 explicit_package_bases = true
 
@@ -97,7 +100,7 @@ module = ["asyncpg", "asyncpg.*"]
 ignore_missing_imports = true
 
 [tool.importlinter]
-root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "relayplane_app"]
+root_packages = ["conversation_agent", "scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "tool_selector_api", "relayplane_app"]
 include_external_packages = true
 
 [[tool.importlinter.contracts]]
@@ -154,7 +157,7 @@ forbidden_modules = ["conversation_agent.engine", "conversation_agent.app"]
 name = "framework never imports example/external-system code (INV-008)"
 type = "forbidden"
 source_modules = ["conversation_agent"]
-forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "relayplane_app"]
+forbidden_modules = ["scheduling_api", "vertical_slice", "relayplane_sim", "reference_mcp", "agenda_api", "tool_selector_api", "relayplane_app"]
 
 [[tool.importlinter.contracts]]
 name = "reference API is an external system: no framework imports"
@@ -178,4 +181,10 @@ forbidden_modules = ["conversation_agent"]
 name = "agenda API is an external system: no framework imports"
 type = "forbidden"
 source_modules = ["agenda_api"]
+forbidden_modules = ["conversation_agent"]
+
+[[tool.importlinter.contracts]]
+name = "tool selector server is an external system: no framework imports"
+type = "forbidden"
+source_modules = ["tool_selector_api"]
 forbidden_modules = ["conversation_agent"]

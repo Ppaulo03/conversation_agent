@@ -5,8 +5,9 @@
         --dataset examples/tool-selection-eval/dataset.jsonl \\
         --provider rules --rules examples/tool-selection-eval/rules.yaml
 
-`--provider` is `rules` or `package.module:factory` (a callable taking no arguments that returns a
-`ToolSelector`), so a classifier or embeddings provider is measured with the same files.
+`--provider` is `rules`, `http` (an external server: `--url`, optional `--token-env`) or
+`package.module:factory` (a callable taking no arguments that returns a `ToolSelector`), so a
+classifier or embeddings provider is measured with the same files.
 
 Dataset (JSONL): `{"id": "m01", "message": "...", "expected": ["tool_a", "tool_b"]}`. `expected` are
 the tools the model must be able to call for that message (empty: no tool needed). The catalog is
@@ -23,15 +24,26 @@ import argparse
 import asyncio
 import importlib
 import json
+import os
 import sys
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
 
+import httpx
 import yaml
 
+from conversation_agent.adapters.connections.static import StaticConnectionResolver
+from conversation_agent.adapters.secrets.providers import InMemorySecretProvider
+from conversation_agent.adapters.tool_selection.http import HttpToolSelector
 from conversation_agent.adapters.tool_selection.rules import RulesToolSelector
-from conversation_agent.core.definitions.tool_selection import ToolRule, ToolSelectionSettings
+from conversation_agent.adapters.tools.guard import GuardedTransport
+from conversation_agent.core.definitions.tool_selection import (
+    HttpSelectorSettings,
+    ToolRule,
+    ToolSelectionSettings,
+)
+from conversation_agent.core.models.connections import AuthSpec, ResolvedConnection
 from conversation_agent.core.models.llm import LLMToolDefinition
 from conversation_agent.engine.tool_selection import (
     SelectionMonitor,
@@ -96,7 +108,43 @@ def load_dataset(path: Path, catalog: tuple[LLMToolDefinition, ...]) -> list[Exa
     return examples
 
 
-def load_selector(provider: str, rules_path: Path | None) -> ToolSelector:
+def http_selector(
+    url: str,
+    path: str,
+    token: str | None,
+    top_n: int,
+    client: httpx.AsyncClient | None = None,
+) -> ToolSelector:
+    """The `http` provider against `url` (a development/evaluation connection: private networks
+    are allowed, TLS only when the URL says https; in production the OPERATOR registers it)."""
+    connection = ResolvedConnection(
+        connection_id="eval",
+        base_url=url,
+        allow_private_networks=True,
+        tls_required=url.startswith("https://"),
+        auth=AuthSpec(secret_ref="token") if token else None,
+    )
+    guard = GuardedTransport(
+        StaticConnectionResolver({"eval": connection}),
+        InMemorySecretProvider({("eval", "token"): token}) if token else None,
+        client,
+    )
+    return HttpToolSelector(guard, HttpSelectorSettings(connection="eval", path=path), top_n=top_n)
+
+
+def load_selector(
+    provider: str,
+    rules_path: Path | None,
+    *,
+    url: str | None = None,
+    path: str = "/tool-selection",
+    token: str | None = None,
+    top_n: int = 8,
+) -> ToolSelector:
+    if provider == "http":
+        if url is None:
+            raise ValueError("--provider http needs --url")
+        return http_selector(url, path, token, top_n)
     if provider == "rules":
         if rules_path is None:
             raise ValueError("--provider rules needs --rules")
@@ -125,7 +173,9 @@ async def evaluate(
     seen: dict[str, list[int]] = {}  # tool -> [kept, expected]
     for ex in examples:
         monitor = SelectionMonitor("eval", "0")
-        decision: dict[str, Any] = await decide(forced, selector, monitor, ex.message, catalog)
+        decision: dict[str, Any] = await decide(
+            forced, selector, monitor, ex.message, catalog, tenant_id="eval"
+        )
         shown_tools = (
             reduce_catalog(forced, catalog, decision["kept"])
             if decision["mode"] == "selected"
@@ -200,6 +250,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--dataset", type=Path, required=True)
     parser.add_argument("--provider", default="rules")
     parser.add_argument("--rules", type=Path)
+    parser.add_argument("--url", help="base URL of the external server (--provider http)")
+    parser.add_argument("--path", default="/tool-selection")
+    parser.add_argument("--token-env", help="env var holding a bearer token for the server")
     parser.add_argument("--top-n", type=int, default=ToolSelectionSettings().top_n)
     parser.add_argument("--min-score", type=float, default=ToolSelectionSettings().min_score)
     parser.add_argument("--json", type=Path, help="also write the full report here")
@@ -208,7 +261,10 @@ def main(argv: list[str] | None = None) -> int:
 
     catalog = load_catalog(args.catalog)
     examples = load_dataset(args.dataset, catalog)
-    selector = load_selector(args.provider, args.rules)
+    token = os.environ.get(args.token_env) if args.token_env else None
+    selector = load_selector(
+        args.provider, args.rules, url=args.url, path=args.path, token=token, top_n=args.top_n
+    )
     settings = ToolSelectionSettings(top_n=args.top_n, min_score=args.min_score)
     report = asyncio.run(evaluate(selector, catalog, examples, settings))
     print(render(report))

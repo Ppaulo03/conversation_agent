@@ -127,12 +127,16 @@ def _call(name: str):  # type: ignore[no-untyped-def]
 
 
 class _Boom:
-    async def rank(self, message: str, candidates: tuple[LLMToolDefinition, ...]):  # type: ignore[no-untyped-def]
+    async def rank(
+        self, message: str, candidates: tuple[LLMToolDefinition, ...], *, tenant_id: str
+    ):  # type: ignore[no-untyped-def]
         raise RuntimeError("down")
 
 
 class _Inventor:
-    async def rank(self, message: str, candidates: tuple[LLMToolDefinition, ...]):  # type: ignore[no-untyped-def]
+    async def rank(
+        self, message: str, candidates: tuple[LLMToolDefinition, ...], *, tenant_id: str
+    ):  # type: ignore[no-untyped-def]
         return [ToolScore("secret__tool", 1.0), ToolScore(AVAIL, 1.0)]
 
 
@@ -182,7 +186,7 @@ async def test_the_fallback_rate_switches_the_filter_off(api: ApiHandle) -> None
 async def test_rules_match_without_accents_or_case() -> None:
     tools = tuple(LLMToolDefinition(name=n, description="", input_schema={}) for n in (AVAIL,))
     sel = RulesToolSelector(settings().rules)
-    scores = await sel.rank("HORARIO por favor", tools)
+    scores = await sel.rank("HORARIO por favor", tools, tenant_id="t")
     assert scores == [ToolScore(AVAIL, 0.5)]
 
 

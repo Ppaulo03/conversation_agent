@@ -296,6 +296,21 @@ Follow-ups: embeddings and classifier (Jev) providers; the model saying it canno
 
 ---
 
+## ADR-029 — Tool selection provider `http`: an optional external ranking server
+Status: Accepted
+Context: the owner wants an external server as an optional ranking provider before any native classifier (thread "Adicionar seleção de tools ao framework", 2026-10-24). The server is a new outbound system that receives the user's text.
+Decision:
+1. New provider `http` of the `ToolSelector` port (ADR-028). It reuses the outbound hardening of tools (`GuardedTransport`, one place): a pre-registered per-tenant connection, HTTPS by default, SSRF and DNS pinning, credential from the `SecretProvider`, no redirects, bounded response.
+2. The manifest names only a `connection` id, a `path` and a `timeout_seconds` (capped by the connection). URL, host allowlist, TLS policy and the credential's `secret_ref` stay with the operator in the connection: a manifest never carries a URL or a secret, as for tools (DESIGN §30-31).
+3. Versioned wire contract (`docs/TOOL_SELECTOR_CONTRACT.md`, v1): request = message + tool names/descriptions + `top_n`; response = scores in [0, 1]. Names the server invents are ignored (selected ⊆ allowed still holds, INV-077). Any failure raises `ToolSelectorError` and the engine sends the full list (ADR-028).
+4. `ToolSelector.rank` gains the keyword-only `tenant_id` (connections and secrets are tenant-scoped). The deployment passes its `GuardedTransport` (`Runtime.build(tool_selection_guard=)`, `tool_selector_for(agent, guard=)`).
+5. Only the message and the tools' names/descriptions leave the process; this is documented as personal-data exposure the operator opts into by registering the connection.
+Alternatives: URL and secret in the manifest (rejected: breaks the connection/secret rules); sending history or schemas (rejected: data minimization).
+Consequences: nothing changes for agents that do not use `http`. A slow server adds up to `timeout_seconds` to a triggered turn before the fallback; keep it small.
+Follow-ups: native classifier (Jev) as a provider; a circuit breaker for a down server (today each triggered turn pays the timeout, and `max_fallback_rate` is the only brake).
+
+---
+
 ## Questões em aberto (não são decisões)
 
 - A lista de “questões deliberadamente abertas” em [`DESIGN.md` §51](./DESIGN.md) **não foi reauditada** nesta iteration contra o código; alguns itens

@@ -99,6 +99,7 @@ async def decide(
     monitor: SelectionMonitor,
     message: str,
     catalog: tuple[LLMToolDefinition, ...],
+    tenant_id: str,
 ) -> dict[str, Any]:
     """The journaled payload: {"mode": "full"|"selected", "kept": [...], "reason": str}."""
     if monitor.disabled:
@@ -107,7 +108,7 @@ async def decide(
         monitor.record("skipped")
         return {"mode": "full", "kept": [], "reason": "below_limits"}
     try:
-        ranked = await selector.rank(message, catalog)
+        ranked = await selector.rank(message, catalog, tenant_id=tenant_id)
     except Exception:  # on_error=full_list: a broken selector never blocks the turn
         monitor.record("provider_error")
         return {"mode": "full", "kept": [], "reason": "provider_error"}

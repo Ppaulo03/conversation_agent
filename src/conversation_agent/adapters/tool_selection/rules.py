@@ -27,7 +27,7 @@ class RulesToolSelector:
             self._rules[llm_name] = patterns
 
     async def rank(
-        self, message: str, candidates: tuple[LLMToolDefinition, ...]
+        self, message: str, candidates: tuple[LLMToolDefinition, ...], *, tenant_id: str
     ) -> list[ToolScore]:
         text = fold(message)
         scores: list[ToolScore] = []

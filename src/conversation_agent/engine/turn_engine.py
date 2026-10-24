@@ -339,7 +339,7 @@ class TurnEngine:
         halted: Literal["step_limit", "llm_truncated", "token_budget"] | None = None
         tokens_used = 0
 
-        model_tools = await self._select_tools(cursor, user_text, catalog)
+        model_tools = await self._select_tools(cursor, identity.tenant_id, user_text, catalog)
         selected = model_tools is not catalog
         fell_back = False
 
@@ -513,6 +513,7 @@ class TurnEngine:
     async def _select_tools(
         self,
         cursor: TurnJournalCursor,
+        tenant_id: str,
         user_text: str,
         catalog: tuple[LLMToolDefinition, ...],
     ) -> tuple[LLMToolDefinition, ...]:
@@ -524,7 +525,7 @@ class TurnEngine:
         payload = await cursor.step(
             JournalStepType.TOOL_SELECTION,
             stable_hash(user_text, [t.name for t in catalog]),
-            lambda: decide(settings, selector, monitor, user_text, catalog),
+            lambda: decide(settings, selector, monitor, user_text, catalog, tenant_id),
         )
         if payload["mode"] != "selected":
             return catalog

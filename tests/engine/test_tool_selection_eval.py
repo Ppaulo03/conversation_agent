@@ -52,7 +52,7 @@ def test_the_report_counts_saving_and_fallbacks() -> None:
 
 def test_any_selector_can_be_plugged_by_module_path(monkeypatch: pytest.MonkeyPatch) -> None:
     class Everything:
-        async def rank(self, message, candidates):  # type: ignore[no-untyped-def]
+        async def rank(self, message, candidates, *, tenant_id):  # type: ignore[no-untyped-def]
             return [ToolScore(t.name, 1.0) for t in candidates]
 
     module = types.ModuleType("fake_provider")
