@@ -3,7 +3,7 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
-## Unreleased
+## 0.6.1 - 2026-10-24
 
 ### Fixed
 

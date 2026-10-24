@@ -12,7 +12,7 @@ _SEMVER = re.compile(r"^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$")
 # Version of the manifest FORMAT this build understands, and of the framework itself. A
 # manifest declaring a newer format, or requiring a newer framework, is refused at compile time.
 MANIFEST_SCHEMA_VERSION = 1
-FRAMEWORK_VERSION = "0.6.0"
+FRAMEWORK_VERSION = "0.6.1"
 COMPILER_VERSION = "1"
 
 
