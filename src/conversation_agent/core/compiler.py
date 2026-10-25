@@ -228,6 +228,8 @@ def _capability_document(c: CapabilityDefinition) -> dict[str, Any]:
         document["executed_template"] = c.executed_template
     if c.separate_turn_from:  # same: agents that do not use it keep their digest
         document["separate_turn_from"] = list(c.separate_turn_from)
+    if c.confirmation_review is not None:  # same
+        document["confirmation_review"] = [c.confirmation_review, c.confirmation_review_field]
     return document
 
 
@@ -442,6 +444,7 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
         found += _check_executed(cap)
         found += _check_separate_turn(cap, {c.name for c in agent.capabilities})
+        found += _check_confirmation_review(cap, {c.name: c for c in agent.capabilities})
     found += _check_flow_inputs(agent)
     return found
 
@@ -613,6 +616,33 @@ def _check_separate_turn(cap: CapabilityDefinition, known: set[str]) -> list[Dia
         for name in cap.separate_turn_from
         if name not in known or name == cap.name
     ]
+
+
+def _check_confirmation_review(
+    cap: CapabilityDefinition, known: dict[str, CapabilityDefinition]
+) -> list[Diagnostic]:
+    if cap.confirmation_review is None:
+        return []
+    where = f"capabilities.{cap.name}.confirmation_review"
+    review = known.get(cap.confirmation_review)
+    if review is None or review.name == cap.name:
+        return [Diagnostic("REVIEW_UNKNOWN_CAPABILITY", where, cap.confirmation_review)]
+    if not cap.confirmation_required:
+        return [Diagnostic("REVIEW_WITHOUT_CONFIRMATION", where, cap.name)]
+    found: list[Diagnostic] = []
+    if review.risk != "read" or review.confirmation_required:
+        found.append(Diagnostic("REVIEW_NOT_A_READ", where, review.name))
+    missing = set(review.input_model.model_fields) - set(cap.input_model.model_fields)
+    found += [
+        Diagnostic("REVIEW_UNKNOWN_INPUT", where, f"{review.name}.{n}") for n in sorted(missing)
+    ]
+    if cap.confirmation_review_field not in review.output_model.model_fields:
+        found.append(
+            Diagnostic(
+                "REVIEW_UNKNOWN_FIELD", where, f"{review.name}.{cap.confirmation_review_field}"
+            )
+        )
+    return found
 
 
 def _check_binding(resolved: ResolvedToolBinding, binding: CapabilityBinding) -> list[Diagnostic]:

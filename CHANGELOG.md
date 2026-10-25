@@ -3,6 +3,18 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **`confirmation_review` on a capability** names a read the runtime runs on the proposed arguments when a protected
+  capability is proposed; the strings in its `confirmation_review_field` output (default `warnings`) are listed
+  above the confirmation question. The person always sees them, without depending on the model calling the check
+  and telling them first. A review that fails adds nothing and never blocks the proposal. It must be a read
+  without confirmation, with inputs and output field that exist (`REVIEW_UNKNOWN_CAPABILITY`,
+  `REVIEW_WITHOUT_CONFIRMATION`, `REVIEW_NOT_A_READ`, `REVIEW_UNKNOWN_INPUT`, `REVIEW_UNKNOWN_FIELD`). Agents that
+  do not set it are unchanged, and so are their manifest digests.
+
 ## 0.8.0 - 2026-10-25
 
 ### Added
