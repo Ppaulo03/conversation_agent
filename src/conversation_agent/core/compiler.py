@@ -226,6 +226,8 @@ def _capability_document(c: CapabilityDefinition) -> dict[str, Any]:
     }
     if c.executed_template is not None:  # only capabilities that set it carry it (digests stable)
         document["executed_template"] = c.executed_template
+    if c.separate_turn_from:  # same: agents that do not use it keep their digest
+        document["separate_turn_from"] = list(c.separate_turn_from)
     return document
 
 
@@ -439,6 +441,7 @@ def check_agent(agent: AgentDefinition) -> list[Diagnostic]:
     for cap in agent.capabilities:
         found += _check_summary(cap.name, cap.summary_template, cap.input_model)
         found += _check_executed(cap)
+        found += _check_separate_turn(cap, {c.name for c in agent.capabilities})
     found += _check_flow_inputs(agent)
     return found
 
@@ -599,6 +602,16 @@ def _check_executed(cap: CapabilityDefinition) -> list[Diagnostic]:
             "EXECUTED_UNKNOWN_FIELD", f"capabilities.{cap.name}.executed_template", f"{{{u}}}"
         )
         for u in unknown
+    ]
+
+
+def _check_separate_turn(cap: CapabilityDefinition, known: set[str]) -> list[Diagnostic]:
+    return [
+        Diagnostic(
+            "SEPARATE_TURN_UNKNOWN_CAPABILITY", f"capabilities.{cap.name}.separate_turn_from", name
+        )
+        for name in cap.separate_turn_from
+        if name not in known or name == cap.name
     ]
 
 

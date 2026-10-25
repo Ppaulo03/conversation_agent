@@ -37,6 +37,10 @@ class CapabilityDefinition(BaseModel):
     # cannot contradict what happened. `{name}` is an input argument or an output field (the
     # output wins); datetimes are shown in the agent's timezone. Absent -> the model composes it.
     executed_template: str | None = None
+    # Capabilities that must not have run EARLIER IN THE SAME TURN before this one: the runtime
+    # denies the call, so the model has to answer the person first and call this one in a later
+    # turn (e.g. a plan review whose findings the person must hear before the plan is saved).
+    separate_turn_from: tuple[str, ...] = ()
 
     @field_validator("name")
     @classmethod

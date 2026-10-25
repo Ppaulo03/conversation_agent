@@ -47,6 +47,7 @@ class CapabilityManifest(_Strict):
     confirmation_required: bool = False
     summary_template: str | None = None
     executed_template: str | None = None
+    separate_turn_from: list[str] = []
 
 
 class ToolManifest(_Strict):
@@ -138,6 +139,7 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
             confirmation_required=c.confirmation_required,
             summary_template=c.summary_template,
             executed_template=c.executed_template,
+            separate_turn_from=tuple(c.separate_turn_from),
         )
         for c in manifest.capabilities
     )

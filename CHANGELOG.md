@@ -3,6 +3,16 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## Unreleased
+
+### Added
+
+- **`separate_turn_from` on a capability** names capabilities that must not have run earlier in the same turn. A
+  call in that turn is denied (`SAME_TURN_AS:<CAPABILITY>`) with a message telling the model to answer the person
+  first and call it in a later turn. Use it when the person has to hear what a check found (for example a plan
+  review) before the action runs; a prompt alone is not reliable for that. Unknown names do not compile
+  (`SEPARATE_TURN_UNKNOWN_CAPABILITY`). Agents that do not set it are unchanged, and so are their manifest digests.
+
 ## 0.7.0 - 2026-10-24
 
 ### Added
