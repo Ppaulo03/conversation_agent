@@ -33,6 +33,16 @@ _PROTECTED_NOTE = (
     " PROTECTED: calling this only records a proposal for later confirmation; "
     "it does NOT perform the action."
 )
+_SEPARATE_TURN_NOTE = (
+    "Not in this turn: tell the person what the earlier call found and ask, then call this "
+    "in a later turn, after they answer."
+)
+
+
+def _denied_message(reason: str) -> str:
+    if reason.startswith("same_turn_as:"):
+        return _SEPARATE_TURN_NOTE
+    return "This capability is not available."
 
 
 class Evaluation(BaseModel):
@@ -245,7 +255,7 @@ class CapabilityPipeline:
                     status="policy_denied",
                     error=ToolError(
                         code=evaluation.decision.reason.upper(),
-                        message_safe="This capability is not available.",
+                        message_safe=_denied_message(evaluation.decision.reason),
                     ),
                 )
             )

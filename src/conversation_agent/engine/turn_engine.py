@@ -730,6 +730,7 @@ class TurnEngine:
                 ownership=Ownership.BOT,
                 tool_calls_this_turn=policy_state.calls,
                 recent_args_hashes=tuple(policy_state.hashes),
+                capabilities_this_turn=tuple(policy_state.capabilities),
                 now=reference_time,
                 media=policy_state.media,
             )
@@ -741,6 +742,7 @@ class TurnEngine:
         policy_state.calls += 1
         if evaluation.request is not None:
             policy_state.hashes.append(evaluation.request.args_hash)
+            policy_state.capabilities.append(capability)
 
         context = self._tool_context(identity, turn_id, logical_step_id, evaluation)
         if evaluation.decision.outcome == "allow" and evaluation.request is not None:
@@ -926,6 +928,7 @@ class _PolicyTurnState:
     def __init__(self, cancel: Callable[[], bool] | None = None) -> None:
         self.calls = 0
         self.hashes: list[str] = []
+        self.capabilities: list[str] = []
         self.effects = 0
         self.cancel = cancel
         self.media: dict[str, MediaArg] = {}

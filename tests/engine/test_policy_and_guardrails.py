@@ -11,7 +11,7 @@ from pydantic import ValidationError
 
 from conversation_agent.adapters.llm.fake import FakeLLM, text_response, tool_call_response
 from conversation_agent.adapters.tools.fake import FakeToolProvider
-from conversation_agent.core.compiler import compile_agent
+from conversation_agent.core.compiler import CompileError, compile_agent
 from conversation_agent.core.definitions.agent import AgentDefinition
 from conversation_agent.core.models.conversation import ConversationState
 from conversation_agent.core.models.llm import (
@@ -154,6 +154,57 @@ async def test_the_default_gate_still_holds_writes_for_confirmation() -> None:
     outcome = await turn(engine)
     assert len(outcome.proposed) == 1 and tools.calls == []
     assert "Posso confirmar?" in outcome.reply  # the runtime-owned confirmation question
+
+
+def with_separate_turn(agent_updates: dict[str, Any] | None = None) -> dict[str, Any]:
+    """The vertical slice with `scheduling.create` forbidden in a turn that already checked availability."""
+    agent = build_agent()
+    caps = tuple(
+        c.model_copy(update={"separate_turn_from": ("scheduling.availability",)})
+        if c.name == "scheduling.create"
+        else c
+        for c in agent.capabilities
+    )
+    return {"capabilities": caps, **(agent_updates or {})}
+
+
+async def test_a_capability_cannot_run_in_the_turn_of_the_one_it_must_follow() -> None:
+    llm = FakeLLM(
+        [
+            availability_call("haircut", "2026-10-06"),
+            tool_call_response("scheduling__create", CREATE_ARGS),
+            text_response("Tem horário. Quer que eu agende?"),
+        ]
+    )
+    engine, tools = engine_for(llm, PolicyGate(ALL), **with_separate_turn())
+    outcome = await turn(engine)
+    assert outcome.proposed == () and outcome.state.proposals == {}  # nothing to confirm yet
+    denied = seen_results(llm)[-1]["error"]
+    assert denied["code"] == "SAME_TURN_AS:SCHEDULING.AVAILABILITY"
+    assert "later turn" in denied["message"]  # the model learns what to do instead
+    assert len(tools.calls) == 1  # only the availability read reached the provider
+
+
+async def test_the_same_capability_is_allowed_in_a_later_turn() -> None:
+    llm = FakeLLM([tool_call_response("scheduling__create", CREATE_ARGS), text_response("Resumo.")])
+    engine, _ = engine_for(llm, PolicyGate(ALL), **with_separate_turn())
+    outcome = await turn(engine)  # no availability call in THIS turn
+    assert len(outcome.proposed) == 1
+
+
+def test_separate_turn_from_is_checked_and_leaves_the_digest_alone_when_unset() -> None:
+    base = build_agent()
+    changed = base.model_copy(update=with_separate_turn())
+    assert compile_agent(changed).digest != compile_agent(base).digest
+    caps = (
+        tuple(
+            c.model_copy(update={"separate_turn_from": ("nope.missing",)})
+            for c in base.capabilities[:1]
+        )
+        + base.capabilities[1:]
+    )
+    with pytest.raises(CompileError, match="SEPARATE_TURN_UNKNOWN_CAPABILITY"):
+        compile_agent(base.model_copy(update={"capabilities": caps}))
 
 
 # --- guardrails ---

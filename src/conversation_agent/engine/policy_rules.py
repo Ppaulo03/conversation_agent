@@ -30,6 +30,7 @@ class PolicyContext:
     recent_args_hashes: tuple[str, ...] = field(default_factory=tuple)  # earlier calls this turn
     now: datetime | None = None  # the turn's reference time
     media: Mapping[str, MediaArg] = field(default_factory=dict)  # handle -> the conversation's file
+    capabilities_this_turn: tuple[str, ...] = ()  # capabilities requested earlier this turn
 
 
 def _deny(reason: str) -> PolicyDecision:
@@ -89,6 +90,17 @@ class LoopRule(_Base):
         return None
 
 
+class SeparateTurnRule(_Base):
+    """A capability that declares `separate_turn_from` cannot run in a turn where one of those
+    ran already: the model must answer the person first and call it in a later turn."""
+
+    def check_request(self, ctx, request, resolved):  # type: ignore[no-untyped-def]
+        for earlier in resolved.capability.separate_turn_from:
+            if earlier in ctx.capabilities_this_turn:
+                return _deny(f"same_turn_as:{earlier}")
+        return None
+
+
 class NumericLimitRule(_Base):
     """E.g. a monetary ceiling: refuse `capability` when `field` exceeds `maximum`."""
 
@@ -123,4 +135,9 @@ class AllowedHoursRule(_Base):
         return None
 
 
-DEFAULT_RULES: tuple[PolicyRule, ...] = (OwnershipRule(), ToolCallBudgetRule(12), LoopRule(3))
+DEFAULT_RULES: tuple[PolicyRule, ...] = (
+    OwnershipRule(),
+    ToolCallBudgetRule(12),
+    LoopRule(3),
+    SeparateTurnRule(),
+)
