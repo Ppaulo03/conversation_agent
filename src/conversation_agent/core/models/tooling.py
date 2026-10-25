@@ -88,6 +88,7 @@ class ProposedAction(_Frozen):
 
     request: CapabilityRequest
     tool_name: str
+    notes: tuple[str, ...] = ()  # the capability's confirmation review, shown with the question
 
 
 class CapabilityResult(_Frozen):

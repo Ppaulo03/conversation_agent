@@ -48,6 +48,8 @@ class CapabilityManifest(_Strict):
     summary_template: str | None = None
     executed_template: str | None = None
     separate_turn_from: list[str] = []
+    confirmation_review: str | None = None
+    confirmation_review_field: str = "warnings"
 
 
 class ToolManifest(_Strict):
@@ -140,6 +142,8 @@ def build_definition(manifest: AgentManifest) -> AgentDefinition:
             summary_template=c.summary_template,
             executed_template=c.executed_template,
             separate_turn_from=tuple(c.separate_turn_from),
+            confirmation_review=c.confirmation_review,
+            confirmation_review_field=c.confirmation_review_field,
         )
         for c in manifest.capabilities
     )

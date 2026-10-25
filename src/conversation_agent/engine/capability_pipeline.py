@@ -143,6 +143,25 @@ class CapabilityPipeline:
             return CapabilityResult(status="validation_error", error=exc.error)
         return await self._runner.run(resolved, request, context)
 
+    async def confirmation_notes(
+        self, request: CapabilityRequest, context: ToolContext
+    ) -> list[str]:
+        """What the proposal's `confirmation_review` read finds, as strings to show with the
+        confirmation question. A failed review adds nothing: it never blocks the proposal."""
+        resolved = self.resolve(request.capability)
+        review = resolved.capability.confirmation_review
+        if review is None:
+            return []
+        accepted = self.resolve(review).capability.input_model.model_fields
+        args = {k: v for k, v in request.args.items() if k in accepted}
+        result = await self.run_internal_read(review, args, context)
+        found = (result.data or {}).get(resolved.capability.confirmation_review_field)
+        if isinstance(found, str):
+            found = [found]
+        if result.status != "success" or not isinstance(found, list):
+            return []
+        return [str(n).strip() for n in found if str(n).strip()]
+
     @property
     def agent_id(self) -> str:
         return self._agent.agent_id

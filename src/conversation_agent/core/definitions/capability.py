@@ -41,6 +41,12 @@ class CapabilityDefinition(BaseModel):
     # denies the call, so the model has to answer the person first and call this one in a later
     # turn (e.g. a plan review whose findings the person must hear before the plan is saved).
     separate_turn_from: tuple[str, ...] = ()
+    # Name of a READ capability the runtime runs on the proposed arguments when this protected
+    # capability is proposed, so what it finds (the strings in its `confirmation_review_field`
+    # output) is shown with the confirmation question, whatever the model said. The review's
+    # input fields must all exist in this capability's input.
+    confirmation_review: str | None = None
+    confirmation_review_field: str = "warnings"
 
     @field_validator("name")
     @classmethod

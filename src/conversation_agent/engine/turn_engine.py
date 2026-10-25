@@ -502,6 +502,8 @@ class TurnEngine:
         line = self._agent.confirmation.prompt.format(
             summary=proposal.request.summary or proposal.request.capability
         )
+        if proposal.notes:
+            line = "\n".join((*(f"- {n}" for n in proposal.notes), "", line))
         return f"{reply}\n\n{line}" if reply else line
 
     async def _finish(
@@ -781,9 +783,33 @@ class TurnEngine:
                 ProposedAction(
                     request=outcome.proposal,
                     tool_name=self._pipeline.resolve(outcome.proposal.capability).tool.name,
+                    notes=await self._review_notes(cursor, turn_id, outcome.proposal, context),
                 )
             )
         return outcome
+
+    async def _review_notes(
+        self,
+        cursor: TurnJournalCursor,
+        turn_id: str,
+        proposal: CapabilityRequest,
+        context: ToolContext,
+    ) -> tuple[str, ...]:
+        """The proposal's confirmation review (a read run by the runtime, journaled so a replay
+        shows the same notes); no review declared -> no journal step."""
+        if self._pipeline.resolve(proposal.capability).capability.confirmation_review is None:
+            return ()
+
+        async def review() -> dict[str, Any]:
+            return {"notes": await self._pipeline.confirmation_notes(proposal, context)}
+
+        payload = await cursor.step(
+            JournalStepType.TOOL_RESULT,
+            stable_hash("confirmation_review", proposal.args_hash),
+            review,
+            logical_step_id=f"{turn_id}:{cursor.next_index}",
+        )
+        return tuple(payload["notes"])
 
     def _tool_context(
         self,
