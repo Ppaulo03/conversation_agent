@@ -15,6 +15,7 @@ from conversation_agent.core.definitions.capability import RISK_ORDER, Capabilit
 from conversation_agent.core.definitions.flow import Choose, FlowDefinition, Invoke, Propose
 from conversation_agent.core.definitions.media_args import media_fields
 from conversation_agent.core.definitions.memory import MemorySettings
+from conversation_agent.core.definitions.persona_section import MAX_SECTIONS, PersonaSection
 from conversation_agent.core.definitions.schema_spec import schema_fingerprint
 from conversation_agent.core.definitions.tool import ToolDefinition
 from conversation_agent.core.definitions.tool_selection import ToolSelectionSettings
@@ -133,6 +134,8 @@ class AgentDefinition(BaseModel):
     tool_selection: ToolSelectionSettings | None = None
     # None: the agent keeps nothing about a contact beyond the conversation itself.
     memory: MemorySettings | None = None
+    # Parts of the persona that depend on a capability being offered to the contact (ADR-033).
+    persona_sections: tuple[PersonaSection, ...] = ()
 
     @model_validator(mode="after")
     def _references_are_consistent(self) -> AgentDefinition:
@@ -165,10 +168,25 @@ class AgentDefinition(BaseModel):
         self._check_safe_retry_recovery()
         self._check_tool_selection(caps)
         self._check_memory(caps)
+        self._check_persona_sections()
         for name in self.allowed_capabilities:
             if name not in bound:
                 raise DefinitionError(f"allowed capability {name!r} has no binding")
         return self
+
+    def _check_persona_sections(self) -> None:
+        if len(self.persona_sections) > MAX_SECTIONS:
+            raise DefinitionError(f"at most {MAX_SECTIONS} persona sections")
+        names = [s.name for s in self.persona_sections]
+        if len(set(names)) != len(names):
+            raise DefinitionError("duplicate persona section names")
+        for section in self.persona_sections:
+            for name in section.requires_any:
+                if name not in self.allowed_capabilities:
+                    raise DefinitionError(
+                        f"persona section {section.name!r} requires {name!r}, "
+                        "which is not an allowed capability"
+                    )
 
     def _check_memory(self, caps: list[str]) -> None:
         if self.memory is None:

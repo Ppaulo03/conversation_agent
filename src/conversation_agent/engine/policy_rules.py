@@ -31,6 +31,7 @@ class PolicyContext:
     now: datetime | None = None  # the turn's reference time
     media: Mapping[str, MediaArg] = field(default_factory=dict)  # handle -> the conversation's file
     capabilities_this_turn: tuple[str, ...] = ()  # capabilities requested earlier this turn
+    unavailable: frozenset[str] = frozenset()  # capabilities this contact cannot use (ADR-033)
 
 
 def _deny(reason: str) -> PolicyDecision:

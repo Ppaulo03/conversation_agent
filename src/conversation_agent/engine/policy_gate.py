@@ -42,6 +42,8 @@ class PolicyGate:
         context = ctx or PolicyContext()
         if capability_name not in self.allowed_for(context.tenant_id) or resolved is None:
             return PolicyDecision(outcome="deny", reason="capability_not_allowed")
+        if capability_name in context.unavailable:
+            return PolicyDecision(outcome="deny", reason="capability_unavailable")
         for rule in self._rules:
             denied = rule.check_call(context, capability_name, resolved)
             if denied is not None:

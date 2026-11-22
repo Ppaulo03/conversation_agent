@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from datetime import datetime
 
 from conversation_agent.core.models.tooling import CapabilityRequest, CapabilityResult
@@ -23,10 +24,17 @@ conversation, session, credentials or permissions.
 
 
 def build_system_prompt(
-    persona: str, reference_time: datetime, timezone: str, memory_block: str = ""
+    persona: str,
+    reference_time: datetime,
+    timezone: str,
+    memory_block: str = "",
+    sections: Sequence[str] = (),
 ) -> str:
+    """`sections`: the texts of the persona sections that apply in this turn (ADR-033), right after
+    the persona and before the runtime rules."""
     rules = _RULES.format(now=reference_time.isoformat(), tz=timezone)
-    prompt = f"{persona.strip()}\n\n{rules}"
+    head = "\n\n".join([persona.strip(), *(s.strip() for s in sections)])
+    prompt = f"{head}\n\n{rules}"
     return f"{prompt}\n\n{memory_block}" if memory_block else prompt
 
 
