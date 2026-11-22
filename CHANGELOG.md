@@ -3,6 +3,21 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## 0.10.0 - 2026-11-22
+
+### Added
+
+- **`CapabilityAvailability` port** (`Runtime.build(capability_availability=...)`, ADR-033) narrows the agent's
+  capabilities for one contact: `unavailable(tenant_id, contact_id)` returns the names the contact cannot use now.
+  Such a capability is not offered to the model, the persona sections that depend on it are left out, and the
+  PolicyGate refuses it (`capability_unavailable`) if it is called anyway. The port can only remove, never add or
+  authorize (INV-084). It is called once per turn and its answer is a journal step (`CAPABILITY_AVAILABILITY`), so a
+  replay reuses it. A port that raises restricts nothing and the turn goes on (INV-085): keep the adapter cached and
+  make it return the names itself if you want to fail closed.
+- **`persona_sections` in the manifest** (`name`, `requires_any`, `text`): a part of the persona that is added only when
+  at least one of the listed allowed capabilities is offered to the contact in the turn. Agents that do not use
+  them, or run without the port, are unchanged, and so are their manifest digests.
+
 ## 0.9.0 - 2026-10-25
 
 ### Added
