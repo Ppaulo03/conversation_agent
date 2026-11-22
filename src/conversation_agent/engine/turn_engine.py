@@ -492,13 +492,17 @@ class TurnEngine:
 
         async def load() -> dict[str, Any]:
             try:
-                names = await availability.unavailable(identity.tenant_id, identity.contact_id)
+                names = await availability.unavailable(
+                    identity.tenant_id, identity.channel_id, identity.contact_id
+                )
             except Exception:
                 names = frozenset()
             return {"unavailable": sorted(names)}
 
         payload = await cursor.step(
-            JournalStepType.CAPABILITY_AVAILABILITY, stable_hash(identity.contact_id), load
+            JournalStepType.CAPABILITY_AVAILABILITY,
+            stable_hash(identity.channel_id, identity.contact_id),
+            load,
         )
         return frozenset(payload["unavailable"])
 

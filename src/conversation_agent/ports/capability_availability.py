@@ -13,7 +13,7 @@ from typing import Protocol
 
 
 class CapabilityAvailability(Protocol):
-    async def unavailable(self, tenant_id: str, contact_id: str) -> frozenset[str]:
+    async def unavailable(self, tenant_id: str, channel_id: str, contact_id: str) -> frozenset[str]:
         """Names of the capabilities this contact cannot use. Called once per turn, its answer is
         journaled (a replay reuses it). Names the agent does not have are ignored. If it raises,
         the framework behaves as if nothing were restricted: the tools themselves still decide."""
