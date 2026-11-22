@@ -35,9 +35,11 @@ OTHER = PersonaSection(
 class Port:
     def __init__(self, *names: str, fail: bool = False) -> None:
         self.names, self.fail, self.calls = frozenset(names), fail, 0
+        self.asked: list[tuple[str, str, str]] = []
 
-    async def unavailable(self, tenant_id: str, contact_id: str) -> frozenset[str]:
+    async def unavailable(self, tenant_id: str, channel_id: str, contact_id: str) -> frozenset[str]:
         self.calls += 1
+        self.asked.append((tenant_id, channel_id, contact_id))
         if self.fail:
             raise RuntimeError("the link service is down")
         return self.names
@@ -88,6 +90,14 @@ async def test_an_unavailable_capability_is_hidden_with_its_prompt_section(api: 
     assert AVAILABILITY_TOOL in offered(llm) and CREATE_TOOL not in offered(llm)
     system = llm.requests[0].system
     assert "SECTION-SLOTS" in system and "SECTION-BOOKING" not in system
+
+
+async def test_the_port_is_asked_with_the_trusted_channel_and_contact(api: ApiHandle) -> None:
+    port = Port(CREATE)
+    await engine_for(FakeLLM([text_response("oi")]), api, port).process_turn(
+        IDENTITY, ConversationState(), "oi", "t1"
+    )
+    assert port.asked == [(IDENTITY.tenant_id, IDENTITY.channel_id, IDENTITY.contact_id)]
 
 
 async def test_a_section_stays_while_any_of_its_capabilities_is_offered(api: ApiHandle) -> None:

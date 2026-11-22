@@ -8,7 +8,7 @@ What changed for an application that embeds the framework. Internal detail lives
 ### Added
 
 - **`CapabilityAvailability` port** (`Runtime.build(capability_availability=...)`, ADR-033) narrows the agent's
-  capabilities for one contact: `unavailable(tenant_id, contact_id)` returns the names the contact cannot use now.
+  capabilities for one contact: `unavailable(tenant_id, channel_id, contact_id)` returns the names the contact cannot use now.
   Such a capability is not offered to the model, the persona sections that depend on it are left out, and the
   PolicyGate refuses it (`capability_unavailable`) if it is called anyway. The port can only remove, never add or
   authorize (INV-084). It is called once per turn and its answer is a journal step (`CAPABILITY_AVAILABILITY`), so a
