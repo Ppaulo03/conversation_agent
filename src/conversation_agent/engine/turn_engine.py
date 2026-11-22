@@ -65,6 +65,7 @@ from conversation_agent.engine.policy_rules import PolicyContext
 from conversation_agent.engine.prompts import build_system_prompt, render_proposal, render_result
 from conversation_agent.engine.side_effects import DirectToolExecutor, ToolStep, ToolStepExecutor
 from conversation_agent.engine.tool_selection import SelectionMonitor, decide, reduce_catalog
+from conversation_agent.ports.capability_availability import CapabilityAvailability
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.contact_memory import ContactMemory
 from conversation_agent.ports.journal import TurnJournal
@@ -93,6 +94,7 @@ class TurnEngine:
         tool_selector: ToolSelector | None = None,
         selection_monitor: SelectionMonitor | None = None,
         contact_memory: ContactMemory | None = None,
+        capability_availability: CapabilityAvailability | None = None,
     ) -> None:
         # The engine only runs what the compiler produced (INV-029), and every part of the graph
         # must come from THAT compiled agent (INV-030): no split-brain between definitions.
@@ -123,6 +125,7 @@ class TurnEngine:
         self._memory: MemoryTools | None = None
         self._memory_tools: tuple[LLMToolDefinition, ...] = ()
         self._contact_memory = contact_memory
+        self._availability = capability_availability
         if settings is not None and contact_memory is not None:
             self._memory = MemoryTools(contact_memory, settings.limits())
             self._memory_tools = memory_tools(settings.limits())
@@ -206,17 +209,34 @@ class TurnEngine:
                 JournalStepType.CONTACT_PROFILE, stable_hash(identity.contact_id), load_profile
             )
             memory_block = prompt_block(profile_from_payload(snapshot))
+        unavailable = await self._unavailable_capabilities(cursor, identity)
+        catalog = self._pipeline.exposed_tools(  # only what this contact may actually call
+            PolicyContext(
+                tenant_id=identity.tenant_id,
+                ownership=Ownership.BOT,
+                now=reference_time,
+                unavailable=unavailable,
+            )
+        )
+        offered = {
+            c.name for c in self._agent.capabilities if c.llm_name in {t.name for t in catalog}
+        }
         system = build_system_prompt(
-            self._agent.persona, reference_time, self._agent.timezone, memory_block
+            self._agent.persona,
+            reference_time,
+            self._agent.timezone,
+            memory_block,
+            sections=[
+                section.text
+                for section in self._agent.persona_sections
+                if offered & set(section.requires_any)
+            ],
         )
 
         working: list[LLMMessage] = [
             *self._history_messages(state),
             LLMMessage.text("user", user_text),
         ]
-        catalog = self._pipeline.exposed_tools(  # only what this tenant may actually call
-            PolicyContext(tenant_id=identity.tenant_id, ownership=Ownership.BOT, now=reference_time)
-        )
         human = self._agent.human_request
         asks_for_a_person = (
             human is not None
@@ -278,6 +298,7 @@ class TurnEngine:
                 catalog,
                 reference_time,
                 working,
+                unavailable,
             )
         except _StopAfterEffect:
             # A newer message asked to restart, but something irreversible already happened this
@@ -308,10 +329,12 @@ class TurnEngine:
         catalog: tuple[LLMToolDefinition, ...],
         reference_time: datetime,
         working: list[LLMMessage],
+        unavailable: frozenset[str],
     ) -> TurnOutcome:
         proposals: dict[str, CapabilityRequest] = {}
         proposed: list[ProposedAction] = []
         policy_state = _PolicyTurnState(cancel)
+        policy_state.unavailable = unavailable
         policy_state.media = {m.handle: m for m in state.media}  # this conversation's files
         human = self._agent.human_request
         if human is not None and matches_request(user_text, human.triggers, human.max_words):
@@ -455,6 +478,29 @@ class TurnEngine:
             halted,
             None,
         )
+
+    async def _unavailable_capabilities(
+        self, cursor: TurnJournalCursor, identity: ConversationIdentity
+    ) -> frozenset[str]:
+        """What this contact cannot use in this turn (ADR-033). Journaled: a replay sees the same
+        answer even if the contact's situation changed meanwhile. Without the port, nothing is
+        restricted and nothing is journaled. A port that raises restricts nothing (fail-open: the
+        tools still decide); the failure is journaled as the empty answer, so a replay agrees."""
+        availability = self._availability
+        if availability is None:
+            return frozenset()
+
+        async def load() -> dict[str, Any]:
+            try:
+                names = await availability.unavailable(identity.tenant_id, identity.contact_id)
+            except Exception:
+                names = frozenset()
+            return {"unavailable": sorted(names)}
+
+        payload = await cursor.step(
+            JournalStepType.CAPABILITY_AVAILABILITY, stable_hash(identity.contact_id), load
+        )
+        return frozenset(payload["unavailable"])
 
     def boundary(self, guard: Callable[[], None] | None, state: _PolicyTurnState) -> None:
         """A safe step boundary (INV-012): a stale worker starts nothing; a restart request
@@ -735,6 +781,7 @@ class TurnEngine:
                 capabilities_this_turn=tuple(policy_state.capabilities),
                 now=reference_time,
                 media=policy_state.media,
+                unavailable=policy_state.unavailable,
             )
             return self._pipeline.evaluate(capability, arguments, ctx).model_dump(mode="json")
 
@@ -958,6 +1005,7 @@ class _PolicyTurnState:
         self.effects = 0
         self.cancel = cancel
         self.media: dict[str, MediaArg] = {}
+        self.unavailable: frozenset[str] = frozenset()  # capabilities this contact cannot use
 
 
 def _const(payload: dict[str, Any]) -> Callable[[], Awaitable[dict[str, Any]]]:

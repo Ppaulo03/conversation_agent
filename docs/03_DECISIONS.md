@@ -363,6 +363,18 @@ Alternatives: a field in `ConversationState` (dies with the conversation); evict
 6. Erasure (INV-083): `erase_contact` removes the profile (and finds a contact known only by it); `keep_profile=True` erases only the conversations, for a reset; `RetentionPolicy.memory_days` (default none) expires profiles not changed for that long.
 Consequences: the facts are personal data: they never go to logs or metrics, and the journal keeps them only as the replay snapshot of a turn, which erasure and the journal-payload window already cover.
 
+## ADR-033 — Capabilities per contact: a port that only removes, and persona sections that follow it
+Status: Accepted
+Context: the agent's allowlist is the same for every contact, but a capability can make sense for one contact and not for another (a finance tool when the contact has not linked an account, a feature not yet enabled for them). Hiding the tool is not enough: a persona that keeps describing it makes the model offer what it cannot do, and "what can you do?" lists it.
+Decision:
+1. A `CapabilityAvailability` port: `unavailable(tenant_id, contact_id) -> frozenset[str]`, the capabilities this contact cannot use now. It can only REMOVE; it never adds or authorizes (INV-084). Passed to `Runtime.build(capability_availability=...)`; without it nothing changes.
+2. Called once per turn, before the prompt and the tool catalog are built. The answer is a journal step (`CAPABILITY_AVAILABILITY`): a replay uses it without asking again (INV-014 style), so a contact who links an account mid-turn does not change a turn already in progress.
+3. Three effects: the model is not offered the capability (it leaves the exposed catalog), the persona sections that depend on it are left out, and `PolicyGate.evaluate` denies it with `capability_unavailable` (the prompt is never the only defence). `PolicyContext.unavailable` carries the set; the turn's policy decisions use the same set.
+4. `persona_sections` in the manifest: `name`, `requires_any` (allowed capabilities), `text`. A section is added after the persona only when at least one of its capabilities is offered to the contact in this turn. They enter the digest only when present.
+5. A port that raises restricts nothing and the turn goes on (INV-085): the tools still decide, and a conversation does not stop because a side service is down. The adapter that wants to fail closed does so itself by returning the names.
+Alternatives: one agent per kind of contact (duplicates the whole manifest and splits history); dropping the capability inside the tool (the model still knows it exists); making the model ask the tool whether it applies (a wasted call, and it still leaks); fail-closed on a broken port (a side service outage would hide capabilities from everyone).
+Consequences: availability is a per-turn read, so a slow port slows every turn: keep it cached in the adapter. A contact may see a capability appear or disappear between turns. The selection provider (Jev) only ranks what is left in the catalog.
+
 ---
 
 ## Questões em aberto (não são decisões)

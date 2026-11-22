@@ -20,6 +20,7 @@ from conversation_agent.engine.side_effects import ToolStepExecutor
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.tool_selection import SelectionMonitor
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.capability_availability import CapabilityAvailability
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.contact_memory import ContactMemory
 from conversation_agent.ports.journal import TurnJournal
@@ -70,6 +71,7 @@ def build_engine(
     selection_monitor: SelectionMonitor | None = None,
     tool_selection_guard: GuardedTransport | None = None,
     contact_memory: ContactMemory | None = None,
+    capability_availability: CapabilityAvailability | None = None,
 ) -> tuple[TurnEngine, AgentDefinition, HTTPToolProvider | None]:
     http: HTTPToolProvider | None = None
     if pipeline is None:
@@ -93,6 +95,7 @@ def build_engine(
         contact_memory=(contact_memory or InMemoryContactMemory())
         if agent.memory is not None
         else None,
+        capability_availability=capability_availability,
     )
     return engine, agent, http
 

@@ -24,6 +24,7 @@ from conversation_agent.engine.capability_pipeline import CapabilityPipeline
 from conversation_agent.engine.policy_gate import PolicyGate
 from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.capability_availability import CapabilityAvailability
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.contact_memory import ContactMemory
 from conversation_agent.ports.llm import LLMProvider
@@ -62,6 +63,7 @@ def build_memory_engine(
     tool_selection_guard: GuardedTransport | None = None,
     tool_metrics: ToolMetrics | None = None,
     contact_memory: ContactMemory | None = None,
+    capability_availability: CapabilityAvailability | None = None,
 ) -> TurnEngine:
     """An engine with in-memory state for one process. Protected actions stop at the proposal
     (nothing executes without the durable runtime's confirmation); reads work end to end."""
@@ -79,6 +81,7 @@ def build_memory_engine(
         contact_memory=(contact_memory or InMemoryContactMemory())
         if agent.memory is not None
         else None,
+        capability_availability=capability_availability,
     )
 
 

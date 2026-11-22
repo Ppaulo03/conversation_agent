@@ -50,6 +50,7 @@ from conversation_agent.engine.tool_runner import ToolRunner
 from conversation_agent.engine.tool_selection import SelectionMonitor
 from conversation_agent.engine.turn_coordinator import TurnCoordinator
 from conversation_agent.engine.turn_engine import TurnEngine
+from conversation_agent.ports.capability_availability import CapabilityAvailability
 from conversation_agent.ports.channel_lookup import MessageLookup
 from conversation_agent.ports.clock import Clock
 from conversation_agent.ports.contact_memory import ContactMemory
@@ -113,6 +114,7 @@ class Runtime:
         tool_selection_guard: GuardedTransport | None = None,
         tool_metrics: ToolMetrics | None = None,
         contact_memory: ContactMemory | None = None,
+        capability_availability: CapabilityAvailability | None = None,
         **coordinator_options: Any,
     ) -> Runtime:
         """Everything a deployment needs, wired the way the reliability tests prove correct.
@@ -130,6 +132,9 @@ class Runtime:
         renews its lease every `heartbeat_interval_seconds`, default a third of the TTL up to 10 s,
         and the TTL must be more than twice the heartbeat). `coordinator_options` go to the
         TurnCoordinator.
+        `capability_availability` (ADR-033) narrows the agent's capabilities for each contact: a
+        capability it names is hidden from the model, its persona sections are left out and the
+        PolicyGate refuses it. Without it every contact gets the whole allowlist.
         Messages sent in pieces: by default a turn opens as soon as a message is seen and takes
         everything that is ready. `debounce` makes it wait until the contact has been quiet that
         long (at most `debounce_max_wait` after the first waiting message); `restart_on_new_message`
@@ -199,6 +204,7 @@ class Runtime:
                 tool_selector=selector,
                 selection_monitor=selection_monitor,
                 contact_memory=contact_memory if agent.memory is not None else None,
+                capability_availability=capability_availability,
             )
             engine.attach_confirmation(
                 ConfirmationStage(
