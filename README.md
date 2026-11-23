@@ -19,6 +19,17 @@ pip install "conversation-agent[all]"
 Composition helpers that need no extra: `conversation_agent.app.wiring` (`load_agent`,
 `local_http_provider`, `build_memory_engine`). A missing extra is reported with the extra's name.
 
+An embedding application can configure a second model with
+`build_llm(primary_config, fallback=fallback_config)`. Each call tries the primary first;
+on `LLMProviderError` it sends the same canonical request to the fallback once, including
+history, tools and structured output. A successful answer or a model refusal does not trigger
+fallback. Cancellation, budget deferral and application errors propagate. Failure of both
+providers propagates to the runtime's usual failed-turn handling. This never restarts a turn
+or retries business tools. The next model call tries the primary again. `close_llm` closes
+both clients. SDK retries and timeouts still apply before fallback; no circuit breaker is added.
+Usage identifies the provider/model that answered; unavailable usage from a failed request
+cannot be recovered, so provider billing can exceed the recorded successful-call usage.
+
 ## Setup (development)
 
 ```bash

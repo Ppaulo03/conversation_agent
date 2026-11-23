@@ -15,6 +15,7 @@ from dataclasses import dataclass
 
 import httpx
 
+from conversation_agent.adapters.llm.fallback import FallbackLLM
 from conversation_agent.adapters.llm.openai_compat import (
     GROQ_BASE_URL,
     GROQ_DEFAULT_MODEL,
@@ -77,7 +78,9 @@ class LLMConfig:
         raise LLMConfigError("set LLM_PROVIDER and LLM_API_KEY (no provider key found)")
 
 
-def build_llm(config: LLMConfig) -> LLMProvider:
+def build_llm(config: LLMConfig, *, fallback: LLMConfig | None = None) -> LLMProvider:
+    if fallback is not None:
+        return FallbackLLM(build_llm(config), build_llm(fallback))
     if config.provider == "anthropic":
         from conversation_agent.adapters.llm.anthropic import AnthropicLLM  # extra `anthropic`
 

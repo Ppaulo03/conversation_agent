@@ -3,6 +3,20 @@
 What changed for an application that embeds the framework. Internal detail lives in
 `docs/05_REVIEW_LOG.md` and `docs/03_DECISIONS.md`; each entry names its finding or ADR.
 
+## 0.11.0 - 2026-11-22
+
+### Fixed
+
+- Exhausted model-call failures enqueue the agent's fallback reply instead of silently
+  dead-lettering the contact's message. A notice about an external side effect takes priority.
+
+### Added
+
+- Optional model fallback: `build_llm(primary_config, fallback=fallback_config)` tries
+  another provider once on `LLMProviderError`, preserving the canonical request. Cancellation,
+  application errors and successful model responses do not trigger fallback. Business tools
+  and turns are never replayed; `close_llm` closes both clients.
+
 ## 0.10.0 - 2026-11-22
 
 ### Added

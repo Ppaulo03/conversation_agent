@@ -20,6 +20,8 @@ Deltas do repositório sobre o `AGENTS.md` global.
 
 ## Aprendizados acumulados
 
+- Esgotar `LLMProviderError` no coordinator não passava pelo `TurnEngine` que aplica `fallback_reply`: sem efeito externo, o turno morria sem outbox. A falha definitiva deve enfileirar a resposta do manifesto na mesma transação, preservando a prioridade do aviso de efeito externo (`tests/postgres/test_turn_coordinator.py`).
+
 - Nomes de capability são validados (dominio.acao, lower_snake, sem `__`) para o nome LLM (.→`__`) ser injetivo.
 - Modelos de resultado impõem invariantes (success⇔sem error; falha⇔error sem data): construa ToolResult/CapabilityResult coerentes.
 - Falha antes de qualquer I/O = technical_error; só ambiguidade pós-envio de write vira unknown.
