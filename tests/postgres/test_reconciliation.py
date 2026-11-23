@@ -430,7 +430,8 @@ async def test_llm_failures_still_exhaust_attempts_and_fail_the_turn_closed(worl
     assert run.turns_completed == 1  # the third failure gives up
     assert await world.count("turns", "status='FAILED'") == 1
     assert await world.count("inbox_events", "status='DEAD'") == 1
-    assert await world.count("outbox_messages") == 0  # no side effect happened: nothing to report
+    (row,) = await world.db.pool.fetch("SELECT text FROM outbox_messages")
+    assert row["text"] == build_agent().fallback_reply
 
 
 async def test_a_turn_that_fails_after_a_side_effect_still_notifies_the_contact(

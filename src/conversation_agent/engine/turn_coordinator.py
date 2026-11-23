@@ -424,7 +424,12 @@ class TurnCoordinator:
                         }
                     },
                 )
-                await self._fail_turn(fence, opened, f"{type(exc).__name__}: {exc}")
+                await self._fail_turn(
+                    fence,
+                    opened,
+                    f"{type(exc).__name__}: {exc}",
+                    fallback_reply=engine.agent.fallback_reply,
+                )
                 trace.outcome = "failed"
                 return "completed"
             return "retry"  # the turn stays open; the next pass resumes it from the journal
@@ -678,13 +683,21 @@ class TurnCoordinator:
             await uow.inbox.consume(opened.event_ids)
             await uow.commit()
 
-    async def _fail_turn(self, fence: FenceToken, opened: OpenedTurn, reason: str) -> None:
+    async def _fail_turn(
+        self,
+        fence: FenceToken,
+        opened: OpenedTurn,
+        reason: str,
+        *,
+        fallback_reply: str | None = None,
+    ) -> None:
         async with self._uows.begin(fence) as uow:
             await uow.turns.fail(opened.turn_id, reason)
             await uow.inbox.dead(opened.event_ids)
             # A turn that dies AFTER an external side effect must still tell the contact
             # something deterministic: never dead-letter silently behind a real action.
             notice = self._side_effect_notice(await uow.invocations.for_turn(opened.turn_id))
+            notice = notice or fallback_reply
             if notice is not None:
                 await uow.outbox.add(self._outbound(opened, notice, index=1))
             await uow.commit()

@@ -19,6 +19,7 @@ from conversation_agent.core.models.llm import LLMRequest, LLMResponse
 from conversation_agent.core.models.runtime import OutboxStatus
 from postgres.world import KEY, TTL, World, event
 from support.builders import IDENTITY, availability_call
+from vertical_slice.definitions import build_agent
 
 
 @pytest.fixture
@@ -62,6 +63,23 @@ async def test_outbox_worker_is_the_only_path_to_the_channel(world: World) -> No
     assert row is not None and row["status"] == OutboxStatus.ACCEPTED
     assert row["provider_message_id"] == "prov-1"
     assert await world.outbox_worker("sender-1").run_once() == 0  # nothing left to send
+
+
+async def test_exhausted_model_failures_send_one_manifest_fallback_reply(world: World) -> None:
+    await world.inbox.insert_if_absent(event("e1", "hello", clock=world.clock))
+    llm = FakeLLM([LLMProviderError("unavailable")] * 2)
+    agent = build_agent().model_copy(update={"fallback_reply": "Provider unavailable."})
+    coordinator = world.coordinator("w1", llm, max_turn_attempts=2, agent=agent)
+    await coordinator.run_once()
+    assert await world.count("outbox_messages") == 0
+    await coordinator.run_once()
+    assert await world.count("turns", "status='FAILED'") == 1
+    assert await world.count("inbox_events", "status='DEAD'") == 1
+    assert await world.count("outbox_messages", "status='PENDING'") == 1
+    await coordinator.run_once()
+    assert await world.count("outbox_messages") == 1
+    assert await world.outbox_worker("sender").run_once() == 1
+    assert [message.text for message in world.sender.delivered] == [agent.fallback_reply]
 
 
 async def test_duplicate_event_never_creates_duplicate_turn(world: World) -> None:  # INV-020
